@@ -1,0 +1,41 @@
+module phosphor.workbench.PackageScopeRepository
+
+typealias NonEmptyString = String(length > 0)
+typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
+typealias PackageName = String(
+  length > 0,
+  length <= 214,
+  matches(Regex(#"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"#))
+)
+typealias GitHubRepository = String(
+  matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#))
+)
+typealias SkillDomain = "orchestration" | "engineering" | "general"
+typealias SkillName = String(matches(Regex(#"[a-z0-9][a-z0-9-]*"#)))
+typealias SkillSelection = "all" | SkillRoots
+
+class SkillRoots {
+  domains: Set<SkillDomain> = Set()
+  names: Set<SkillName> = Set()
+}
+
+class SkillPolicy {
+  editing: SkillSelection = new SkillRoots {}
+  workbench: SkillSelection = new SkillRoots {}
+}
+
+class Include {
+  github: GitHubRepository
+  skills: SkillPolicy = new SkillPolicy {}
+}
+
+/// Only dependency semantics that source imports cannot derive.
+class PackagePolicy {
+  requiredButNotReferenced: Mapping<PackageName, NonEmptyString> = new {}
+  peerDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
+}
+
+scope: PackageScope
+includes: Mapping<PackageScope, Include> = new {}
+packages: Mapping<PackageName, PackagePolicy> = new {}

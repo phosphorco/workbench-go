@@ -1,0 +1,3 @@
+module phosphor.workbench.PackageScopeRepository
+
+amends "pkl/PackageScopeRepository.pkl"
