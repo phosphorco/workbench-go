@@ -14,5 +14,6 @@ package {
     "README.md"
     "go.mod"
     "go.sum"
+    "mise.toml"
   }
 }
