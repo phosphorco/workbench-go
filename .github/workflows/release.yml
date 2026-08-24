@@ -29,6 +29,8 @@ jobs:
           version: 2026.8.12
           cache: false
       - name: Verify the exact tag candidate and 0.1 compatibility
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           go test ./...
           go vet ./...

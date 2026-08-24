@@ -108,7 +108,7 @@ func TestWorkbenchFirstMeaningfulSlice(t *testing.T) {
 		library := filepath.Join(workbench, "pkg", "@workbench-library")
 
 		publicGit(t, anonymousEnvironment, entry, "checkout", "main")
-		source := filepath.Join(entry, "src", "index.ts")
+		source := filepath.Join(entry, "app", "src", "index.ts")
 		contents, err := os.ReadFile(source)
 		if err != nil {
 			t.Fatalf("read source before adversarial edit: %v", err)
