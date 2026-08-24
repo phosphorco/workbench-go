@@ -1,7 +1,6 @@
-module phosphor.workbench.PackageScopeRepository
+module phosphor.workbench.Repository
 
 typealias NonEmptyString = String(length > 0)
-typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
 typealias PackageName =
   String(
     length > 0,
@@ -34,6 +33,7 @@ class PackagePolicy {
   optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
 }
 
-scope: PackageScope
+/// Repository identity is derived from the normalized GitHub designation used
+/// to acquire this declaration; it is intentionally not authored here.
 includes: Mapping<GitHubRepository, Include> = new {}
 packages: Mapping<PackageName, PackagePolicy> = new {}

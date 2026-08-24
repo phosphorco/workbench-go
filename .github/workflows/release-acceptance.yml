@@ -1,0 +1,62 @@
+name: Released distribution acceptance
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mise-public-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel, ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    env:
+      GH_TOKEN: ""
+      GITHUB_TOKEN: ""
+      MISE_GITHUB_GH_CLI_TOKENS: "false"
+      MISE_GITHUB_USE_GIT_CREDENTIALS: "false"
+    steps:
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: 2026.8.12
+          cache: false
+      - name: Install through the anonymous public GitHub backend
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/anonymous-home" "$RUNNER_TEMP/world"
+          export HOME="$RUNNER_TEMP/anonymous-home"
+          mise install github:phosphorco/workbench-go@0.2.0
+          test "$(mise exec github:phosphorco/workbench-go@0.2.0 -- workbench version)" = "workbench 0.2.0 (${{ github.sha }})"
+      - name: Run the public fixture setup without source or ambient runtimes
+        working-directory: ${{ runner.temp }}/world
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/anonymous-home"
+          cat > .gitignore <<'EOF'
+          workbench-subject.pkl
+          AGENTS.md
+          .workbench/
+          package.json
+          tsconfig.json
+          pkg/
+          repos/
+          node_modules/
+          bun.lock
+          EOF
+          cat > workbench-subject.pkl <<'EOF'
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/WorkbenchSubject.pkl"
+
+          workLine {
+            branch = "workbench/proof-0.2.0"
+            baseBranch = "main"
+          }
+          entrypoints {
+            "https://github.com/phosphorco/workbench-fixture-entry"
+          }
+          EOF
+          env -u GH_TOKEN -u GITHUB_TOKEN \
+            mise exec github:phosphorco/workbench-go@0.2.0 -- workbench setup

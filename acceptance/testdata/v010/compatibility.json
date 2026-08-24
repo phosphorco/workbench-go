@@ -1,0 +1,8 @@
+{
+  "release": "0.1.0",
+  "subjectBranch": "workbench/proof-0.1.0",
+  "repositories": {
+    "phosphorco/workbench-fixture-entry": "74ee45909df2540b4056209d9e0d39e8dcabc56a",
+    "phosphorco/workbench-fixture-library": "d4a36b29b5a8e66de6b2410c2ee8c32150741123"
+  }
+}

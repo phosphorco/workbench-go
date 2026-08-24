@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -23,6 +24,25 @@ type Contract struct {
 	contents         string
 	local            bool
 	packageResources []string
+}
+
+// Evaluator designates the exact Pkl executable allowed to evaluate Workbench
+// contracts. Released composition must construct this value from its bundled
+// runtime toolchain rather than resolving Pkl through PATH.
+type Evaluator struct {
+	pklExecutable string
+}
+
+// NewEvaluator grants contract evaluation to one absolute Pkl executable.
+func NewEvaluator(pklExecutable string) (Evaluator, error) {
+	if !filepath.IsAbs(pklExecutable) {
+		return Evaluator{}, fmt.Errorf("Pkl executable %q is not an absolute path", pklExecutable)
+	}
+	return Evaluator{pklExecutable: filepath.Clean(pklExecutable)}, nil
+}
+
+func ambientEvaluatorForDevelopment() Evaluator {
+	return Evaluator{pklExecutable: "pkl"}
 }
 
 // LocalContract grants evaluation access to exactly one in-memory schema module.
@@ -56,8 +76,14 @@ func ReleasedContract(uri string) (Contract, error) {
 	return Contract{uri: parsed, packageResources: resources}, nil
 }
 
+// EvaluateSubject retains the 0.1 development/test PATH behavior. Released
+// composition must use an Evaluator created with NewEvaluator.
 func EvaluateSubject(ctx context.Context, source []byte, schema Contract) (contract.Subject, error) {
-	encoded, err := evaluateJSON(ctx, source, schema)
+	return ambientEvaluatorForDevelopment().EvaluateSubject(ctx, source, schema)
+}
+
+func (runtime Evaluator) EvaluateSubject(ctx context.Context, source []byte, schema Contract) (contract.Subject, error) {
+	encoded, err := runtime.evaluateJSON(ctx, source, schema)
 	if err != nil {
 		return contract.Subject{}, fmt.Errorf("evaluate Subject: %w", err)
 	}
@@ -68,8 +94,15 @@ func EvaluateSubject(ctx context.Context, source []byte, schema Contract) (contr
 	return value, nil
 }
 
+// EvaluatePackageScopeRepository retains the 0.1 development/test PATH
+// behavior. Released composition must use an Evaluator created with
+// NewEvaluator.
 func EvaluatePackageScopeRepository(ctx context.Context, source []byte, schema Contract) (contract.PackageScopeRepository, error) {
-	encoded, err := evaluateJSON(ctx, source, schema)
+	return ambientEvaluatorForDevelopment().EvaluatePackageScopeRepository(ctx, source, schema)
+}
+
+func (runtime Evaluator) EvaluatePackageScopeRepository(ctx context.Context, source []byte, schema Contract) (contract.PackageScopeRepository, error) {
+	encoded, err := runtime.evaluateJSON(ctx, source, schema)
 	if err != nil {
 		return contract.PackageScopeRepository{}, fmt.Errorf("evaluate package-scope repository: %w", err)
 	}
@@ -80,7 +113,43 @@ func EvaluatePackageScopeRepository(ctx context.Context, source []byte, schema C
 	return value, nil
 }
 
-func evaluateJSON(ctx context.Context, source []byte, schema Contract) (_ string, resultErr error) {
+func (runtime Evaluator) EvaluatePackageScopeDeclaration(ctx context.Context, source []byte, schema Contract) (contract.Declaration, error) {
+	return evaluateDecoded(runtime, ctx, source, schema, "0.2 package-scope declaration", contract.DecodePackageScopeDeclaration)
+}
+
+func (runtime Evaluator) EvaluateRepositoryDeclaration(ctx context.Context, source []byte, schema Contract) (contract.Declaration, error) {
+	return evaluateDecoded(runtime, ctx, source, schema, "0.2 repository declaration", contract.DecodeRepositoryDeclaration)
+}
+
+func (runtime Evaluator) EvaluateAgentInstructions(ctx context.Context, source []byte, schema Contract) (contract.AgentInstructions, error) {
+	return evaluateDecoded(runtime, ctx, source, schema, "AgentInstructions", contract.DecodeAgentInstructions)
+}
+
+func (runtime Evaluator) EvaluateWorkbenchCommitPlan(ctx context.Context, source []byte, schema Contract) (contract.WorkbenchCommitPlan, error) {
+	return evaluateDecoded(runtime, ctx, source, schema, "WorkbenchCommitPlan", contract.DecodeWorkbenchCommitPlan)
+}
+
+func (runtime Evaluator) EvaluateWorkbenchWorldSnapshot(ctx context.Context, source []byte, schema Contract) (contract.WorkbenchWorldSnapshot, error) {
+	return evaluateDecoded(runtime, ctx, source, schema, "WorkbenchWorldSnapshot", contract.DecodeWorkbenchWorldSnapshot)
+}
+
+func evaluateDecoded[Value any](runtime Evaluator, ctx context.Context, source []byte, schema Contract, name string, decode func([]byte) (Value, error)) (Value, error) {
+	var zero Value
+	encoded, err := runtime.evaluateJSON(ctx, source, schema)
+	if err != nil {
+		return zero, fmt.Errorf("evaluate %s: %w", name, err)
+	}
+	value, err := decode([]byte(encoded))
+	if err != nil {
+		return zero, fmt.Errorf("decode evaluated %s: %w", name, err)
+	}
+	return value, nil
+}
+
+func (runtime Evaluator) evaluateJSON(ctx context.Context, source []byte, schema Contract) (_ string, resultErr error) {
+	if runtime.pklExecutable == "" {
+		return "", fmt.Errorf("evaluator is uninitialized")
+	}
 	if schema.uri == nil {
 		return "", fmt.Errorf("contract is uninitialized")
 	}
@@ -97,7 +166,13 @@ func evaluateJSON(ctx context.Context, source []byte, schema Contract) (_ string
 	if schema.local {
 		readers = append(readers, exactModuleReader{uri: *schema.uri, contents: schema.contents})
 	}
-	evaluator, err := pkl.NewEvaluator(ctx, func(options *pkl.EvaluatorOptions) {
+	manager := pkl.NewEvaluatorManagerWithCommand([]string{runtime.pklExecutable})
+	defer func() {
+		if closeErr := manager.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close Pkl evaluator manager: %w", closeErr))
+		}
+	}()
+	pklEvaluator, err := manager.NewEvaluator(ctx, func(options *pkl.EvaluatorOptions) {
 		options.AllowedModules = allowedModules
 		// Pkl's standard JSON renderer reads this evaluator-owned property.
 		options.AllowedResources = allowedResources
@@ -109,13 +184,19 @@ func evaluateJSON(ctx context.Context, source []byte, schema Contract) (_ string
 	if err != nil {
 		return "", fmt.Errorf("start capability-constrained Pkl evaluator: %w", err)
 	}
+	if pklEvaluator == nil {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("start capability-constrained Pkl evaluator: %w", err)
+		}
+		return "", fmt.Errorf("start capability-constrained Pkl evaluator: manager returned no evaluator")
+	}
 	defer func() {
-		if closeErr := evaluator.Close(); closeErr != nil {
+		if closeErr := pklEvaluator.Close(); closeErr != nil {
 			resultErr = errors.Join(resultErr, fmt.Errorf("close Pkl evaluator: %w", closeErr))
 		}
 	}()
 
-	encoded, err := evaluator.EvaluateOutputText(ctx, pkl.TextSource(string(source)))
+	encoded, err := pklEvaluator.EvaluateOutputText(ctx, pkl.TextSource(string(source)))
 	if err != nil {
 		return "", fmt.Errorf("evaluate Pkl module: %w", err)
 	}

@@ -1,0 +1,229 @@
+name: Release 0.2.0
+
+on:
+  push:
+    tags: ["0.2.0"]
+  workflow_dispatch:
+
+env:
+  WORKBENCH_VERSION: 0.2.0
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.6
+          cache: true
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: 2026.8.12
+          cache: false
+      - name: Verify the exact tag candidate and 0.1 compatibility
+        run: |
+          go test ./...
+          go vet ./...
+
+  binaries:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            goos: darwin
+            goarch: arm64
+            platform: macos-arm64
+          - runner: macos-26-intel
+            goos: darwin
+            goarch: amd64
+            platform: macos-x64
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            platform: linux-arm64
+          - runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            platform: linux-x64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.6
+          cache: true
+      - name: Verify release identity
+        run: |
+          if test "$GITHUB_EVENT_NAME" = push; then
+            test "$GITHUB_REF_TYPE" = tag
+            test "$GITHUB_REF_NAME" = "$WORKBENCH_VERSION"
+          fi
+          test "$(jq -r .workbenchVersion release/runtime-lock.json)" = "$WORKBENCH_VERSION"
+          test "$(sed -n 's/^  version = "\([^"]*\)"$/\1/p' PklProject)" = "$WORKBENCH_VERSION"
+      - name: Acquire pinned private runtimes and notices
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          mkdir -p candidate/runtime candidate/licenses/pkl candidate/licenses/bun
+          fetch() {
+            url="$1"
+            digest="$2"
+            output="$3"
+            mkdir -p "$(dirname "$output")"
+            curl --fail --location --silent --show-error "$url" --output "$output"
+            printf '%s  %s\n' "$digest" "$output" | shasum -a 256 --check
+          }
+          pkl_url=$(jq -r --arg platform "$PLATFORM" '.runtimes.pkl.artifacts[$platform].url' release/runtime-lock.json)
+          pkl_sha=$(jq -r --arg platform "$PLATFORM" '.runtimes.pkl.artifacts[$platform].sha256' release/runtime-lock.json)
+          fetch "$pkl_url" "$pkl_sha" candidate/runtime/pkl
+          bun_url=$(jq -r --arg platform "$PLATFORM" '.runtimes.bun.artifacts[$platform].url' release/runtime-lock.json)
+          bun_sha=$(jq -r --arg platform "$PLATFORM" '.runtimes.bun.artifacts[$platform].sha256' release/runtime-lock.json)
+          bun_member=$(jq -r --arg platform "$PLATFORM" '.runtimes.bun.artifacts[$platform].member' release/runtime-lock.json)
+          fetch "$bun_url" "$bun_sha" candidate/runtime/bun.zip
+          unzip -q candidate/runtime/bun.zip -d candidate/runtime/bun-archive
+          cp "candidate/runtime/bun-archive/$bun_member" candidate/runtime/bun
+          chmod 0755 candidate/runtime/pkl candidate/runtime/bun
+          while IFS=$'\t' read -r url digest archive_path; do
+            fetch "$url" "$digest" "candidate/licenses/$archive_path"
+          done < <(jq -r '(.runtimes[], .buildDependencies[]) | .licenses[] | [.url, .sha256, .archivePath] | @tsv' release/runtime-lock.json)
+      - name: Build exact Workbench binary
+        env:
+          VERSION: ${{ env.WORKBENCH_VERSION }}
+          REVISION: ${{ github.sha }}
+        run: |
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+            -trimpath -buildvcs=false \
+            -ldflags="-s -w -buildid= -X github.com/phosphorco/workbench-go/internal/version.release=$VERSION -X github.com/phosphorco/workbench-go/internal/version.revision=$REVISION" \
+            -o candidate/workbench ./cmd/workbench
+      - name: Verify the closed linked-code license inventory
+        run: |
+          set -euo pipefail
+          test "$(go version -m candidate/workbench | awk 'NR == 1 { sub(/^go/, "", $2); print $2 }')" = "$(jq -r '.buildDependencies.go.version' release/runtime-lock.json)"
+          go version -m candidate/workbench | awk '$1 == "dep" { print $2 " " $3 }' | sort > candidate/linked-modules.txt
+          jq -r '.buildDependencies | to_entries[] | select(.key != "go") | if .key == "pkl-go" then "github.com/apple/pkl-go v" + .value.version elif .key == "msgpack" then "github.com/vmihailenco/msgpack/v5 v" + .value.version else "github.com/vmihailenco/tagparser/v2 v" + .value.version end' \
+            release/runtime-lock.json | sort > candidate/inventoried-modules.txt
+          diff -u candidate/inventoried-modules.txt candidate/linked-modules.txt
+      - name: Package deterministic archive
+        run: |
+          mkdir -p candidate/out
+          go run ./release \
+            --version "$WORKBENCH_VERSION" \
+            --revision "${{ github.sha }}" \
+            --goos "${{ matrix.goos }}" \
+            --goarch "${{ matrix.goarch }}" \
+            --output candidate/out \
+            --workbench candidate/workbench \
+            --pkl candidate/runtime/pkl \
+            --bun candidate/runtime/bun \
+            --runtime-lock release/runtime-lock.json \
+            --workbench-license LICENSE \
+            --pkl-license candidate/licenses/pkl/LICENSE.txt \
+            --pkl-notice candidate/licenses/pkl/NOTICE.txt \
+            --pkl-third-party-notice candidate/licenses/pkl/THIRD-PARTY-NOTICES.txt \
+            --bun-license candidate/licenses/bun/LICENSE.md \
+            --go-license candidate/licenses/go/LICENSE \
+            --go-patents candidate/licenses/go/PATENTS \
+            --pkl-go-license candidate/licenses/pkl-go/LICENSE.txt \
+            --pkl-go-notice candidate/licenses/pkl-go/NOTICE.txt \
+            --msgpack-license candidate/licenses/msgpack/LICENSE \
+            --tagparser-license candidate/licenses/tagparser/LICENSE
+      - name: Prove native archive behavior
+        run: |
+          set -euo pipefail
+          archive=$(find candidate/out -name '*.tar.gz' -type f)
+          mkdir candidate/installed
+          tar -xzf "$archive" --strip-components=1 -C candidate/installed
+          test "$(candidate/installed/bin/workbench version)" = "workbench 0.2.0 (${{ github.sha }})"
+          candidate/installed/libexec/workbench/pkl --version | grep -F '0.32.1'
+          test "$(candidate/installed/libexec/workbench/bun --version)" = '1.3.14'
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: candidate/out/workbench-*.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workbench-${{ matrix.platform }}
+          path: candidate/out/*
+          if-no-files-found: error
+
+  contracts:
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: 2026.8.12
+          cache: false
+      - run: |
+          test "$(sed -n 's/^  version = "\([^"]*\)"$/\1/p' PklProject)" = "$WORKBENCH_VERSION"
+          mkdir contracts
+          mise exec -- pkl project package --skip-publish-check --output-path contracts .
+          for artifact in contracts/workbench@0.2.0 contracts/workbench@0.2.0.zip; do
+            shasum -a 256 "$artifact" | awk '{print $1}' > "$artifact.sha256"
+          done
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: contracts/workbench@0.2.0.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workbench-contracts
+          path: contracts/*
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [binaries, contracts]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Refuse an existing release and publish one verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ github.ref_name }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release ${{ github.ref_name }} already exists; refusing replacement" >&2
+            exit 1
+          fi
+          for checksum in release-assets/*.sha256; do
+            artifact=${checksum%.sha256}
+            expected=$(tr -d '\n' < "$checksum")
+            printf '%s  %s\n' "$expected" "$artifact" | sha256sum --check
+          done
+          gh release create "${{ github.ref_name }}" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "Workbench ${{ github.ref_name }}" --generate-notes
+          gh release edit "${{ github.ref_name }}" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+  public-acceptance:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-acceptance.yml

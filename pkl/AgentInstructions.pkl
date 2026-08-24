@@ -1,0 +1,52 @@
+module phosphor.workbench.AgentInstructions
+
+typealias NonEmptyString = String(length > 0)
+typealias BranchName = NonEmptyString
+typealias GitHubRepository =
+  String(matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#)), !endsWith(".git"))
+typealias GitHubRepositoryUrl =
+  String(matches(Regex(#"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?"#)))
+typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
+typealias ResourceIdentity = PackageScope | GitHubRepository
+typealias CanonicalPath = String(length > 0, !startsWith("/"))
+typealias ResourceHealth = "healthy" | "missingCheckout" | "wrongBranch"
+
+class WorkLine {
+  branch: BranchName
+  baseBranch: BranchName
+}
+
+class PackageScopeShape {
+  kind: "packageScope" = "packageScope"
+  scope: PackageScope
+}
+
+class RepositoryShape {
+  kind: "repository" = "repository"
+}
+
+typealias ResourceShape = PackageScopeShape | RepositoryShape
+
+class SubjectFacts {
+  workLine: WorkLine
+  entrypoints: Listing<GitHubRepositoryUrl>(length > 0)
+}
+
+class ResourceFacts {
+  identity: ResourceIdentity
+  github: GitHubRepository
+  shape: ResourceShape
+  canonicalPath: CanonicalPath
+  branch: BranchName
+  health: ResourceHealth
+}
+
+/// Context-authored prose from tracked AGENTS.pkl.
+prose: NonEmptyString
+
+/// Workbench supplies every remaining value from its explicit Subject and
+/// observed World. The contract exposes no environment or filesystem input.
+subject: SubjectFacts
+resources: Listing<ResourceFacts>
+generatedPaths: Listing<CanonicalPath>
+handOwnedPaths: Listing<CanonicalPath>

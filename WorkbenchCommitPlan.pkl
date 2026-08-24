@@ -1,0 +1,3 @@
+module phosphor.workbench.WorkbenchCommitPlan
+
+amends "pkl/WorkbenchCommitPlan.pkl"

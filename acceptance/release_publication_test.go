@@ -82,8 +82,53 @@ func TestPublishedWorkbenchContractsAreImmutableAndAccessible(t *testing.T) {
 
 	archivePath := filepath.Join(downloadRoot, "workbench@0.1.0.zip")
 	assertPublishedArchiveRoots(t, downloaded["workbench@0.1.0.zip"])
-	assertPackagedContractSemantics(t, archivePath)
+	assertV010PackagedContractSemantics(t, archivePath)
 	verifyImmutableReleaseAndAssets(t, downloadRoot, assetNames)
+}
+
+func assertV010PackagedContractSemantics(t *testing.T, archivePath string) {
+	t.Helper()
+	modulePath := filepath.ToSlash(archivePath)
+	consumers := []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "subject",
+			source: `amends "modulepath:/WorkbenchSubject.pkl"
+
+workLine {
+  branch = "workbench/proof-0.1.0"
+  baseBranch = "main"
+}
+entrypoints { "https://github.com/phosphorco/workbench-fixture-entry" }
+`,
+		},
+		{
+			name: "package scope repository",
+			source: `amends "modulepath:/PackageScopeRepository.pkl"
+
+scope = "@workbench-entry"
+includes {
+  ["@workbench-library"] {
+    github = "phosphorco/workbench-fixture-library"
+  }
+}
+`,
+		},
+	}
+	for _, consumer := range consumers {
+		t.Run(consumer.name, func(t *testing.T) {
+			module := filepath.Join(t.TempDir(), "consumer.pkl")
+			if err := os.WriteFile(module, []byte(consumer.source), 0o600); err != nil {
+				t.Fatalf("write 0.1 contract consumer: %v", err)
+			}
+			command := exec.Command("pkl", "eval", "--module-path", modulePath, "--format", "json", module)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("evaluate immutable 0.1 contract: %v\n%s", err, output)
+			}
+		})
+	}
 }
 
 func downloadPublicReleaseAsset(t *testing.T, url string) []byte {

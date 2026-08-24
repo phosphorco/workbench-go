@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	releasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0"
-	releasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0.zip"
+	releasePackageURI     = "package://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0"
+	releasePackageZIP     = "https://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0.zip"
+	v020ReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0"
+	v020ReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
 )
 
 func TestReleasePackageCandidate(t *testing.T) {
@@ -24,20 +26,20 @@ func TestReleasePackageCandidate(t *testing.T) {
 	outputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, outputRoot)
 
-	metadataPath := filepath.Join(outputRoot, "workbench@0.1.0")
+	metadataPath := filepath.Join(outputRoot, "workbench@0.2.0")
 	archivePath := metadataPath + ".zip"
 	metadata := readReleaseMetadata(t, metadataPath)
 	if metadata.Name != "workbench" {
 		t.Errorf("metadata name = %q, want workbench", metadata.Name)
 	}
-	if metadata.PackageURI != releasePackageURI {
-		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, releasePackageURI)
+	if metadata.PackageURI != v020ReleasePackageURI {
+		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, v020ReleasePackageURI)
 	}
-	if metadata.Version != "0.1.0" {
-		t.Errorf("metadata version = %q, want 0.1.0", metadata.Version)
+	if metadata.Version != "0.2.0" {
+		t.Errorf("metadata version = %q, want 0.2.0", metadata.Version)
 	}
-	if metadata.PackageZIPURL != releasePackageZIP {
-		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, releasePackageZIP)
+	if metadata.PackageZIPURL != v020ReleasePackageZIP {
+		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, v020ReleasePackageZIP)
 	}
 
 	metadataChecksum := verifyReleaseChecksum(t, metadataPath)
@@ -61,10 +63,18 @@ func TestReleasePackageCandidate(t *testing.T) {
 	}
 	sort.Strings(entries)
 	wantEntries := []string{
+		"AgentInstructions.pkl",
 		"PackageScopeRepository.pkl",
+		"Repository.pkl",
+		"WorkbenchCommitPlan.pkl",
 		"WorkbenchSubject.pkl",
+		"WorkbenchWorldSnapshot.pkl",
+		"pkl/AgentInstructions.pkl",
 		"pkl/PackageScopeRepository.pkl",
+		"pkl/Repository.pkl",
+		"pkl/WorkbenchCommitPlan.pkl",
 		"pkl/WorkbenchSubject.pkl",
+		"pkl/WorkbenchWorldSnapshot.pkl",
 	}
 	if !slices.Equal(entries, wantEntries) {
 		t.Fatalf("package archive entries = %v, want exactly %v", entries, wantEntries)
@@ -75,10 +85,10 @@ func TestReleasePackageCandidate(t *testing.T) {
 	secondOutputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, secondOutputRoot)
 	for _, name := range []string{
-		"workbench@0.1.0",
-		"workbench@0.1.0.sha256",
-		"workbench@0.1.0.zip",
-		"workbench@0.1.0.zip.sha256",
+		"workbench@0.2.0",
+		"workbench@0.2.0.sha256",
+		"workbench@0.2.0.zip",
+		"workbench@0.2.0.zip.sha256",
 	} {
 		first, err := os.ReadFile(filepath.Join(outputRoot, name))
 		if err != nil {
@@ -189,8 +199,81 @@ entrypoints {
 
 scope = "@workbench-entry"
 includes {
-  ["@workbench-library"] {
-    github = "phosphorco/workbench-fixture-library"
+	  ["phosphorco/workbench-fixture-library"] {}
+}
+`,
+			wantSuccess: true,
+		},
+		{
+			name: "valid repository shape",
+			source: `amends "modulepath:/Repository.pkl"
+
+includes {
+  ["phosphorco/workbench-fixture-library"] {}
+}
+`,
+			wantSuccess: true,
+		},
+		{
+			name: "repository shape rejects authored identity",
+			source: `amends "modulepath:/Repository.pkl"
+
+identity = "hand-authored"
+`,
+		},
+		{
+			name: "valid agent instructions",
+			source: `amends "modulepath:/AgentInstructions.pkl"
+
+prose = "Keep Git-owned source intact."
+subject {
+  workLine {
+    branch = "workbench/proof-0.2.0"
+    baseBranch = "main"
+  }
+  entrypoints { "https://github.com/phosphorco/workbench-fixture-entry" }
+}
+resources {
+  new {
+    identity = "@workbench-entry"
+    github = "phosphorco/workbench-fixture-entry"
+    shape = new PackageScopeShape { scope = "@workbench-entry" }
+    canonicalPath = "pkg/@workbench-entry"
+    branch = "workbench/proof-0.2.0"
+    health = "healthy"
+  }
+}
+generatedPaths { "AGENTS.md" }
+handOwnedPaths { "AGENTS.pkl" }
+`,
+			wantSuccess: true,
+		},
+		{
+			name: "valid commit plan",
+			source: `amends "modulepath:/WorkbenchCommitPlan.pkl"
+
+changeId = "fixture-change"
+summary = "Change both fixture repositories."
+commits {
+  ["@workbench-entry"] {
+    title = "feat: consume library"
+    description = "Use the shared value."
+    filePaths { "src/index.ts" }
+  }
+}
+`,
+			wantSuccess: true,
+		},
+		{
+			name: "valid world snapshot",
+			source: `amends "modulepath:/WorkbenchWorldSnapshot.pkl"
+
+resources {
+  ["@workbench-entry"] {
+    shape = new PackageScopeShape { scope = "@workbench-entry" }
+    github = "phosphorco/workbench-fixture-entry"
+    canonicalPath = "pkg/@workbench-entry"
+    commit = "0123456789abcdef0123456789abcdef01234567"
   }
 }
 `,

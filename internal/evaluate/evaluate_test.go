@@ -10,13 +10,54 @@ import (
 )
 
 const (
-	subjectURI    = "workbench-contract:/WorkbenchSubject.pkl"
-	repositoryURI = "workbench-contract:/PackageScopeRepository.pkl"
+	subjectURI                 = "workbench-contract:/WorkbenchSubject.pkl"
+	repositoryURI              = "workbench-contract:/PackageScopeRepository.pkl"
+	packageScopeRepositoryV010 = `module phosphor.workbench.PackageScopeRepository
+
+typealias NonEmptyString = String(length > 0)
+typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
+typealias PackageName =
+  String(
+    length > 0,
+    length <= 214,
+    matches(Regex(#"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"#)),
+  )
+typealias GitHubRepository =
+  String(matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#)), !endsWith(".git"))
+typealias SkillDomain = "orchestration" | "engineering" | "general"
+typealias SkillName = String(matches(Regex(#"[a-z0-9][a-z0-9-]*"#)))
+typealias SkillSelection = "all" | SkillRoots
+
+class SkillRoots {
+  domains: Set<SkillDomain> = Set()
+  names: Set<SkillName> = Set()
+}
+
+class SkillPolicy {
+  editing: SkillSelection = new SkillRoots {}
+  workbench: SkillSelection = new SkillRoots {}
+}
+
+class Include {
+  github: GitHubRepository
+  skills: SkillPolicy = new SkillPolicy {}
+}
+
+class PackagePolicy {
+  requiredButNotReferenced: Mapping<PackageName, NonEmptyString> = new {}
+  peerDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
+}
+
+scope: PackageScope
+includes: Mapping<PackageScope, Include> = new {}
+packages: Mapping<PackageName, PackagePolicy> = new {}
+`
 )
 
 func TestEvaluatesSubjectAndRepositoryThroughTheirSchemas(t *testing.T) {
 	subjectSchema := localContract(t, subjectURI, "WorkbenchSubject.pkl")
-	repositorySchema := localContract(t, repositoryURI, "PackageScopeRepository.pkl")
+	repositorySchema := localV010RepositoryContract(t)
 	subjectSource := []byte("amends \"" + subjectURI + "\"\n" + `
 workLine {
   branch = "cole/slice"
@@ -152,7 +193,7 @@ func TestEvaluatesPublishedReleasedRepository(t *testing.T) {
 
 func TestSubjectAndRepositoryContractsCannotBeInterchanged(t *testing.T) {
 	subjectSchema := localContract(t, subjectURI, "WorkbenchSubject.pkl")
-	repositorySchema := localContract(t, repositoryURI, "PackageScopeRepository.pkl")
+	repositorySchema := localV010RepositoryContract(t)
 	subject := []byte("amends \"" + subjectURI + "\"\nworkLine { branch = \"cole/slice\"; baseBranch = \"main\" }\nentrypoints { \"https://github.com/phosphorco/basindb\" }\n")
 	repository := []byte("amends \"" + repositoryURI + "\"\nscope = \"@basindb\"\n")
 
@@ -171,6 +212,15 @@ func localContract(t *testing.T, uri, filename string) evaluate.Contract {
 		t.Fatal(err)
 	}
 	schema, err := evaluate.LocalContract(uri, string(contents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schema
+}
+
+func localV010RepositoryContract(t *testing.T) evaluate.Contract {
+	t.Helper()
+	schema, err := evaluate.LocalContract(repositoryURI, packageScopeRepositoryV010)
 	if err != nil {
 		t.Fatal(err)
 	}

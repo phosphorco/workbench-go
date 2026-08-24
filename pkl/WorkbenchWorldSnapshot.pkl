@@ -1,0 +1,30 @@
+module phosphor.workbench.WorkbenchWorldSnapshot
+
+typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
+typealias GitHubRepository =
+  String(matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#)), !endsWith(".git"))
+typealias ResourceIdentity = PackageScope | GitHubRepository
+typealias CanonicalPath = String(length > 0, !startsWith("/"))
+typealias CommitId = String(matches(Regex(#"(?:[0-9a-f]{40}|[0-9a-f]{64})"#)))
+
+class PackageScopeShape {
+  kind: "packageScope" = "packageScope"
+  scope: PackageScope
+}
+
+class RepositoryShape {
+  kind: "repository" = "repository"
+}
+
+typealias ResourceShape = PackageScopeShape | RepositoryShape
+
+class SnapshotResource {
+  shape: ResourceShape
+  github: GitHubRepository
+  canonicalPath: CanonicalPath
+  commit: CommitId
+}
+
+/// Snapshot revisions are independent of the Subject's branch policy. The map
+/// key is the shape-derived identity; the value records immutable origin facts.
+resources: Mapping<ResourceIdentity, SnapshotResource>(length > 0)

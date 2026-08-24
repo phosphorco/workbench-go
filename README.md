@@ -14,6 +14,29 @@ Workbench then assembles the complete source closure, checks out that work line 
 
 The result feels like a purpose-built monorepo without requiring Phosphor’s source to live in one Git repository.
 
+## Install the released Workbench with Mise
+
+Workbench releases contain a self-contained executable plus private, pinned Pkl
+and Bun runtimes. Mise discovers the native macOS or Linux archive directly
+from the public GitHub backend identity:
+
+The archive licenses first-party Workbench code under Apache-2.0 and carries
+the independently governed upstream license, notice, patent, and provenance
+inventory for Go, Pkl, Bun, pkl-go, msgpack, and tagparser. Bundling those
+components does not relicense them as Workbench code.
+
+```sh
+mise use -g github:phosphorco/workbench-go@0.2.0
+workbench version
+```
+
+The release reports one compatible version and exact source revision. The
+binary resolves its private runtimes relative to its installed executable; a
+released build never falls back to `PATH` or a source checkout. GitHub Actions
+builds the four macOS/Linux ARM64/x64 archives, checksums, runtime inventory,
+and attestations from the release tag. Workbench itself is not a general
+release-publication manager.
+
 ## A workbench is a disposable world for one line of work
 
 An engineer may work on three unrelated projects by creating three separate workbench directories. Each begins with a small role-oriented context template and acquires only the repositories needed for its current subject.
@@ -74,10 +97,10 @@ Workbench-owned generated files inside a resource repository must likewise be ex
 `workbench-subject.pkl` is the local request for what should exist:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0#/WorkbenchSubject.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/WorkbenchSubject.pkl"
 
 workLine {
-  branch = "workbench/proof-0.1.0"
+  branch = "workbench/proof-0.2.0"
   baseBranch = "main"
 }
 
@@ -120,7 +143,7 @@ For example:
 
 ```text
 entrypoint: phosphorco/workbench-fixture-entry
-branch:     workbench/proof-0.1.0
+branch:     workbench/proof-0.2.0
 base:       main
 ```
 
@@ -130,13 +153,17 @@ include, and place both on the named branch.
 
 This reproduces a named line of collaboration. It does not reproduce an immutable revision set because branch names may move.
 
-Exact reconstruction would require a separate snapshot:
+Exact reconstruction uses a separate snapshot:
 
 ```text
 resource identity → exact commit SHA
 ```
 
-A snapshot may be added later. It is not part of the initial Subject contract.
+Run `workbench snapshot record` to write the exact immutable revision set, and
+`workbench snapshot reproduce <file>` in a fresh context to acquire it. A
+snapshot never changes the Subject’s branch policy and never resets or rewrites
+an existing checkout; a conflicting checkout stops reproduction in recoverable
+state.
 
 ### There is no second branch lock
 
@@ -158,14 +185,12 @@ A filesystem lock, watcher, or permission layer is outside this design.
 Each participating resource contains a root `workbench.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0#/PackageScopeRepository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/PackageScopeRepository.pkl"
 
 scope = "@workbench-entry"
 
 includes {
-  ["@workbench-library"] {
-    github = "phosphorco/workbench-fixture-library"
-
+  ["phosphorco/workbench-fixture-library"] {
     skills {
       editing {
         domains = Set("engineering")
@@ -234,6 +259,20 @@ Repository("phosphorco/some-plugin")
   identity  → repository phosphorco/some-plugin
   placement → repos/some-plugin
 ```
+
+A Repository-shaped `workbench.pkl` amends the released `Repository.pkl`
+contract and does not author a name, scope, or generic identity:
+
+```pkl
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/Repository.pkl"
+
+includes {}
+packages {}
+```
+
+Its normalized GitHub acquisition designation supplies identity; the repository
+name supplies the `repos/<name>` placement. PackageScope declarations instead
+author their irreducible package scope and derive `pkg/<scope>`.
 
 New shapes require a `workbench-go` release. “Extensible” means that adding an internal shape is a localized implementation change, not that resource authors may install arbitrary resource plugins.
 
@@ -407,23 +446,17 @@ Because skill sources are assembled on the Subject branch, agents receive the sk
 
 ## `AGENTS.pkl` turns current world state into agent orientation
 
-A later Workbench slice will publish a constrained `AgentInstructions.pkl` template.
+Workbench 0.2.0 publishes the constrained `AgentInstructions.pkl` contract.
 
 The context template tracks `AGENTS.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/<version>/workbench@<version>#/AgentInstructions.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/AgentInstructions.pkl"
 
-content = """
+prose = """
 # Agent instructions
 
 Work inside the assembled Workbench world.
-
-## Current subject
-
-\(setupSummary)
-
-Reconcile the world with `workbench setup`.
 """
 ```
 
@@ -449,16 +482,18 @@ The generated summary may include:
 
 The Pkl program receives only values explicitly supplied by Workbench. It does not read ambient environment variables, arbitrary files, or repository state directly.
 
-`AGENTS.pkl` generation is part of the master design but not the first meaningful implementation slice.
+Re-running setup is byte-convergent. Removing a World member removes its stale
+identity, path, branch, and health facts from orientation without rewriting the
+Git-owned `AGENTS.pkl` prose.
 
 ## `commit-plan.pkl` coordinates cross-repository work
 
 Workbench must make it difficult for agents to lose work, commit unrelated edits, or push only part of an intended multi-repository change without noticing.
 
-A future `commit-plan.pkl` will describe one **Workbench Change Set**:
+`commit-plan.pkl` describes one **Workbench Change Set**:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/<version>/workbench@<version>#/WorkbenchCommitPlan.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/WorkbenchCommitPlan.pkl"
 
 changeId = "fixture-cross-repository"
 summary = "Exercise a cross-repository fixture change"
@@ -470,12 +505,7 @@ commits {
     Consume the library value through the workspace link.
     """
 
-    filePaths = Set(
-      "src/index.ts"
-    )
-
-    hunkIds = Set()
-    unrelatedDeletedPaths = Set()
+    filePaths { "src/index.ts" }
   }
 
   ["@workbench-library"] {
@@ -484,12 +514,7 @@ commits {
     Expose the library value consumed by the entry package.
     """
 
-    filePaths = Set(
-      "src/index.ts"
-    )
-
-    hunkIds = Set()
-    unrelatedDeletedPaths = Set()
+    filePaths { "src/index.ts" }
   }
 }
 ```
@@ -525,9 +550,9 @@ The terms remain distinct:
 - **Workbench Change Set:** a linked, recoverable group of repository commits.
 - **Shared change ID:** the durable relationship between those commits.
 
-The target authoring surface is Pkl because Workbench already owns versioned schemas, validation, and capability-constrained evaluation. The existing single-repository TOML helper may remain behind an adapter until the Workbench-level operation is implemented. Syntax uniformity alone does not justify rewriting proven behavior.
-
-`commit-plan.pkl` is part of the master design but not the first meaningful implementation slice.
+Run `workbench commit` (or `workbench commit <plan>`) to begin or resume the
+saga. The durable journal binds the newly evaluated exact plan to prepared
+candidates, so retry cannot rebuild, rewrite, or duplicate a successful commit.
 
 ## Removing a repository from the world does not delete it
 
@@ -547,7 +572,11 @@ Setup removes the repository from:
 
 It does not delete the checkout.
 
-Workbench reports the checkout as orphaned. A future explicit prune operation may remove a checkout only after proving that it is clean, pushed, and recoverable. Ordinary setup never trades source preservation for tidiness.
+Workbench reports the checkout as orphaned. `workbench prune <identity>...`
+may remove only a Workbench-created checkout after proving that it is clean,
+pushed, unambiguous, non-nested, and independently recoverable. The command
+re-observes every target before invoking its explicit deletion capability.
+Ordinary setup never trades source preservation for tidiness.
 
 ## Ten laws define the program
 
@@ -600,7 +629,7 @@ Commit execution additionally stops for:
 
 Diagnostics identify the resource, branch, path, or commit in conflict and leave existing source history recoverable.
 
-## The first meaningful slice proves one real Subject
+## The 0.1.0 path remains a compatibility baseline
 
 The first production slice crosses anonymous public boundaries to assemble two
 dedicated, independently governed fixture repositories:
@@ -639,16 +668,11 @@ The slice must prove that:
 - running setup again changes no Workbench-owned projection;
 - Git-owned source changes survive every setup action.
 
-The slice is complete when this one path is dependable production behavior.
-
-It does not need to include:
-
-- generated `AGENTS.md`;
-- workbench-level `commit-plan.pkl`;
-- immutable revision snapshots;
-- explicit orphan pruning;
-- every future resource shape;
-- repository migration or history extraction.
+Release 0.2.0 preserves this accepted public path while completing the v1
+lifecycle with generated orientation, recoverable Change Sets, exact World
+snapshots, explicit safe prune, the closed Repository shape, and self-contained
+Mise distribution. Fixture evolution must first preserve the accepted 0.1.0
+revisions on their canonical `workbench/proof-0.1.0` branches.
 
 Adopting BasinDB and `phosphorco/community-packages` is a separate future
 promise. Their Workbench declarations, repository split, migration, and history
@@ -658,7 +682,6 @@ extraction are not acceptance inputs for this slice.
 
 Workbench is not:
 
-- an immutable revision-lock system in its first form;
 - a filesystem-level edit lock;
 - a distributed Git transaction;
 - a general-purpose plugin or arbitrary-hook framework;
@@ -668,13 +691,13 @@ Workbench is not:
 - a mechanism for placing multiple revisions of one identity in one World;
 - a manager for naming or deleting surrounding workbench directories;
 - an automatic merge, rebase, or branch-reset system;
-- an automatic checkout deletion system;
+- an automatic checkout deletion system (deletion is explicit and guarded);
 - a daemon or shared mutable coordination service;
 - a release-publication manager;
 - a repository-history migration tool.
 - BasinDB or `phosphorco/community-packages` adoption, declarations, repository splitting, migration, or history extraction.
 
-History extraction, hosting-provider migration, release-publication management,
-and immutable world snapshots may be built alongside Workbench. They have
-different authority, recovery, and failure boundaries from reconciling a local
+History extraction, hosting-provider migration, and generalized
+release-publication management remain separate systems. They have different
+authority, recovery, and failure boundaries from reconciling a local
 development world.
