@@ -16,7 +16,7 @@ import (
 const (
 	publicSubjectContract = releasePackageURI + "#/WorkbenchSubject.pkl"
 	proofBranch           = "workbench/proof-0.1.0"
-	subjectBranch         = "workbench/local-acceptance-0.1.0"
+	subjectBranch         = proofBranch
 	entryRepositoryURL    = "https://github.com/phosphorco/workbench-fixture-entry"
 	libraryRepositoryURL  = "https://github.com/phosphorco/workbench-fixture-library"
 	entryProofRevision    = "74ee45909df2540b4056209d9e0d39e8dcabc56a"
@@ -249,11 +249,14 @@ func assertCheckout(t *testing.T, environment []string, root, remote string) {
 	if branch := publicGit(t, environment, root, "branch", "--show-current"); branch != subjectBranch {
 		t.Errorf("branch = %q, want Subject branch %q", branch, subjectBranch)
 	}
-	command := exec.Command("git", "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD")
+	// The durable 0.1 proof branch records the exact main revision from which
+	// the collaboration line was created. Fixture main may evolve afterward,
+	// so current main must descend from that preserved anchor.
+	command := exec.Command("git", "merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/main")
 	command.Dir = root
 	command.Env = environment
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Errorf("Subject branch is not descended from origin/main: %v\n%s", err, output)
+		t.Errorf("origin/main does not descend from the preserved Subject anchor: %v\n%s", err, output)
 	}
 }
 
