@@ -19,6 +19,8 @@ const (
 	releasePackageZIP     = "https://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0.zip"
 	v020ReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0"
 	v020ReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
+	v030ReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0"
+	v030ReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0.zip"
 )
 
 func TestReleasePackageCandidate(t *testing.T) {
@@ -26,20 +28,20 @@ func TestReleasePackageCandidate(t *testing.T) {
 	outputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, outputRoot)
 
-	metadataPath := filepath.Join(outputRoot, "workbench@0.2.0")
+	metadataPath := filepath.Join(outputRoot, "workbench@0.3.0")
 	archivePath := metadataPath + ".zip"
 	metadata := readReleaseMetadata(t, metadataPath)
 	if metadata.Name != "workbench" {
 		t.Errorf("metadata name = %q, want workbench", metadata.Name)
 	}
-	if metadata.PackageURI != v020ReleasePackageURI {
-		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, v020ReleasePackageURI)
+	if metadata.PackageURI != v030ReleasePackageURI {
+		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, v030ReleasePackageURI)
 	}
-	if metadata.Version != "0.2.0" {
-		t.Errorf("metadata version = %q, want 0.2.0", metadata.Version)
+	if metadata.Version != "0.3.0" {
+		t.Errorf("metadata version = %q, want 0.3.0", metadata.Version)
 	}
-	if metadata.PackageZIPURL != v020ReleasePackageZIP {
-		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, v020ReleasePackageZIP)
+	if metadata.PackageZIPURL != v030ReleasePackageZIP {
+		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, v030ReleasePackageZIP)
 	}
 
 	metadataChecksum := verifyReleaseChecksum(t, metadataPath)
@@ -85,10 +87,10 @@ func TestReleasePackageCandidate(t *testing.T) {
 	secondOutputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, secondOutputRoot)
 	for _, name := range []string{
-		"workbench@0.2.0",
-		"workbench@0.2.0.sha256",
-		"workbench@0.2.0.zip",
-		"workbench@0.2.0.zip.sha256",
+		"workbench@0.3.0",
+		"workbench@0.3.0.sha256",
+		"workbench@0.3.0.zip",
+		"workbench@0.3.0.zip.sha256",
 	} {
 		first, err := os.ReadFile(filepath.Join(outputRoot, name))
 		if err != nil {
@@ -201,8 +203,31 @@ scope = "@workbench-entry"
 includes {
 	  ["phosphorco/workbench-fixture-library"] {}
 }
+packages {
+  ["@workbench-entry/app"] {}
+}
 `,
 			wantSuccess: true,
+		},
+		{
+			name: "package scope rejects another scope",
+			source: `amends "modulepath:/PackageScopeRepository.pkl"
+
+scope = "@workbench-entry"
+packages {
+  ["@other/app"] {}
+}
+`,
+		},
+		{
+			name: "package scope rejects nested package leaf",
+			source: `amends "modulepath:/PackageScopeRepository.pkl"
+
+scope = "@workbench-entry"
+packages {
+  ["@workbench-entry/apps/web"] {}
+}
+`,
 		},
 		{
 			name: "valid repository shape",
@@ -228,7 +253,7 @@ identity = "hand-authored"
 prose = "Keep Git-owned source intact."
 subject {
   workLine {
-    branch = "workbench/proof-0.2.0"
+    branch = "workbench/proof-0.3.0"
     baseBranch = "main"
   }
   entrypoints { "https://github.com/phosphorco/workbench-fixture-entry" }
@@ -239,7 +264,7 @@ resources {
     github = "phosphorco/workbench-fixture-entry"
     shape = new PackageScopeShape { scope = "@workbench-entry" }
     canonicalPath = "pkg/@workbench-entry"
-    branch = "workbench/proof-0.2.0"
+    branch = "workbench/proof-0.3.0"
     health = "healthy"
   }
 }
@@ -258,7 +283,7 @@ commits {
   ["@workbench-entry"] {
     title = "feat: consume library"
     description = "Use the shared value."
-    filePaths { "src/index.ts" }
+    filePaths { "app/src/index.ts" }
   }
 }
 `,

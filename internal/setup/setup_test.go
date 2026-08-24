@@ -31,11 +31,329 @@ func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 	}
 }
 
+func TestSchemaForSourceDiscriminatesV020AndV030PackageScopeContracts(t *testing.T) {
+	for _, test := range []struct {
+		uri     string
+		version string
+	}{
+		{uri: localV020PackageScopeURI, version: "0.2.0"},
+		{uri: localV030PackageScopeURI, version: "0.3.0"},
+	} {
+		source := []byte(fmt.Sprintf("amends %q\n", test.uri))
+		if _, version, err := schemaForSource(source, "PackageScopeRepository.pkl"); err != nil {
+			t.Fatalf("%s schema: %v", test.version, err)
+		} else if version != test.version {
+			t.Fatalf("%s URI selected %q", test.version, version)
+		}
+	}
+	if _, version, err := schemaForSource([]byte(`amends "package://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0#/PackageScopeRepository.pkl"`), "PackageScopeRepository.pkl"); err != nil {
+		t.Fatal(err)
+	} else if version != "0.3.0" {
+		t.Fatalf("released 0.3 package selected %q", version)
+	}
+}
+
+func TestObservePackagesV030UsesOneNestedLawForSingletonAndMultiplePackages(t *testing.T) {
+	root := t.TempDir()
+	resourceRoot := filepath.Join(root, "pkg", "@workbench-entry")
+	write(t, filepath.Join(resourceRoot, "app", "src", "index.ts"), "export const app = true\n")
+	write(t, filepath.Join(resourceRoot, "tool", "src", "index.ts"), "export const tool = true\n")
+
+	resource := Resource{
+		Identity:      "@workbench-entry",
+		CanonicalPath: "pkg/@workbench-entry",
+		Shape:         contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: "@workbench-entry"},
+		Packages:      map[string]contract.PackagePolicy{"@workbench-entry/app": {}},
+	}
+	singleton, err := observePackages(root, []Resource{resource}, "0.3.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(singleton) != 1 || filepath.ToSlash(singleton[0].Directory) != "pkg/@workbench-entry/app" {
+		t.Fatalf("singleton packages = %#v", singleton)
+	}
+
+	resource.Packages["@workbench-entry/tool"] = contract.PackagePolicy{}
+	multiple, err := observePackages(root, []Resource{resource}, "0.3.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]string, len(multiple))
+	for _, pkg := range multiple {
+		got[pkg.Name] = filepath.ToSlash(pkg.Directory)
+	}
+	want := map[string]string{
+		"@workbench-entry/app":  "pkg/@workbench-entry/app",
+		"@workbench-entry/tool": "pkg/@workbench-entry/tool",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("multiple package directories = %#v, want %#v", got, want)
+	}
+	if got["@workbench-entry/app"] != filepath.ToSlash(singleton[0].Directory) {
+		t.Fatalf("adding a package relocated app from %q to %q", singleton[0].Directory, got["@workbench-entry/app"])
+	}
+}
+
+func TestObservePackagesRoutesPackageScopePlacementByExactContractVersion(t *testing.T) {
+	root := t.TempDir()
+	resourceRoot := filepath.Join(root, "pkg", "@workbench-entry")
+	write(t, filepath.Join(resourceRoot, "src", "index.ts"), "export const historical = true\n")
+	resource := Resource{
+		Identity:      "@workbench-entry",
+		CanonicalPath: "pkg/@workbench-entry",
+		Shape:         contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: "@workbench-entry"},
+		Packages:      map[string]contract.PackagePolicy{"@workbench-entry/app": {}},
+	}
+	for _, version := range []string{"0.1.0", "0.2.0"} {
+		packages, err := observePackages(root, []Resource{resource}, version)
+		if err != nil {
+			t.Fatalf("%s historical placement: %v", version, err)
+		}
+		if got := filepath.ToSlash(packages[0].Directory); got != "pkg/@workbench-entry" {
+			t.Fatalf("%s package directory = %q, want historical resource root", version, got)
+		}
+	}
+	if _, err := observePackages(root, []Resource{resource}, "0.3.0"); err == nil || !strings.Contains(err.Error(), `has non-canonical source layout(s) ["src"]; requires "app/src"`) {
+		t.Fatalf("0.3.0 root-layout refusal = %v", err)
+	}
+}
+
+func TestObservePackagesV030RetainsDistinctRepositoryPlacement(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "repos", "workbench-fixture-library", "src", "index.ts"), "export const library = true\n")
+	resource := Resource{
+		Identity:      "phosphorco/workbench-fixture-library",
+		CanonicalPath: "repos/workbench-fixture-library",
+		Shape:         contract.ResourceShape{Kind: contract.RepositoryShape},
+		Packages:      map[string]contract.PackagePolicy{"@workbench-library/shared": {}},
+	}
+	packages, err := observePackages(root, []Resource{resource}, "0.3.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filepath.ToSlash(packages[0].Directory); got != "repos/workbench-fixture-library" {
+		t.Fatalf("Repository package directory = %q", got)
+	}
+}
+
+func TestObservePackagesV030RefusesNonCanonicalLayoutsWithoutGeneratedMutation(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceDirs []string
+		want       string
+	}{
+		{name: "missing", want: `PackageScope package "@workbench-entry/app" requires canonical source directory "app/src"`},
+		{name: "root", sourceDirs: []string{"src"}, want: `PackageScope package "@workbench-entry/app" has non-canonical source layout(s) ["src"]; requires "app/src"`},
+		{name: "guessed packages directory", sourceDirs: []string{"packages/app/src"}, want: `PackageScope package "@workbench-entry/app" has non-canonical source layout(s) ["packages/app/src"]; requires "app/src"`},
+		{name: "ambiguous", sourceDirs: []string{"app/src", "src", "packages/app/src"}, want: `PackageScope package "@workbench-entry/app" has non-canonical source layout(s) ["src" "packages/app/src"]; requires "app/src"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			resourceRoot := filepath.Join(root, "pkg", "@workbench-entry")
+			if err := os.MkdirAll(resourceRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, sourceDir := range test.sourceDirs {
+				write(t, filepath.Join(resourceRoot, filepath.FromSlash(sourceDir), "index.ts"), "export const source = true\n")
+			}
+			write(t, filepath.Join(root, "package.json"), "preserve root manifest\n")
+			write(t, filepath.Join(resourceRoot, "package.json"), "preserve resource manifest\n")
+			beforeRoot := mustRead(t, filepath.Join(root, "package.json"))
+			beforeResource := mustRead(t, filepath.Join(resourceRoot, "package.json"))
+			resource := Resource{
+				Identity:      "@workbench-entry",
+				CanonicalPath: "pkg/@workbench-entry",
+				Shape:         contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: "@workbench-entry"},
+				Packages:      map[string]contract.PackagePolicy{"@workbench-entry/app": {}},
+			}
+			_, err := observePackages(root, []Resource{resource}, "0.3.0")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+			if after := mustRead(t, filepath.Join(root, "package.json")); !slices.Equal(after, beforeRoot) {
+				t.Fatal("refusal changed root generated output")
+			}
+			if after := mustRead(t, filepath.Join(resourceRoot, "package.json")); !slices.Equal(after, beforeResource) {
+				t.Fatal("refusal changed resource generated output")
+			}
+		})
+	}
+}
+
+func TestRunWithV030RefusesRootPackageLayoutBeforeGeneratedMutation(t *testing.T) {
+	root := t.TempDir()
+	remotes := filepath.Join(root, "remotes")
+	if err := os.MkdirAll(remotes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	createRemote(t, root, remotes, "workbench-fixture-entry", fmt.Sprintf("amends %q\n\nscope = \"@workbench-entry\"\npackages { [\"@workbench-entry/app\"] {} }\n", localV030PackageScopeURI), map[string]string{
+		"src/index.ts": "export const rootShortcut = true\n",
+	})
+	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+filepath.ToSlash(remotes)+"/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/phosphorco/")
+	workbench := filepath.Join(root, "workbench")
+	if err := os.MkdirAll(workbench, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(workbench, "workbench-subject.pkl"), fmt.Sprintf("amends %q\n\nworkLine { branch = \"workbench/v030-invalid\"; baseBranch = \"main\" }\nentrypoints { \"https://github.com/phosphorco/workbench-fixture-entry\" }\n", localV030SubjectURI))
+	write(t, filepath.Join(workbench, "package.json"), "preserve root projection\n")
+	before := mustRead(t, filepath.Join(workbench, "package.json"))
+
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skip("bun unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RunWith(context.Background(), workbench, NewToolchain(evaluator, bun))
+	if err == nil || !strings.Contains(err.Error(), `has non-canonical source layout(s) ["src"]; requires "app/src"`) {
+		t.Fatalf("root shortcut refusal = %v", err)
+	}
+	if after := mustRead(t, filepath.Join(workbench, "package.json")); !slices.Equal(after, before) {
+		t.Fatal("invalid PackageScope topology changed root generated projection")
+	}
+	for _, path := range []string{
+		"pkg/@workbench-entry/app/package.json",
+		"pkg/@workbench-entry/app/tsconfig.json",
+		"tsconfig.json",
+	} {
+		if _, err := os.Stat(filepath.Join(workbench, filepath.FromSlash(path))); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("invalid PackageScope topology created %s: %v", path, err)
+		}
+	}
+}
+
+func TestRunWithV030ReturnsEvaluatedContractVersion(t *testing.T) {
+	root := t.TempDir()
+	temporary := filepath.Join(root, "tmp")
+	if err := os.MkdirAll(temporary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", temporary)
+	t.Setenv("BUN_INSTALL_CACHE_DIR", filepath.Join(root, "bun-cache"))
+	remotes := filepath.Join(root, "remotes")
+	if err := os.MkdirAll(remotes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	createRemote(t, root, remotes, "workbench-fixture-entry", fmt.Sprintf("amends %q\n\nscope = \"@workbench-entry\"\npackages { [\"@workbench-entry/app\"] {} }\n", localV030PackageScopeURI), map[string]string{
+		".gitignore":       "app/package.json\napp/tsconfig.json\napp/dist/\n.agents/skills/\n",
+		"app/src/index.ts": "export const nested = true\n",
+	})
+	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+filepath.ToSlash(remotes)+"/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/phosphorco/")
+	workbench := filepath.Join(root, "workbench")
+	if err := os.MkdirAll(workbench, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(workbench, "workbench-subject.pkl"), fmt.Sprintf("amends %q\n\nworkLine { branch = \"workbench/v030\"; baseBranch = \"main\" }\nentrypoints { \"https://github.com/phosphorco/workbench-fixture-entry\" }\n", localV030SubjectURI))
+	write(t, filepath.Join(workbench, "AGENTS.pkl"), fmt.Sprintf("amends %q\n\nprose = \"Version witness.\"\n", localV030AgentInstructionsURI))
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skip("bun unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := RunWith(context.Background(), workbench, NewToolchain(evaluator, bun))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ContractVersion != "0.3.0" {
+		t.Fatalf("contract version = %q, want 0.3.0", result.ContractVersion)
+	}
+	if _, err := os.Stat(filepath.Join(workbench, "pkg", "@workbench-entry", "app", "tsconfig.json")); err != nil {
+		t.Fatalf("nested package projection: %v", err)
+	}
+}
+
+func TestObservePackagesV030RefusesSymlinkedCanonicalDirectoriesWithoutOutsideMutation(t *testing.T) {
+	tests := []struct {
+		name string
+		link func(t *testing.T, resourceRoot, outside string)
+		want string
+	}{
+		{
+			name: "package leaf",
+			link: func(t *testing.T, resourceRoot, outside string) {
+				t.Helper()
+				if err := os.Symlink(outside, filepath.Join(resourceRoot, "app")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: `canonical package directory "app" must be a real directory, not a symlink`,
+		},
+		{
+			name: "source directory",
+			link: func(t *testing.T, resourceRoot, outside string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(resourceRoot, "app"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(outside, "src"), filepath.Join(resourceRoot, "app", "src")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: `canonical source directory "app/src" must be a real directory, not a symlink`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			resourceRoot := filepath.Join(root, "pkg", "@workbench-entry")
+			if err := os.MkdirAll(resourceRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			outside := t.TempDir()
+			write(t, filepath.Join(outside, "src", "index.ts"), "export const outside = true\n")
+			write(t, filepath.Join(outside, "sentinel.txt"), "outside must remain byte-identical\n")
+			test.link(t, resourceRoot, outside)
+			beforeOutside := readTree(t, outside)
+			resource := Resource{
+				Identity:      "@workbench-entry",
+				CanonicalPath: "pkg/@workbench-entry",
+				Shape:         contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: "@workbench-entry"},
+				Packages:      map[string]contract.PackagePolicy{"@workbench-entry/app": {}},
+			}
+			_, err := observePackages(root, []Resource{resource}, "0.3.0")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("symlink refusal = %v, want %q", err, test.want)
+			}
+			if afterOutside := readTree(t, outside); !reflect.DeepEqual(afterOutside, beforeOutside) {
+				t.Fatalf("symlink refusal mutated outside tree:\nbefore=%#v\nafter=%#v", beforeOutside, afterOutside)
+			}
+			for _, generated := range []string{"package.json", "tsconfig.json"} {
+				if _, err := os.Stat(filepath.Join(outside, generated)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("symlink refusal created outside %s: %v", generated, err)
+				}
+			}
+		})
+	}
+}
+
 func TestRunAssemblesClosureConvergesAndPreservesSource(t *testing.T) {
 	fixture := newSetupFixture(t)
 	first, err := Run(context.Background(), fixture.workbench)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if first.ContractVersion != "0.1.0" {
+		t.Fatalf("contract version = %q, want 0.1.0", first.ContractVersion)
 	}
 	if len(first.World.Resources) != 2 {
 		t.Fatalf("resources = %#v", first.World.Resources)
@@ -143,6 +461,9 @@ func TestRunWithV020RoutesClosedShapesAndConvergesOrientation(t *testing.T) {
 	first, err := RunWith(context.Background(), workbench, NewToolchain(evaluator, bun))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if first.ContractVersion != "0.2.0" {
+		t.Fatalf("contract version = %q, want 0.2.0", first.ContractVersion)
 	}
 	if len(first.Resources) != 2 {
 		t.Fatalf("resources = %#v", first.Resources)

@@ -2,10 +2,10 @@ amends "pkl:Project"
 
 package {
   name = "workbench"
-  baseUri = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench"
-  version = "0.2.0"
+  baseUri = "package://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench"
+  version = "0.3.0"
   packageZipUrl =
-    "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@\(version).zip"
+    "https://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@\(version).zip"
 
   exclude {
     "acceptance/**"

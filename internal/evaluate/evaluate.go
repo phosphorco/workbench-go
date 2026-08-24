@@ -117,6 +117,10 @@ func (runtime Evaluator) EvaluatePackageScopeDeclaration(ctx context.Context, so
 	return evaluateDecoded(runtime, ctx, source, schema, "0.2 package-scope declaration", contract.DecodePackageScopeDeclaration)
 }
 
+func (runtime Evaluator) EvaluatePackageScopeDeclarationV030(ctx context.Context, source []byte, schema Contract) (contract.Declaration, error) {
+	return evaluateDecoded(runtime, ctx, source, schema, "0.3 package-scope declaration", contract.DecodePackageScopeDeclarationV030)
+}
+
 func (runtime Evaluator) EvaluateRepositoryDeclaration(ctx context.Context, source []byte, schema Contract) (contract.Declaration, error) {
 	return evaluateDecoded(runtime, ctx, source, schema, "0.2 repository declaration", contract.DecodeRepositoryDeclaration)
 }

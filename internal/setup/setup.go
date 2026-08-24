@@ -27,6 +27,10 @@ const (
 	localV020PackageScopeURI      = "workbench-contract:/0.2.0/PackageScopeRepository.pkl"
 	localV020RepositoryURI        = "workbench-contract:/0.2.0/Repository.pkl"
 	localV020AgentInstructionsURI = "workbench-contract:/0.2.0/AgentInstructions.pkl"
+	localV030SubjectURI           = "workbench-contract:/0.3.0/WorkbenchSubject.pkl"
+	localV030PackageScopeURI      = "workbench-contract:/0.3.0/PackageScopeRepository.pkl"
+	localV030RepositoryURI        = "workbench-contract:/0.3.0/Repository.pkl"
+	localV030AgentInstructionsURI = "workbench-contract:/0.3.0/AgentInstructions.pkl"
 )
 
 var (
@@ -35,10 +39,11 @@ var (
 )
 
 type Result struct {
-	World        world.World
-	Resources    []Resource
-	Orphans      []orphan.Candidate
-	ChangedPaths []string
+	World           world.World
+	Resources       []Resource
+	Orphans         []orphan.Candidate
+	ChangedPaths    []string
+	ContractVersion string
 }
 
 // Resource is setup's version-neutral view. Identity is derived by the
@@ -57,9 +62,10 @@ type contractEvaluator interface {
 	EvaluatePackageScopeRepository(context.Context, []byte, evaluate.Contract) (contract.PackageScopeRepository, error)
 }
 
-type v020Evaluator interface {
+type versionedEvaluator interface {
 	contractEvaluator
 	EvaluatePackageScopeDeclaration(context.Context, []byte, evaluate.Contract) (contract.Declaration, error)
+	EvaluatePackageScopeDeclarationV030(context.Context, []byte, evaluate.Contract) (contract.Declaration, error)
 	EvaluateRepositoryDeclaration(context.Context, []byte, evaluate.Contract) (contract.Declaration, error)
 	EvaluateAgentInstructions(context.Context, []byte, evaluate.Contract) (contract.AgentInstructions, error)
 }
@@ -121,23 +127,23 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		return Result{}, err
 	}
 
-	var evaluator020 v020Evaluator
-	if version == "0.2.0" {
+	var evaluatorVersioned versionedEvaluator
+	if version == "0.2.0" || version == "0.3.0" {
 		var ok bool
-		evaluator020, ok = toolchain.Evaluator.(v020Evaluator)
+		evaluatorVersioned, ok = toolchain.Evaluator.(versionedEvaluator)
 		if !ok {
-			return Result{}, fmt.Errorf("Workbench 0.2.0 setup requires an explicitly configured Pkl evaluator")
+			return Result{}, fmt.Errorf("Workbench %s setup requires an explicitly configured Pkl evaluator", version)
 		}
 	}
 	source := &discoverySource{
-		ctx:              ctx,
-		root:             root,
-		workLine:         subject.WorkLine,
-		evaluator:        toolchain.Evaluator,
-		evaluator020:     evaluator020,
-		version:          version,
-		declarations:     make(map[string]contract.PackageScopeRepository),
-		v020Declarations: make(map[string]contract.Declaration),
+		ctx:                ctx,
+		root:               root,
+		workLine:           subject.WorkLine,
+		evaluator:          toolchain.Evaluator,
+		evaluatorVersioned: evaluatorVersioned,
+		version:            version,
+		declarations:       make(map[string]contract.PackageScopeRepository),
+		v020Declarations:   make(map[string]contract.Declaration),
 	}
 	var legacy world.World
 	var resources []Resource
@@ -181,7 +187,7 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		return Result{}, fmt.Errorf("reconcile canonical checkouts: %w", err)
 	}
 
-	packages, err := observePackages(root, resources)
+	packages, err := observePackages(root, resources, version)
 	if err != nil {
 		return Result{}, err
 	}
@@ -232,8 +238,8 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if receiptChanged {
 		changed = append(changed, ".workbench/world.json")
 	}
-	if version == "0.2.0" {
-		orientationChanged, err := projectOrientation(ctx, root, subject, resources, evaluator020)
+	if version == "0.2.0" || version == "0.3.0" {
+		orientationChanged, err := projectOrientation(ctx, root, subject, resources, evaluatorVersioned, version)
 		if err != nil {
 			return Result{}, err
 		}
@@ -242,7 +248,7 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		}
 	}
 	sort.Strings(changed)
-	return Result{World: legacy, Resources: resources, Orphans: orphans, ChangedPaths: changed}, nil
+	return Result{World: legacy, Resources: resources, Orphans: orphans, ChangedPaths: changed, ContractVersion: version}, nil
 }
 
 func reconcileDependencies(ctx context.Context, root, bun string) error {
@@ -257,14 +263,14 @@ func reconcileDependencies(ctx context.Context, root, bun string) error {
 }
 
 type discoverySource struct {
-	ctx              context.Context
-	root             string
-	workLine         contract.WorkLine
-	evaluator        contractEvaluator
-	evaluator020     v020Evaluator
-	version          string
-	declarations     map[string]contract.PackageScopeRepository
-	v020Declarations map[string]contract.Declaration
+	ctx                context.Context
+	root               string
+	workLine           contract.WorkLine
+	evaluator          contractEvaluator
+	evaluatorVersioned versionedEvaluator
+	version            string
+	declarations       map[string]contract.PackageScopeRepository
+	v020Declarations   map[string]contract.Declaration
 }
 
 func (source *discoverySource) LoadRepository(identity string) (contract.PackageScopeRepository, error) {
@@ -331,14 +337,18 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	if err != nil {
 		return contract.Declaration{}, fmt.Errorf("select %q repository contract: %w", github, err)
 	}
-	if source.version != "0.2.0" || version != "0.2.0" {
-		return contract.Declaration{}, fmt.Errorf("repository %q declaration is %s, want exact 0.2.0", github, version)
+	if source.version != version || (version != "0.2.0" && version != "0.3.0") {
+		return contract.Declaration{}, fmt.Errorf("repository %q declaration is %s, want exact %s", github, version, source.version)
 	}
 	var declaration contract.Declaration
 	if filename == "PackageScopeRepository.pkl" {
-		declaration, err = source.evaluator020.EvaluatePackageScopeDeclaration(source.ctx, encoded, schema)
+		if version == "0.3.0" {
+			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclarationV030(source.ctx, encoded, schema)
+		} else {
+			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclaration(source.ctx, encoded, schema)
+		}
 	} else {
-		declaration, err = source.evaluator020.EvaluateRepositoryDeclaration(source.ctx, encoded, schema)
+		declaration, err = source.evaluatorVersioned.EvaluateRepositoryDeclaration(source.ctx, encoded, schema)
 	}
 	if err != nil {
 		return contract.Declaration{}, fmt.Errorf("evaluate %q workbench.pkl: %w", github, err)
@@ -370,7 +380,7 @@ func (source *discoverySource) IdentityAt(canonicalPath string) (string, bool, e
 	if err != nil {
 		return "", true, err
 	}
-	if source.version == "0.2.0" && strings.HasPrefix(filepath.ToSlash(canonicalPath), "pkg/") {
+	if (source.version == "0.2.0" || source.version == "0.3.0") && strings.HasPrefix(filepath.ToSlash(canonicalPath), "pkg/") {
 		// PackageScope identity is derived from the closed placement arm, while
 		// origin remains independent and must still name the declaration source.
 		for github, declaration := range source.v020Declarations {
@@ -423,7 +433,7 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 		value, err := evaluate.LocalContract(uri, localSubjectContract)
 		return value, "0.2.0", err
 	case localV020PackageScopeURI:
-		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		value, err := evaluate.LocalContract(uri, localV020RepositoryContract)
 		return value, "0.2.0", err
 	case localV020RepositoryURI:
 		value, err := evaluate.LocalContract(uri, localRepositoryDeclarationContract)
@@ -431,9 +441,21 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 	case localV020AgentInstructionsURI:
 		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
 		return value, "0.2.0", err
+	case localV030SubjectURI:
+		value, err := evaluate.LocalContract(uri, localSubjectContract)
+		return value, "0.3.0", err
+	case localV030PackageScopeURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		return value, "0.3.0", err
+	case localV030RepositoryURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryDeclarationContract)
+		return value, "0.3.0", err
+	case localV030AgentInstructionsURI:
+		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
+		return value, "0.3.0", err
 	default:
 		version := ""
-		for _, candidate := range []string{"0.1.0", "0.2.0"} {
+		for _, candidate := range []string{"0.1.0", "0.2.0", "0.3.0"} {
 			needle := "/releases/download/" + candidate + "/workbench@" + candidate + "#/"
 			if strings.Contains(uri, needle) {
 				version = candidate
@@ -450,7 +472,7 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 	}
 }
 
-func observePackages(root string, resources []Resource) ([]workspace.Package, error) {
+func observePackages(root string, resources []Resource, contractVersion string) ([]workspace.Package, error) {
 	result := make([]workspace.Package, 0)
 	for _, resource := range resources {
 		resourceRoot := filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))
@@ -460,7 +482,7 @@ func observePackages(root string, resources []Resource) ([]workspace.Package, er
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			packageRoot, err := locatePackage(resourceRoot, name, len(names) == 1)
+			packageRoot, err := locatePackage(resourceRoot, resource, name, contractVersion, len(names) == 1)
 			if err != nil {
 				return nil, fmt.Errorf("locate package %q in %q: %w", name, resource.Identity, err)
 			}
@@ -483,7 +505,119 @@ func observePackages(root string, resources []Resource) ([]workspace.Package, er
 	return result, nil
 }
 
-func locatePackage(resourceRoot string, name string, allowRoot bool) (string, error) {
+func locatePackage(resourceRoot string, resource Resource, name, contractVersion string, allowRoot bool) (string, error) {
+	if contractVersion == "0.3.0" && resource.Shape.Kind == contract.PackageScopeShape {
+		return locatePackageScopePackage(resourceRoot, resource.Shape.Scope, name)
+	}
+	return locateLegacyPackage(resourceRoot, name, allowRoot)
+}
+
+func locatePackageScopePackage(resourceRoot, scope, name string) (string, error) {
+	declaration := contract.Declaration{
+		Shape:    contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: scope},
+		Packages: map[string]contract.PackagePolicy{name: {}},
+	}
+	leaf, err := declaration.PackageDirectory(name)
+	if err != nil {
+		return "", err
+	}
+
+	canonical, err := canonicalPackageScopeSourceExists(resourceRoot, leaf)
+	if err != nil {
+		return "", fmt.Errorf("observe canonical source directory %q: %w", filepath.ToSlash(filepath.Join(leaf, "src")), err)
+	}
+	nonCanonical := make([]string, 0, 2)
+	for _, relative := range []string{"src", filepath.Join("packages", leaf, "src")} {
+		exists, err := sourceLayoutExists(filepath.Join(resourceRoot, relative))
+		if err != nil {
+			return "", fmt.Errorf("observe non-canonical source directory %q: %w", filepath.ToSlash(relative), err)
+		}
+		if exists {
+			nonCanonical = append(nonCanonical, filepath.ToSlash(relative))
+		}
+	}
+	want := filepath.ToSlash(filepath.Join(leaf, "src"))
+	if len(nonCanonical) != 0 {
+		return "", fmt.Errorf("PackageScope package %q has non-canonical source layout(s) %q; requires %q", name, nonCanonical, want)
+	}
+	if !canonical {
+		return "", fmt.Errorf("PackageScope package %q requires canonical source directory %q", name, want)
+	}
+	return filepath.Join(resourceRoot, leaf), nil
+}
+
+func canonicalPackageScopeSourceExists(resourceRoot, leaf string) (bool, error) {
+	rootInfo, err := os.Lstat(resourceRoot)
+	if err != nil {
+		return false, err
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return false, fmt.Errorf("PackageScope checkout root must be a real directory, not a symlink")
+	}
+	realRoot, err := filepath.EvalSymlinks(resourceRoot)
+	if err != nil {
+		return false, fmt.Errorf("resolve PackageScope checkout root: %w", err)
+	}
+
+	packageRoot := filepath.Join(resourceRoot, leaf)
+	packageInfo, err := os.Lstat(packageRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if packageInfo.Mode()&os.ModeSymlink != 0 || !packageInfo.IsDir() {
+		return false, fmt.Errorf("canonical package directory %q must be a real directory, not a symlink", filepath.ToSlash(leaf))
+	}
+	if err := requireRealDirectoryWithin(realRoot, packageRoot); err != nil {
+		return false, fmt.Errorf("canonical package directory %q: %w", filepath.ToSlash(leaf), err)
+	}
+
+	sourceRoot := filepath.Join(packageRoot, "src")
+	sourceInfo, err := os.Lstat(sourceRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if sourceInfo.Mode()&os.ModeSymlink != 0 || !sourceInfo.IsDir() {
+		return false, fmt.Errorf("canonical source directory %q must be a real directory, not a symlink", filepath.ToSlash(filepath.Join(leaf, "src")))
+	}
+	if err := requireRealDirectoryWithin(realRoot, sourceRoot); err != nil {
+		return false, fmt.Errorf("canonical source directory %q: %w", filepath.ToSlash(filepath.Join(leaf, "src")), err)
+	}
+	return true, nil
+}
+
+func requireRealDirectoryWithin(realRoot, path string) error {
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve real directory: %w", err)
+	}
+	relative, err := filepath.Rel(realRoot, realPath)
+	if err != nil {
+		return fmt.Errorf("compare real directory with PackageScope checkout: %w", err)
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("real directory %q escapes the PackageScope checkout", realPath)
+	}
+	return nil
+}
+
+func sourceLayoutExists(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return info.IsDir() || info.Mode()&os.ModeSymlink != 0, nil
+}
+
+func locateLegacyPackage(resourceRoot string, name string, allowRoot bool) (string, error) {
 	leaf := name
 	if slash := strings.LastIndex(name, "/"); slash >= 0 {
 		leaf = name[slash+1:]

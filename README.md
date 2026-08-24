@@ -25,13 +25,17 @@ the independently governed upstream license, notice, patent, and provenance
 inventory for Go, Pkl, Bun, pkl-go, msgpack, and tagparser. Bundling those
 components does not relicense them as Workbench code.
 
+The commands below describe the `0.3.0` release candidate. They become a public
+installation path only after the matching tag, archives, contracts, checksums,
+attestations, and immutable GitHub release have been published.
+
 ```sh
-mise use -g github:phosphorco/workbench-go@0.2.0
+mise use -g github:phosphorco/workbench-go@0.3.0
 workbench version
 ```
 
-The release reports one compatible version and exact source revision. The
-binary resolves its private runtimes relative to its installed executable; a
+A released archive reports one compatible version and exact source revision.
+The binary resolves its private runtimes relative to its installed executable; a
 released build never falls back to `PATH` or a source checkout. GitHub Actions
 builds the four macOS/Linux ARM64/x64 archives, checksums, runtime inventory,
 and attestations from the release tag. Workbench itself is not a general
@@ -82,10 +86,11 @@ A typical workbench directory looks like this:
 ├── package.json                # generated root projection; ignored
 ├── tsconfig.json               # generated root projection; ignored
 ├── pkg/                        # ignored by the outer repository
-│   ├── @workbench-entry/       # independent Git repository
-│   └── @workbench-library/     # independent Git repository
+│   └── @workbench-entry/       # independent PackageScope Git repository
+│       ├── app/                # one declared package
+│       └── tool/               # another declared package
 └── repos/                      # ignored by the outer repository
-    └── some-plugin/            # independent Git repository
+    └── workbench-fixture-library/ # independent Repository Git repository
 ```
 
 Ignoring `pkg/` and `repos/` prevents the context repository from accidentally treating nested checkouts as its files. It does not weaken the Git history or status of those repositories.
@@ -97,10 +102,10 @@ Workbench-owned generated files inside a resource repository must likewise be ex
 `workbench-subject.pkl` is the local request for what should exist:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/WorkbenchSubject.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0#/WorkbenchSubject.pkl"
 
 workLine {
-  branch = "workbench/proof-0.2.0"
+  branch = "workbench/proof-0.3.0"
   baseBranch = "main"
 }
 
@@ -143,7 +148,7 @@ For example:
 
 ```text
 entrypoint: phosphorco/workbench-fixture-entry
-branch:     workbench/proof-0.2.0
+branch:     workbench/proof-0.3.0
 base:       main
 ```
 
@@ -185,7 +190,7 @@ A filesystem lock, watcher, or permission layer is outside this design.
 Each participating resource contains a root `workbench.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/PackageScopeRepository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0#/PackageScopeRepository.pkl"
 
 scope = "@workbench-entry"
 
@@ -264,15 +269,55 @@ A Repository-shaped `workbench.pkl` amends the released `Repository.pkl`
 contract and does not author a name, scope, or generic identity:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/Repository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0#/Repository.pkl"
 
 includes {}
 packages {}
 ```
 
 Its normalized GitHub acquisition designation supplies identity; the repository
-name supplies the `repos/<name>` placement. PackageScope declarations instead
-author their irreducible package scope and derive `pkg/<scope>`.
+name supplies the `repos/<name>` placement. Repository package placement remains
+the distinct, versioned law of that shape.
+
+A PackageScope resource is different: its checkout is a namespace container,
+not a package root. Every `packages` key in the `0.3.0` contract is exactly
+`<scope>/<leaf>`, and the leaf derives the only canonical child location:
+
+```pkl
+scope = "@workbench-entry"
+
+packages {
+  ["@workbench-entry/app"] {}
+  ["@workbench-entry/tool"] {}
+}
+```
+
+```text
+pkg/@workbench-entry/             # independent Git/resource root
+├── workbench.pkl
+├── skills/                       # Git-owned resource skill sources
+├── .agents/skills/               # ignored resource editing projections
+├── app/
+│   ├── src/                      # @workbench-entry/app source
+│   ├── package.json              # generated package projection
+│   └── tsconfig.json             # generated package projection
+└── tool/
+    ├── src/                      # @workbench-entry/tool source
+    ├── package.json              # generated package projection
+    └── tsconfig.json             # generated package projection
+```
+
+Workbench does not guess `src/`, `packages/<leaf>/src`, or another convenient
+layout. A missing canonical child or any competing package layout stops setup
+before generated workspace, TypeScript, skill, orientation, dependency, or
+receipt outputs change. Adding a second package therefore cannot relocate the
+first one. Skills, includes, branch health, orientation, and Git authority stay
+at the resource root; only package-specific source and generated package files
+live below the derived child directory.
+
+Composite TypeScript build metadata is emitted beneath each package's generated
+`dist/` tree, so repositories ignore one owned output tree rather than enumerating
+package-specific `tsconfig.tsbuildinfo` files.
 
 New shapes require a `workbench-go` release. “Extensible” means that adding an internal shape is a localized implementation change, not that resource authors may install arbitrary resource plugins.
 
@@ -463,12 +508,12 @@ Because skill sources are assembled on the Subject branch, agents receive the sk
 
 ## `AGENTS.pkl` turns current world state into agent orientation
 
-Workbench 0.2.0 publishes the constrained `AgentInstructions.pkl` contract.
+Workbench `0.3.0` retains the constrained `AgentInstructions.pkl` contract.
 
 The context template tracks `AGENTS.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/AgentInstructions.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0#/AgentInstructions.pkl"
 
 prose = """
 # Agent instructions
@@ -510,7 +555,7 @@ Workbench must make it difficult for agents to lose work, commit unrelated edits
 `commit-plan.pkl` describes one **Workbench Change Set**:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/WorkbenchCommitPlan.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0#/WorkbenchCommitPlan.pkl"
 
 changeId = "fixture-cross-repository"
 summary = "Exercise a cross-repository fixture change"
@@ -522,10 +567,10 @@ commits {
     Consume the library value through the workspace link.
     """
 
-    filePaths { "src/index.ts" }
+    filePaths { "app/src/index.ts" }
   }
 
-  ["@workbench-library"] {
+  ["phosphorco/workbench-fixture-library"] {
     title = "feat(fixture): expose the shared value"
     description = """
     Expose the library value consumed by the entry package.
@@ -646,7 +691,7 @@ Commit execution additionally stops for:
 
 Diagnostics identify the resource, branch, path, or commit in conflict and leave existing source history recoverable.
 
-## The 0.1.0 path remains a compatibility baseline
+## The 0.1.0 and 0.2.0 paths remain compatibility baselines
 
 The first production slice crosses anonymous public boundaries to assemble two
 dedicated, independently governed fixture repositories:
@@ -690,6 +735,15 @@ lifecycle with generated orientation, recoverable Change Sets, exact World
 snapshots, explicit safe prune, the closed Repository shape, and self-contained
 Mise distribution. Fixture evolution must first preserve the accepted 0.1.0
 revisions on their canonical `workbench/proof-0.1.0` branches.
+
+The immutable `0.2.0` contract also retains its historical single-package
+PackageScope layout: a package may use the PackageScope checkout root as its
+source root. Workbench selects that law from the exact released contract named
+by the Subject and resource declarations. The `0.3.0` candidate introduces the
+nested `<leaf>/src` law rather than silently reinterpreting a `0.1.0` or `0.2.0`
+World. A compatibility run must therefore continue to assemble the permanent
+`workbench/proof-0.1.0` anchors and the immutable `0.2.0` public path while the
+new candidate proves nested PackageScope behavior independently.
 
 Adopting BasinDB and `phosphorco/community-packages` is a separate future
 promise. Their Workbench declarations, repository split, migration, and history

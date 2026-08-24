@@ -14,11 +14,11 @@ import (
 // acceptance must repeat this failure and recovery across the public fixtures.
 func TestCrossRepositoryDeliveryV1RecoversPartialPushWithoutTouchingUnrelatedWork(t *testing.T) {
 	ctx := context.Background()
-	entry := newDeliveryV1Repository(t, "entry")
-	library := newDeliveryV1Repository(t, "library")
-	writeFile(t, filepath.Join(entry.work, "selected.txt"), "entry selected\n")
+	entry := newDeliveryV1Repository(t, "@workbench-entry", "app/src/index.ts")
+	library := newDeliveryV1Repository(t, "phosphorco/workbench-fixture-library", "src/index.ts")
+	writeFile(t, filepath.Join(entry.work, entry.selected), "entry selected\n")
 	writeFile(t, filepath.Join(entry.work, "unrelated.txt"), "entry unrelated remains dirty\n")
-	writeFile(t, filepath.Join(library.work, "selected.txt"), "library selected\n")
+	writeFile(t, filepath.Join(library.work, library.selected), "library selected\n")
 	library.rejectPushes(t)
 
 	requests := []change.Request{
@@ -44,8 +44,8 @@ func TestCrossRepositoryDeliveryV1RecoversPartialPushWithoutTouchingUnrelatedWor
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertDeliveryV1Progress(t, progress, "entry", true, true)
-	assertDeliveryV1Progress(t, progress, "library", true, false)
+	assertDeliveryV1Progress(t, progress, entry.id, true, true)
+	assertDeliveryV1Progress(t, progress, library.id, true, false)
 	if status := git(t, entry.work, "status", "--short"); status != " M unrelated.txt\n" {
 		t.Fatalf("unselected work changed: %q", status)
 	}
@@ -77,13 +77,14 @@ func TestCrossRepositoryDeliveryV1RecoversPartialPushWithoutTouchingUnrelatedWor
 }
 
 type deliveryV1Repository struct {
-	id      string
-	work    string
-	remote  string
-	initial string
+	id       string
+	work     string
+	remote   string
+	initial  string
+	selected string
 }
 
-func newDeliveryV1Repository(t *testing.T, id string) *deliveryV1Repository {
+func newDeliveryV1Repository(t *testing.T, id, selected string) *deliveryV1Repository {
 	t.Helper()
 	root := t.TempDir()
 	remote := filepath.Join(root, "remote.git")
@@ -92,20 +93,20 @@ func newDeliveryV1Repository(t *testing.T, id string) *deliveryV1Repository {
 	git(t, root, "init", "-b", "main", work)
 	git(t, work, "config", "user.name", "Workbench V1 Acceptance")
 	git(t, work, "config", "user.email", "workbench-v1@example.invalid")
-	writeFile(t, filepath.Join(work, "selected.txt"), "selected baseline\n")
+	writeFile(t, filepath.Join(work, selected), "selected baseline\n")
 	writeFile(t, filepath.Join(work, "unrelated.txt"), "unrelated baseline\n")
 	git(t, work, "add", ".")
 	git(t, work, "commit", "-m", "initial")
 	git(t, work, "remote", "add", "origin", remote)
 	git(t, work, "push", "-u", "origin", "main")
-	return &deliveryV1Repository{id: id, work: work, remote: remote, initial: strings.TrimSpace(git(t, work, "rev-parse", "HEAD"))}
+	return &deliveryV1Repository{id: id, work: work, remote: remote, initial: strings.TrimSpace(git(t, work, "rev-parse", "HEAD")), selected: selected}
 }
 
 func (repository *deliveryV1Repository) request(changeID string) change.Request {
 	return change.Request{
 		ResourceID: repository.id, Repository: repository.work, Branch: "main", Remote: "origin",
 		ChangeID: changeID, Title: "test: deliver " + repository.id,
-		Description: "Deliver the exact selected Workbench V1 change.", Paths: []string{"selected.txt"},
+		Description: "Deliver the exact selected Workbench V1 change.", Paths: []string{repository.selected},
 	}
 }
 

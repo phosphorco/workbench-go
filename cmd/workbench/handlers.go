@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	pathpkg "path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,12 +26,9 @@ import (
 	"github.com/phosphorco/workbench-go/internal/version"
 )
 
-const (
-	commitPlanContractURI = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/WorkbenchCommitPlan.pkl"
-	snapshotContractURI   = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/WorkbenchWorldSnapshot.pkl"
-	subjectContractURI    = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0#/WorkbenchSubject.pkl"
-	generatedPolicyID     = "workbench-0.2-generated-projections-v2"
-)
+const generatedPolicyID = "workbench-0.2-generated-projections-v2"
+
+var releasedAmendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
 
 type commandEnvironment struct {
 	evaluator evaluate.Evaluator
@@ -77,7 +75,8 @@ func developmentEnvironment() environmentProvider {
 				environmentErr = fmt.Errorf("resolve development Pkl: %w", err)
 				return
 			}
-			if _, err := exec.LookPath("bun"); err != nil {
+			bunPath, err := exec.LookPath("bun")
+			if err != nil {
 				environmentErr = fmt.Errorf("resolve development Bun: %w", err)
 				return
 			}
@@ -86,12 +85,22 @@ func developmentEnvironment() environmentProvider {
 				environmentErr = fmt.Errorf("resolve development Pkl path: %w", err)
 				return
 			}
+			bunPath, err = filepath.Abs(bunPath)
+			if err != nil {
+				environmentErr = fmt.Errorf("resolve development Bun path: %w", err)
+				return
+			}
 			evaluator, err := evaluate.NewEvaluator(pklPath)
 			if err != nil {
 				environmentErr = err
 				return
 			}
-			environment = commandEnvironment{evaluator: evaluator, setup: setup.Run}
+			environment = commandEnvironment{
+				evaluator: evaluator,
+				setup: func(ctx context.Context, root string) (setup.Result, error) {
+					return setup.RunWith(ctx, root, setup.NewToolchain(evaluator, bunPath))
+				},
+			}
 		})
 		return environment, environmentErr
 	}
@@ -151,7 +160,7 @@ func runCommit(ctx context.Context, root, planName string, environment commandEn
 	if err != nil {
 		return "", fmt.Errorf("read commit plan: %w", err)
 	}
-	schema, err := evaluate.ReleasedContract(commitPlanContractURI)
+	schema, err := lifecycleContractForWorld(source, "WorkbenchCommitPlan.pkl", result.ContractVersion)
 	if err != nil {
 		return "", err
 	}
@@ -159,7 +168,7 @@ func runCommit(ctx context.Context, root, planName string, environment commandEn
 	if err != nil {
 		return "", err
 	}
-	subject, err := evaluateSubject(ctx, root, environment.evaluator)
+	subject, err := evaluateSubject(ctx, root, environment.evaluator, result.ContractVersion)
 	if err != nil {
 		return "", err
 	}
@@ -239,12 +248,87 @@ func renderChangeProgress(progress change.Progress) string {
 	return strings.Join(parts, ", ")
 }
 
-func evaluateSubject(ctx context.Context, root string, evaluator evaluate.Evaluator) (contract.Subject, error) {
+func releasedContractURI(contractVersion, filename string) string {
+	return fmt.Sprintf(
+		"package://github.com/phosphorco/workbench-go/releases/download/%s/workbench@%s#/%s",
+		contractVersion,
+		contractVersion,
+		filename,
+	)
+}
+
+func lifecycleContractURI(contractVersion, filename string) (string, error) {
+	switch contractVersion {
+	case "0.2.0", "0.3.0":
+		return releasedContractURI(contractVersion, filename), nil
+	case "0.1.0":
+		return "", fmt.Errorf("Workbench 0.1.0 has no released %s contract", filename)
+	default:
+		return "", fmt.Errorf("Workbench contract release %q is unsupported for %s", contractVersion, filename)
+	}
+}
+
+func amendedContractURI(source []byte) (string, error) {
+	match := releasedAmendsPattern.FindSubmatch(source)
+	if match == nil {
+		return "", fmt.Errorf("Pkl source must begin with amends")
+	}
+	return string(match[1]), nil
+}
+
+func releasedContractForWorld(source []byte, filename, contractVersion string, supportedVersions ...string) (evaluate.Contract, error) {
+	supported := false
+	for _, candidate := range supportedVersions {
+		if contractVersion == candidate {
+			supported = true
+			break
+		}
+	}
+	if !supported {
+		return evaluate.Contract{}, fmt.Errorf("Workbench contract release %q is unsupported for %s", contractVersion, filename)
+	}
+	want := releasedContractURI(contractVersion, filename)
+	got, err := amendedContractURI(source)
+	if err != nil {
+		return evaluate.Contract{}, err
+	}
+	if got != want {
+		return evaluate.Contract{}, fmt.Errorf("Pkl source amends %q, want exact Workbench %s contract %q", got, contractVersion, want)
+	}
+	return evaluate.ReleasedContract(want)
+}
+
+func lifecycleContractForWorld(source []byte, filename, contractVersion string) (evaluate.Contract, error) {
+	if _, err := lifecycleContractURI(contractVersion, filename); err != nil {
+		return evaluate.Contract{}, err
+	}
+	return releasedContractForWorld(source, filename, contractVersion, "0.2.0", "0.3.0")
+}
+
+func releasedLifecycleContractFromSource(source []byte, filename string) (evaluate.Contract, string, error) {
+	got, err := amendedContractURI(source)
+	if err != nil {
+		return evaluate.Contract{}, "", err
+	}
+	for _, contractVersion := range []string{"0.2.0", "0.3.0"} {
+		want := releasedContractURI(contractVersion, filename)
+		if got == want {
+			schema, err := evaluate.ReleasedContract(want)
+			return schema, contractVersion, err
+		}
+	}
+	if got == releasedContractURI("0.1.0", filename) {
+		return evaluate.Contract{}, "", fmt.Errorf("Workbench 0.1.0 has no released %s contract", filename)
+	}
+	return evaluate.Contract{}, "", fmt.Errorf("Pkl source amends unsupported Workbench contract %q for %s", got, filename)
+}
+
+func evaluateSubject(ctx context.Context, root string, evaluator evaluate.Evaluator, contractVersion string) (contract.Subject, error) {
 	source, err := os.ReadFile(filepath.Join(root, "workbench-subject.pkl"))
 	if err != nil {
 		return contract.Subject{}, fmt.Errorf("read workbench-subject.pkl: %w", err)
 	}
-	schema, err := evaluate.ReleasedContract(subjectContractURI)
+	schema, err := releasedContractForWorld(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0")
 	if err != nil {
 		return contract.Subject{}, err
 	}
@@ -253,6 +337,10 @@ func evaluateSubject(ctx context.Context, root string, evaluator evaluate.Evalua
 
 func recordSnapshot(ctx context.Context, root, output string, environment commandEnvironment) (string, error) {
 	result, err := environment.setup(ctx, root)
+	if err != nil {
+		return "", err
+	}
+	snapshotURI, err := lifecycleContractURI(result.ContractVersion, "WorkbenchWorldSnapshot.pkl")
 	if err != nil {
 		return "", err
 	}
@@ -272,7 +360,7 @@ func recordSnapshot(ctx context.Context, root, output string, environment comman
 	if err != nil {
 		return "", err
 	}
-	encoded := renderSnapshot(value)
+	encoded := renderSnapshot(value, snapshotURI)
 	path, err := workbenchPath(root, output)
 	if err != nil {
 		return "", err
@@ -296,14 +384,14 @@ func requirePublicCommit(ctx context.Context, github, commit string) error {
 	return fmt.Errorf("commit %s is not reachable from an advertised public ref", commit)
 }
 
-func renderSnapshot(value contract.WorkbenchWorldSnapshot) []byte {
+func renderSnapshot(value contract.WorkbenchWorldSnapshot, contractURI string) []byte {
 	identities := make([]string, 0, len(value.Resources))
 	for identity := range value.Resources {
 		identities = append(identities, identity)
 	}
 	sort.Strings(identities)
 	var output strings.Builder
-	fmt.Fprintf(&output, "amends %s\n\nresources {\n", strconv.Quote(snapshotContractURI))
+	fmt.Fprintf(&output, "amends %s\n\nresources {\n", strconv.Quote(contractURI))
 	for _, identity := range identities {
 		resource := value.Resources[identity]
 		fmt.Fprintf(&output, "  [%s] {\n", strconv.Quote(identity))
@@ -327,7 +415,7 @@ func reproduceSnapshot(ctx context.Context, root, input string, evaluator evalua
 	if err != nil {
 		return "", fmt.Errorf("read World snapshot: %w", err)
 	}
-	schema, err := evaluate.ReleasedContract(snapshotContractURI)
+	schema, _, err := releasedLifecycleContractFromSource(source, "WorkbenchWorldSnapshot.pkl")
 	if err != nil {
 		return "", err
 	}

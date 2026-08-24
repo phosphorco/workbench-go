@@ -161,6 +161,7 @@ func renderPackage(pkg Package, byName map[string]Package) ([]byte, []byte, erro
 			"rootDir":          "src",
 			"strict":           true,
 			"target":           "ES2022",
+			"tsBuildInfoFile":  "dist/tsconfig.tsbuildinfo",
 		},
 		Include:    []string{"src/**/*.ts", "src/**/*.tsx"},
 		References: references,

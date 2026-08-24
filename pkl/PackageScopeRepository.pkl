@@ -36,4 +36,6 @@ class PackagePolicy {
 
 scope: PackageScope
 includes: Mapping<GitHubRepository, Include> = new {}
-packages: Mapping<PackageName, PackagePolicy> = new {}
+/// A PackageScope is always a container. Every package identity derives one
+/// child directory from its unscoped leaf, regardless of package cardinality.
+packages: Mapping<PackageName, PackagePolicy>(keys.every((name) -> name.startsWith(scope + "/"))) = new {}

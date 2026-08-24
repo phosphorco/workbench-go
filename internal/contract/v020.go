@@ -8,9 +8,10 @@ import (
 )
 
 var (
-	changeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-	commitPattern   = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-	hunkIDPattern   = regexp.MustCompile(`^[0-9a-fA-F]{4,64}(?::[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)?$`)
+	changeIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+	commitPattern      = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+	hunkIDPattern      = regexp.MustCompile(`^[0-9a-fA-F]{4,64}(?::[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)?$`)
+	packageLeafPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 )
 
 type ResourceShapeKind string
@@ -27,9 +28,10 @@ type ResourceShape struct {
 	Scope string            `json:"scope,omitempty"`
 }
 
-// Declaration is a 0.2 repository-owned resource declaration. Its GitHub
-// designation is deliberately supplied by the checkout transport, rather than
-// repeated as repository-authored identity.
+// Declaration is a released-line repository-owned resource declaration. Its
+// GitHub designation is deliberately supplied by the checkout transport,
+// rather than repeated as repository-authored identity. Version-specific
+// decoders establish the laws carried by Packages.
 type Declaration struct {
 	Shape    ResourceShape
 	Includes map[string]ResourceInclude `json:"includes"`
@@ -56,6 +58,22 @@ func DecodePackageScopeDeclaration(encoded []byte) (Declaration, error) {
 	}
 	if err := declaration.Validate(); err != nil {
 		return Declaration{}, err
+	}
+	return declaration, nil
+}
+
+// DecodePackageScopeDeclarationV030 applies the 0.3 PackageScope ontology.
+// The 0.2 decoder remains separate because its released contract permitted
+// package names without deriving a canonical child directory from the scope.
+func DecodePackageScopeDeclarationV030(encoded []byte) (Declaration, error) {
+	declaration, err := DecodePackageScopeDeclaration(encoded)
+	if err != nil {
+		return Declaration{}, fmt.Errorf("decode 0.3 package-scope declaration: %w", err)
+	}
+	for name := range declaration.Packages {
+		if _, err := packageScopePackageLeaf(declaration.Shape.Scope, name); err != nil {
+			return Declaration{}, err
+		}
 	}
 	return declaration, nil
 }
@@ -127,6 +145,28 @@ func (declaration Declaration) CanonicalPath(github string) (string, error) {
 	}
 	_, name, _ := strings.Cut(identity, "/")
 	return "repos/" + name, nil
+}
+
+// PackageDirectory derives the canonical child directory of one declared 0.3
+// PackageScope package. Repository-shaped resources have independent package
+// placement semantics and deliberately do not participate in this operation.
+func (declaration Declaration) PackageDirectory(name string) (string, error) {
+	if declaration.Shape.Kind != PackageScopeShape {
+		return "", fmt.Errorf("Repository shape does not derive PackageScope package directories")
+	}
+	if _, declared := declaration.Packages[name]; !declared {
+		return "", fmt.Errorf("package identity %q is not declared", name)
+	}
+	return packageScopePackageLeaf(declaration.Shape.Scope, name)
+}
+
+func packageScopePackageLeaf(scope string, name string) (string, error) {
+	prefix := scope + "/"
+	leaf := strings.TrimPrefix(name, prefix)
+	if leaf == name || len(name) > 214 || !packageLeafPattern.MatchString(leaf) {
+		return "", fmt.Errorf("package identity %q must be exactly %s/<leaf> with one safe package leaf", name, scope)
+	}
+	return leaf, nil
 }
 
 func NormalizeGitHubRepository(designation string) (string, error) {

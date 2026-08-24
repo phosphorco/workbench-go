@@ -76,7 +76,7 @@ func TestVersionDoesNotObserveWorkingDirectory(t *testing.T) {
 	t.Parallel()
 	application := recordingApplications(new([]call))
 	application.version = func() (version.Info, error) {
-		return version.Info{Release: "0.2.0", Revision: strings.Repeat("a", 40)}, nil
+		return version.Info{Release: "0.3.0", Revision: strings.Repeat("a", 40)}, nil
 	}
 	var output bytes.Buffer
 	if err := runWith(context.Background(), []string{"version"}, func() (string, error) {
@@ -85,7 +85,7 @@ func TestVersionDoesNotObserveWorkingDirectory(t *testing.T) {
 	}, &output, application); err != nil {
 		t.Fatal(err)
 	}
-	if got := output.String(); got != "workbench 0.2.0 ("+strings.Repeat("a", 40)+")\n" {
+	if got := output.String(); got != "workbench 0.3.0 ("+strings.Repeat("a", 40)+")\n" {
 		t.Fatalf("version output = %q", got)
 	}
 }
@@ -166,7 +166,7 @@ func recordingApplications(calls *[]call) applications {
 		},
 		version: func() (version.Info, error) {
 			*calls = append(*calls, call{name: "version"})
-			return version.Info{Release: "0.2.0", Revision: strings.Repeat("a", 40)}, nil
+			return version.Info{Release: "0.3.0", Revision: strings.Repeat("a", 40)}, nil
 		},
 	}
 }

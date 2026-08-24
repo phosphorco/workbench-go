@@ -61,6 +61,49 @@ includes: Mapping<PackageScope, Include> = new {}
 packages: Mapping<PackageName, PackagePolicy> = new {}
 `
 
+// Kept byte-for-byte as the local 0.2 development schema. The 0.2 contract
+// allowed package placement to be inferred from observed source layout.
+const localV020RepositoryContract = `module phosphor.workbench.PackageScopeRepository
+
+typealias NonEmptyString = String(length > 0)
+typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
+typealias PackageName =
+  String(
+    length > 0,
+    length <= 214,
+    matches(Regex(#"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"#)),
+  )
+typealias GitHubRepository =
+  String(matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#)), !endsWith(".git"))
+typealias SkillDomain = "orchestration" | "engineering" | "general"
+typealias SkillName = String(matches(Regex(#"[a-z0-9][a-z0-9-]*"#)))
+typealias SkillSelection = "all" | SkillRoots
+
+class SkillRoots {
+  domains: Set<SkillDomain> = Set()
+  names: Set<SkillName> = Set()
+}
+
+class SkillPolicy {
+  editing: SkillSelection = new SkillRoots {}
+  workbench: SkillSelection = new SkillRoots {}
+}
+
+class Include {
+  skills: SkillPolicy = new SkillPolicy {}
+}
+
+class PackagePolicy {
+  requiredButNotReferenced: Mapping<PackageName, NonEmptyString> = new {}
+  peerDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
+}
+
+scope: PackageScope
+includes: Mapping<GitHubRepository, Include> = new {}
+packages: Mapping<PackageName, PackagePolicy> = new {}
+`
+
 // Generated from ../../pkl/PackageScopeRepository.pkl. Do not edit independently.
 const localRepositoryContract = `module phosphor.workbench.PackageScopeRepository
 
@@ -100,7 +143,9 @@ class PackagePolicy {
 
 scope: PackageScope
 includes: Mapping<GitHubRepository, Include> = new {}
-packages: Mapping<PackageName, PackagePolicy> = new {}
+/// A PackageScope is always a container. Every package identity derives one
+/// child directory from its unscoped leaf, regardless of package cardinality.
+packages: Mapping<PackageName, PackagePolicy>(keys.every((name) -> name.startsWith(scope + "/"))) = new {}
 `
 
 // Generated from ../../pkl/Repository.pkl.

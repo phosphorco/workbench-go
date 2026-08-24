@@ -52,6 +52,9 @@ func TestBuildDerivesCrossRepositoryWorkspaceAndTypeScriptReferences(t *testing.
 	if !reflect.DeepEqual(tsconfig.References, []tsReference{{Path: "../../@phosphorco/community"}}) {
 		t.Fatalf("references = %#v", tsconfig.References)
 	}
+	if got := tsconfig.CompilerOptions["tsBuildInfoFile"]; got != "dist/tsconfig.tsbuildinfo" {
+		t.Fatalf("tsBuildInfoFile = %#v, want compiler state inside ignored dist", got)
+	}
 }
 
 func TestBuildDesignatesPackageRootAtCompositeOutput(t *testing.T) {
@@ -77,6 +80,39 @@ func TestBuildDesignatesPackageRootAtCompositeOutput(t *testing.T) {
 	}
 	if !reflect.DeepEqual(manifest.Exports, want) {
 		t.Fatalf("exports = %#v, want %#v", manifest.Exports, want)
+	}
+}
+
+func TestBuildKeepsPackageScopeChildrenStableAsCardinalityGrows(t *testing.T) {
+	singleton, err := Build([]Package{{Name: "@workbench-entry/app", Directory: "pkg/@workbench-entry/app"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiple, err := Build([]Package{
+		{Name: "@workbench-entry/app", Directory: "pkg/@workbench-entry/app"},
+		{Name: "@workbench-entry/tool", Directory: "pkg/@workbench-entry/tool"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"pkg/@workbench-entry/app/package.json",
+		"pkg/@workbench-entry/app/tsconfig.json",
+	} {
+		if !reflect.DeepEqual(singleton.Files[path], multiple.Files[path]) {
+			t.Fatalf("adding a same-scope package moved or changed first package projection %q", path)
+		}
+	}
+	for _, path := range []string{
+		"pkg/@workbench-entry/tool/package.json",
+		"pkg/@workbench-entry/tool/tsconfig.json",
+	} {
+		if _, exists := multiple.Files[path]; !exists {
+			t.Fatalf("multi-package projection lacks %q", path)
+		}
+	}
+	if _, exists := multiple.Files["pkg/@workbench-entry/package.json"]; exists {
+		t.Fatal("PackageScope checkout root was projected as a package")
 	}
 }
 

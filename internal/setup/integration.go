@@ -207,7 +207,7 @@ func reportOrphans(root string, current []Resource, previous worldReceipt) ([]or
 	return report.Orphans, nil
 }
 
-func projectOrientation(ctx context.Context, root string, subject contract.Subject, resources []Resource, evaluator v020Evaluator) (bool, error) {
+func projectOrientation(ctx context.Context, root string, subject contract.Subject, resources []Resource, evaluator versionedEvaluator, contractVersion string) (bool, error) {
 	path := filepath.Join(root, "AGENTS.pkl")
 	source, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -220,8 +220,8 @@ func projectOrientation(ctx context.Context, root string, subject contract.Subje
 	if err != nil {
 		return false, fmt.Errorf("select AGENTS.pkl contract: %w", err)
 	}
-	if version != "0.2.0" {
-		return false, fmt.Errorf("AGENTS.pkl uses Workbench contract %s, want exact 0.2.0", version)
+	if version != contractVersion {
+		return false, fmt.Errorf("AGENTS.pkl uses Workbench contract %s, want exact %s", version, contractVersion)
 	}
 
 	combined := append([]byte(nil), source...)
