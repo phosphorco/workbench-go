@@ -406,7 +406,7 @@ Workbench may own projections such as:
 - package exports and imports;
 - workspace dependency declarations;
 - package-manager catalogs and workspace membership;
-- projected `.agents/skills` trees;
+- selected, Workbench-owned `.agents/skills/<skill-name>` projection trees;
 - dependency installation and workspace links.
 
 Every generated output must be removable and reproducible. Commit tooling must reject Workbench-owned generated paths from source commits.
@@ -425,6 +425,13 @@ Skills have two independent properties:
 - each skill declares one domain: `orchestration`, `engineering`, or `general`;
 - the consuming resource selects where imported skills should be visible.
 
+Resource repositories author Git-owned skill sources only under
+`skills/<skill-name>/**`. Workbench discovers the assembled inventory from
+those source trees; it never treats a generated `.agents/skills` projection as
+source. This keeps export and import independent: a repository can export one
+skill from `skills/` while receiving a different editing skill under
+`.agents/skills/` without colliding with itself.
+
 `editing` exposes selected skills while changing the consuming resource. `workbench` exposes them at the workbench root.
 
 ```pkl
@@ -441,6 +448,16 @@ skills {
 Domain and name roots combine by union. Workbench then follows each selected skill’s explicit composition edges.
 
 Resource authors select semantic roots. They do not order traversal or copy transitive skill dependencies.
+
+For `editing`, Workbench projects the selected roots and their explicit
+composition closure into the consuming resource's
+`.agents/skills/<skill-name>/**`. For `workbench`, it projects that same closure
+at the Workbench root. Each projected skill subtree is a recorded
+whole-output-owned artifact. Setup preserves unrelated context-owned sibling
+skills, refuses a selected-name collision it does not own, and removes only a
+stale subtree whose prior Workbench ownership and bytes are still proven.
+Resource repositories that receive editing projections ignore
+`.agents/skills/`; Git continues to own `skills/`.
 
 Because skill sources are assembled on the Subject branch, agents receive the skill definitions associated with the same collaboration line as the source they are editing.
 

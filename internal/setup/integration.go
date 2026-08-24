@@ -262,6 +262,7 @@ func explicitAgentFacts(subject contract.Subject, resources []Resource) []byte {
 	output.WriteString("handOwnedPaths { \"AGENTS.pkl\"; \"workbench-subject.pkl\"")
 	for _, resource := range sorted {
 		fmt.Fprintf(&output, "; %s", strconv.Quote(resource.CanonicalPath))
+		fmt.Fprintf(&output, "; %s", strconv.Quote(filepath.ToSlash(filepath.Join(resource.CanonicalPath, "skills"))))
 	}
 	output.WriteString(" }\n")
 	return []byte(output.String())

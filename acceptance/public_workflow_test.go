@@ -16,8 +16,11 @@ import (
 const (
 	publicSubjectContract = releasePackageURI + "#/WorkbenchSubject.pkl"
 	proofBranch           = "workbench/proof-0.1.0"
+	subjectBranch         = "workbench/local-acceptance-0.1.0"
 	entryRepositoryURL    = "https://github.com/phosphorco/workbench-fixture-entry"
 	libraryRepositoryURL  = "https://github.com/phosphorco/workbench-fixture-library"
+	entryProofRevision    = "74ee45909df2540b4056209d9e0d39e8dcabc56a"
+	libraryProofRevision  = "d4a36b29b5a8e66de6b2410c2ee8c32150741123"
 )
 
 // TestWorkbenchFirstMeaningfulSlice exercises Workbench only through its
@@ -54,8 +57,8 @@ func TestWorkbenchFirstMeaningfulSlice(t *testing.T) {
 		if entryRoot := publicGit(t, anonymousEnvironment, entry, "rev-parse", "--show-toplevel"); entryRoot == publicGit(t, anonymousEnvironment, library, "rev-parse", "--show-toplevel") {
 			t.Fatalf("entry and library resolve to the same Git authority %q", entryRoot)
 		}
-		assertRemoteProofBranchAbsent(t, anonymousEnvironment, entryRepositoryURL)
-		assertRemoteProofBranchAbsent(t, anonymousEnvironment, libraryRepositoryURL)
+		assertRemoteProofBranch(t, anonymousEnvironment, entryRepositoryURL, entryProofRevision)
+		assertRemoteProofBranch(t, anonymousEnvironment, libraryRepositoryURL, libraryProofRevision)
 
 		assertWorkspaceProjection(t, workbench)
 		assertWorkspaceLink(t, entry, library)
@@ -125,7 +128,7 @@ func TestWorkbenchFirstMeaningfulSlice(t *testing.T) {
 		if err == nil {
 			t.Fatalf("setup accepted a dirty checkout on main:\n%s", output)
 		}
-		if !strings.Contains(string(output), "dirty checkout") || !strings.Contains(string(output), proofBranch) {
+		if !strings.Contains(string(output), "dirty checkout") || !strings.Contains(string(output), subjectBranch) {
 			t.Fatalf("setup returned the wrong public refusal: %v\n%s", err, output)
 		}
 		after := map[string]gitState{
@@ -152,6 +155,10 @@ func buildPublicCLI(t *testing.T, moduleRoot string) string {
 }
 
 func newPublicWorkbench(t *testing.T, testRoot, name string, environment []string) string {
+	return newPublicWorkbenchForBranch(t, testRoot, name, subjectBranch, environment)
+}
+
+func newPublicWorkbenchForBranch(t *testing.T, testRoot, name, branch string, environment []string) string {
 	t.Helper()
 	root := filepath.Join(testRoot, name)
 	if err := os.Mkdir(root, 0o700); err != nil {
@@ -182,7 +189,7 @@ workLine {
 entrypoints {
   %q
 }
-`, publicSubjectContract, proofBranch, entryRepositoryURL))
+`, publicSubjectContract, branch, entryRepositoryURL))
 	if ignored := publicGit(t, environment, root, "check-ignore", "workbench-subject.pkl"); ignored != "workbench-subject.pkl" {
 		t.Fatalf("Subject is not ignored by the outer context: %q", ignored)
 	}
@@ -239,8 +246,8 @@ func assertCheckout(t *testing.T, environment []string, root, remote string) {
 	if actual := publicGit(t, environment, root, "config", "--get", "remote.origin.url"); actual != remote {
 		t.Errorf("origin = %q, want canonical anonymous HTTPS %q", actual, remote)
 	}
-	if branch := publicGit(t, environment, root, "branch", "--show-current"); branch != proofBranch {
-		t.Errorf("branch = %q, want Subject branch %q", branch, proofBranch)
+	if branch := publicGit(t, environment, root, "branch", "--show-current"); branch != subjectBranch {
+		t.Errorf("branch = %q, want Subject branch %q", branch, subjectBranch)
 	}
 	command := exec.Command("git", "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD")
 	command.Dir = root
@@ -250,7 +257,7 @@ func assertCheckout(t *testing.T, environment []string, root, remote string) {
 	}
 }
 
-func assertRemoteProofBranchAbsent(t *testing.T, environment []string, remote string) {
+func assertRemoteProofBranch(t *testing.T, environment []string, remote, wantRevision string) {
 	t.Helper()
 	command := exec.Command("git", "ls-remote", "--heads", remote, "refs/heads/"+proofBranch)
 	command.Env = environment
@@ -258,8 +265,9 @@ func assertRemoteProofBranchAbsent(t *testing.T, environment []string, remote st
 	if err != nil {
 		t.Fatalf("observe public remote branches for %q: %v\n%s", remote, err, output)
 	}
-	if strings.TrimSpace(string(output)) != "" {
-		t.Fatalf("Subject branch unexpectedly pre-exists remotely at %q:\n%s", remote, output)
+	fields := strings.Fields(string(output))
+	if len(fields) != 2 || fields[0] != wantRevision || fields[1] != "refs/heads/"+proofBranch {
+		t.Fatalf("Subject proof branch at %q = %q, want %s refs/heads/%s", remote, strings.TrimSpace(string(output)), wantRevision, proofBranch)
 	}
 }
 

@@ -39,7 +39,7 @@ func TestWorkbenchV010PublicPathRemainsReproducible(t *testing.T) {
 	}
 	environment := publicEnvironment(testRoot, anonymousHome)
 	binary := buildPublicCLI(t, moduleRoot)
-	workbench := newPublicWorkbench(t, testRoot, "v010-compatibility", environment)
+	workbench := newPublicWorkbenchForBranch(t, testRoot, "v010-compatibility", manifest.SubjectBranch, environment)
 	runSetup(t, binary, workbench, environment)
 
 	checkouts := map[string]string{

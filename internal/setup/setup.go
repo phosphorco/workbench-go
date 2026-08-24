@@ -185,6 +185,10 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, err
 	}
+	skillPlan, err := planSkills(root, resources, version, previousReceipt)
+	if err != nil {
+		return Result{}, err
+	}
 	projection, err := workspace.Build(packages)
 	if err != nil {
 		return Result{}, fmt.Errorf("build workspace projection: %w", err)
@@ -194,7 +198,7 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		return Result{}, fmt.Errorf("apply workspace projection: %w", err)
 	}
 
-	skillChanges, err := projectSkills(root, resources)
+	skillChanges, err := skillPlan.Apply()
 	if err != nil {
 		return Result{}, err
 	}
@@ -206,7 +210,11 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, fmt.Errorf("confirm workspace projection convergence: %w", err)
 	}
-	skillRemainder, err := projectSkills(root, resources)
+	convergencePlan, err := planSkills(root, resources, version, previousReceipt)
+	if err != nil {
+		return Result{}, fmt.Errorf("plan skill projection convergence: %w", err)
+	}
+	skillRemainder, err := convergencePlan.Apply()
 	if err != nil {
 		return Result{}, fmt.Errorf("confirm skill projection convergence: %w", err)
 	}
@@ -521,17 +529,35 @@ func sourceImports(root string) ([]string, error) {
 	return result, nil
 }
 
-func projectSkills(root string, resources []Resource) ([]string, error) {
+type skillProjectionEntry struct {
+	destination string
+	prefix      string
+	selected    []skills.Skill
+	projection  skills.Projection
+}
+
+type skillProjectionPlan struct {
+	legacy  bool
+	entries []skillProjectionEntry
+}
+
+func planSkills(root string, resources []Resource, contractVersion string, previous worldReceipt) (skillProjectionPlan, error) {
 	sources := make([]skills.Source, 0, len(resources))
 	for _, resource := range resources {
 		sources = append(sources, skills.Source{Root: filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))})
 	}
-	inventory, err := skills.Discover(sources)
+	var inventory skills.Inventory
+	var err error
+	if contractVersion == "0.1.0" {
+		inventory, err = skills.DiscoverLegacy(sources)
+	} else {
+		inventory, err = skills.Discover(sources)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("discover assembled skills: %w", err)
+		return skillProjectionPlan{}, fmt.Errorf("discover assembled skills: %w", err)
 	}
 	workbenchSelection := contract.SkillSelection{}
-	changed := make([]string, 0)
+	plan := skillProjectionPlan{legacy: contractVersion == "0.1.0", entries: make([]skillProjectionEntry, 0, len(resources)+1)}
 	for _, consumer := range resources {
 		editing := contract.SkillSelection{}
 		for _, policy := range consumer.Includes {
@@ -544,26 +570,185 @@ func projectSkills(root string, resources []Resource) ([]string, error) {
 		}
 		selected, err := skills.Select(inventory, editing)
 		if err != nil {
-			return nil, fmt.Errorf("select editing skills for %q: %w", consumer.Identity, err)
+			return skillProjectionPlan{}, fmt.Errorf("select editing skills for %q: %w", consumer.Identity, err)
 		}
-		paths, err := skills.Apply(filepath.Join(root, filepath.FromSlash(consumer.CanonicalPath)), selected)
-		if err != nil {
-			return nil, fmt.Errorf("project editing skills for %q: %w", consumer.Identity, err)
+		entry := skillProjectionEntry{
+			destination: filepath.Join(root, filepath.FromSlash(consumer.CanonicalPath)),
+			prefix:      consumer.CanonicalPath,
+			selected:    selected,
 		}
-		for _, path := range paths {
-			changed = append(changed, filepath.ToSlash(filepath.Join(consumer.CanonicalPath, path)))
+		if !plan.legacy {
+			tracks, observerErr := trackedSkillPathObserver(entry.destination)
+			if observerErr != nil {
+				return skillProjectionPlan{}, fmt.Errorf("observe tracked editing skill paths for %q: %w", consumer.Identity, observerErr)
+			}
+			entry.projection, err = skills.PlanWithTracking(entry.destination, selected, tracks)
+			if err != nil {
+				return skillProjectionPlan{}, fmt.Errorf("plan editing skills for %q: %w", consumer.Identity, err)
+			}
+		}
+		plan.entries = append(plan.entries, entry)
+	}
+	if !plan.legacy {
+		current := make(map[string]struct{}, len(resources))
+		for _, resource := range resources {
+			current[resource.Identity] = struct{}{}
+		}
+		for _, retired := range previous.Resources {
+			if _, exists := current[retired.Identity]; exists {
+				continue
+			}
+			destination := filepath.Join(root, filepath.FromSlash(retired.CanonicalPath))
+			info, statErr := os.Lstat(destination)
+			if errors.Is(statErr, os.ErrNotExist) {
+				continue
+			}
+			if statErr != nil {
+				return skillProjectionPlan{}, fmt.Errorf("observe retired skill projection destination %q: %w", retired.Identity, statErr)
+			}
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return skillProjectionPlan{}, fmt.Errorf("retired skill projection destination %q is not a real directory", retired.Identity)
+			}
+			if err := validateRetiredSkillDestination(destination, retired); err != nil {
+				return skillProjectionPlan{}, err
+			}
+			tracks, observerErr := trackedSkillPathObserver(destination)
+			if observerErr != nil {
+				return skillProjectionPlan{}, fmt.Errorf("observe tracked retired skill paths for %q: %w", retired.Identity, observerErr)
+			}
+			projection, planErr := skills.PlanWithTracking(destination, nil, tracks)
+			if planErr != nil {
+				return skillProjectionPlan{}, fmt.Errorf("plan retired editing skill cleanup for %q: %w", retired.Identity, planErr)
+			}
+			plan.entries = append(plan.entries, skillProjectionEntry{
+				destination: destination,
+				prefix:      retired.CanonicalPath,
+				projection:  projection,
+			})
 		}
 	}
 	selected, err := skills.Select(inventory, workbenchSelection)
 	if err != nil {
-		return nil, fmt.Errorf("select workbench skills: %w", err)
+		return skillProjectionPlan{}, fmt.Errorf("select workbench skills: %w", err)
 	}
-	paths, err := skills.Apply(root, selected)
-	if err != nil {
-		return nil, fmt.Errorf("project workbench skills: %w", err)
+	entry := skillProjectionEntry{destination: root, selected: selected}
+	if !plan.legacy {
+		tracks, observerErr := trackedSkillPathObserver(root)
+		if observerErr != nil {
+			return skillProjectionPlan{}, fmt.Errorf("observe tracked workbench skill paths: %w", observerErr)
+		}
+		entry.projection, err = skills.PlanWithTracking(root, selected, tracks)
+		if err != nil {
+			return skillProjectionPlan{}, fmt.Errorf("plan workbench skills: %w", err)
+		}
 	}
-	changed = append(changed, paths...)
+	plan.entries = append(plan.entries, entry)
+	return plan, nil
+}
+
+func (plan skillProjectionPlan) Apply() ([]string, error) {
+	changedByEntry := make([][]string, len(plan.entries))
+	if plan.legacy {
+		for index, entry := range plan.entries {
+			paths, err := skills.ApplyLegacy(entry.destination, entry.selected)
+			if err != nil {
+				return nil, fmt.Errorf("apply legacy skill projection at %q: %w", entry.destination, err)
+			}
+			changedByEntry[index] = paths
+		}
+	} else {
+		projections := make([]skills.Projection, 0, len(plan.entries))
+		for _, entry := range plan.entries {
+			projections = append(projections, entry.projection)
+		}
+		var err error
+		changedByEntry, err = skills.ApplyPlans(projections)
+		if err != nil {
+			return nil, fmt.Errorf("apply skill projections: %w", err)
+		}
+	}
+	changed := make([]string, 0)
+	for index, paths := range changedByEntry {
+		for _, path := range paths {
+			changed = append(changed, filepath.ToSlash(filepath.Join(plan.entries[index].prefix, path)))
+		}
+	}
 	return changed, nil
+}
+
+func trackedSkillPathObserver(root string) (skills.TrackedPathObserver, error) {
+	_, err := os.Stat(filepath.Join(root, ".git"))
+	if errors.Is(err, os.ErrNotExist) {
+		return func(string) (bool, error) { return false, nil }, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("observe Git boundary at %q: %w", root, err)
+	}
+	return func(relativePath string) (bool, error) {
+		command := exec.Command("git", "ls-files", "-z", "--", filepath.ToSlash(relativePath))
+		command.Dir = root
+		output, err := command.CombinedOutput()
+		if err != nil {
+			return false, fmt.Errorf("observe tracked path %q: %w: %s", relativePath, err, strings.TrimSpace(string(output)))
+		}
+		return len(output) != 0, nil
+	}, nil
+}
+
+func validateRetiredSkillDestination(destination string, retired receiptResource) error {
+	resolved, err := filepath.EvalSymlinks(destination)
+	if err != nil {
+		return fmt.Errorf("resolve retired skill projection destination %q: %w", retired.Identity, err)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return fmt.Errorf("normalize retired skill projection destination %q: %w", retired.Identity, err)
+	}
+	destination, err = filepath.Abs(destination)
+	if err != nil {
+		return fmt.Errorf("normalize expected retired skill projection destination %q: %w", retired.Identity, err)
+	}
+	if filepath.Clean(resolved) != filepath.Clean(destination) {
+		return fmt.Errorf("retired skill projection destination %q resolves outside its canonical path", retired.Identity)
+	}
+	declaration := contract.Declaration{Shape: retired.Shape}
+	identity, identityErr := declaration.Identity(retired.GitHub)
+	canonicalPath, pathErr := declaration.CanonicalPath(retired.GitHub)
+	if identityErr != nil || pathErr != nil || identity != retired.Identity || canonicalPath != retired.CanonicalPath {
+		return fmt.Errorf("retired skill projection destination %q disagrees with its closed identity or placement", retired.Identity)
+	}
+	topLevel, err := runSetupGit(destination, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("identify retired Git checkout %q: %w", retired.Identity, err)
+	}
+	actualRoot, err := filepath.Abs(strings.TrimSpace(topLevel))
+	if err != nil || filepath.Clean(actualRoot) != filepath.Clean(destination) {
+		return fmt.Errorf("retired skill projection destination %q is not its Git worktree root", retired.Identity)
+	}
+	origin, err := runSetupGit(destination, "config", "--get", "remote.origin.url")
+	if err != nil {
+		return fmt.Errorf("read retired Git origin %q: %w", retired.Identity, err)
+	}
+	wantOrigin := "https://github.com/" + retired.GitHub
+	if strings.TrimSpace(origin) != wantOrigin {
+		return fmt.Errorf("retired skill projection destination %q has origin %q, want %q", retired.Identity, strings.TrimSpace(origin), wantOrigin)
+	}
+	github, err := contract.GitHubIdentity(strings.TrimSpace(origin))
+	if err != nil || github != retired.GitHub {
+		return fmt.Errorf("retired skill projection destination %q has invalid GitHub identity", retired.Identity)
+	}
+	return nil
+}
+
+func runSetupGit(root string, arguments ...string) (string, error) {
+	command := exec.Command("git", arguments...)
+	command.Dir = root
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
+	}
+	return string(output), nil
 }
 
 func mergeSelection(left contract.SkillSelection, right contract.SkillSelection) contract.SkillSelection {
