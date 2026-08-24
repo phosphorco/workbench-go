@@ -27,9 +27,19 @@ type packageJSON struct {
 	Name                 string            `json:"name"`
 	Private              bool              `json:"private"`
 	Type                 string            `json:"type"`
+	Exports              packageExports    `json:"exports"`
 	Dependencies         map[string]string `json:"dependencies,omitempty"`
 	PeerDependencies     map[string]string `json:"peerDependencies,omitempty"`
 	OptionalDependencies map[string]string `json:"optionalDependencies,omitempty"`
+}
+
+type packageExports struct {
+	Root packageRootExport `json:"."`
+}
+
+type packageRootExport struct {
+	Types   string `json:"types"`
+	Default string `json:"default"`
 }
 
 type rootPackageJSON struct {
@@ -113,9 +123,13 @@ func renderPackage(pkg Package, byName map[string]Package) ([]byte, []byte, erro
 		delete(dependencies, name)
 	}
 	manifest, err := encode(packageJSON{
-		Name:                 pkg.Name,
-		Private:              true,
-		Type:                 "module",
+		Name:    pkg.Name,
+		Private: true,
+		Type:    "module",
+		Exports: packageExports{Root: packageRootExport{
+			Types:   "./dist/index.d.ts",
+			Default: "./dist/index.js",
+		}},
 		Dependencies:         nilIfEmpty(dependencies),
 		PeerDependencies:     nilIfEmpty(copyMap(pkg.Policy.PeerDependencies)),
 		OptionalDependencies: nilIfEmpty(copyMap(pkg.Policy.OptionalDependencies)),

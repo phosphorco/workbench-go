@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/apple/pkl-go/pkl"
 	"github.com/phosphorco/workbench-go/internal/contract"
@@ -84,7 +88,11 @@ func evaluateJSON(ctx context.Context, source []byte, schema Contract) (_ string
 		return "", err
 	}
 
-	allowedModules := []string{"^" + regexp.QuoteMeta(schema.uri.String()) + "$"}
+	allowedModules := contractModulePatterns(schema.uri)
+	allowedResources, err := releasedResourcePatterns(ctx, schema.packageResources)
+	if err != nil {
+		return "", err
+	}
 	var readers []pkl.ModuleReader
 	if schema.local {
 		readers = append(readers, exactModuleReader{uri: *schema.uri, contents: schema.contents})
@@ -92,7 +100,7 @@ func evaluateJSON(ctx context.Context, source []byte, schema Contract) (_ string
 	evaluator, err := pkl.NewEvaluator(ctx, func(options *pkl.EvaluatorOptions) {
 		options.AllowedModules = allowedModules
 		// Pkl's standard JSON renderer reads this evaluator-owned property.
-		options.AllowedResources = exactResourcePatterns(schema.packageResources...)
+		options.AllowedResources = allowedResources
 		options.Env = map[string]string{}
 		options.Properties = map[string]string{}
 		options.ModuleReaders = readers
@@ -115,8 +123,12 @@ func evaluateJSON(ctx context.Context, source []byte, schema Contract) (_ string
 }
 
 func packageResourceURLs(packageModule *url.URL) ([]string, error) {
-	if packageModule.Host == "" || packageModule.User != nil || packageModule.RawQuery != "" {
+	if packageModule.Host != "github.com" || packageModule.User != nil || packageModule.RawPath != "" || packageModule.RawQuery != "" || packageModule.ForceQuery {
 		return nil, fmt.Errorf("released contract URI %q does not have a capability-safe package authority", packageModule.String())
+	}
+	parts := strings.Split(packageModule.Path, "/")
+	if len(parts) != 7 || parts[0] != "" || parts[1] != "phosphorco" || parts[2] != "workbench-go" || parts[3] != "releases" || parts[4] != "download" || parts[5] == "" || parts[6] != "workbench@"+parts[5] {
+		return nil, fmt.Errorf("released contract URI %q does not designate a phosphorco/workbench-go release", packageModule.String())
 	}
 
 	metadata := *packageModule
@@ -139,6 +151,129 @@ func exactResourcePatterns(resources ...string) []string {
 		patterns = append(patterns, "^"+regexp.QuoteMeta(resource)+"$")
 	}
 	return patterns
+}
+
+func contractModulePatterns(module *url.URL) []string {
+	patterns := []string{"^" + regexp.QuoteMeta(module.String()) + "$"}
+	if module.Scheme != "package" || module.Fragment == "" || strings.Contains(strings.TrimPrefix(module.Fragment, "/"), "/") {
+		return patterns
+	}
+	backing := *module
+	backing.Fragment = "/pkl/" + strings.TrimPrefix(module.Fragment, "/")
+	backing.RawFragment = ""
+	return append(patterns, "^"+regexp.QuoteMeta(backing.String())+"$")
+}
+
+func releasedResourcePatterns(ctx context.Context, resources []string) ([]string, error) {
+	patterns := exactResourcePatterns(resources...)
+	client := http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	for _, resource := range resources {
+		request, err := http.NewRequestWithContext(ctx, http.MethodHead, resource, nil)
+		if err != nil {
+			return nil, fmt.Errorf("prepare released package transport observation %q: %w", resource, err)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, fmt.Errorf("observe released package transport %q: %w", resource, err)
+		}
+		closeErr := response.Body.Close()
+		if closeErr != nil && !errors.Is(closeErr, io.EOF) {
+			return nil, fmt.Errorf("close released package transport observation %q: %w", resource, closeErr)
+		}
+		if response.StatusCode < http.StatusMultipleChoices || response.StatusCode >= http.StatusBadRequest {
+			continue
+		}
+		location, err := response.Location()
+		if err != nil {
+			return nil, fmt.Errorf("read released package redirect for %q: %w", resource, err)
+		}
+		pattern, err := releaseAssetRedirectPattern(resource, location.String())
+		if err != nil {
+			return nil, err
+		}
+		patterns = append(patterns, pattern)
+	}
+	return patterns, nil
+}
+
+func releaseAssetRedirectPattern(resource, location string) (string, error) {
+	source, err := url.Parse(resource)
+	if err != nil {
+		return "", fmt.Errorf("parse released package resource %q: %w", resource, err)
+	}
+	target, err := url.Parse(location)
+	if err != nil {
+		return "", fmt.Errorf("parse released package redirect %q: %w", location, err)
+	}
+	if target.Scheme != "https" || target.Host != "release-assets.githubusercontent.com" || target.User != nil || target.Fragment != "" || target.RawPath != "" {
+		return "", fmt.Errorf("released package resource %q redirected outside GitHub release assets: %q", resource, location)
+	}
+	assetParts := strings.Split(target.Path, "/")
+	if len(assetParts) != 4 || assetParts[0] != "" || assetParts[1] != "github-production-release-asset" || !decimalPattern.MatchString(assetParts[2]) || !uuidPattern.MatchString(assetParts[3]) {
+		return "", fmt.Errorf("released package resource %q redirected to an invalid GitHub release asset path: %q", resource, location)
+	}
+	queryPattern, err := signedReleaseQueryPattern(target.RawQuery, source.Path)
+	if err != nil {
+		return "", fmt.Errorf("released package resource %q redirected without a valid read-only signature: %w", resource, err)
+	}
+	return "^" + regexp.QuoteMeta("https://release-assets.githubusercontent.com"+target.Path+"?") + queryPattern + "$", nil
+}
+
+var (
+	decimalPattern = regexp.MustCompile(`^[0-9]+$`)
+	uuidPattern    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+)
+
+func signedReleaseQueryPattern(rawQuery, sourcePath string) (string, error) {
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "", fmt.Errorf("parse signed query: %w", err)
+	}
+	for key, want := range map[string]string{"sp": "r", "spr": "https", "sr": "b"} {
+		if got := values[key]; len(got) != 1 || got[0] != want {
+			return "", fmt.Errorf("query parameter %q does not grant exactly %q", key, want)
+		}
+	}
+	for _, key := range []string{"sig", "jwt"} {
+		if got := values[key]; len(got) != 1 || got[0] == "" {
+			return "", fmt.Errorf("query parameter %q is absent or ambiguous", key)
+		}
+	}
+	if got := values["response-content-disposition"]; len(got) != 1 || got[0] != "attachment; filename="+sourcePath[strings.LastIndex(sourcePath, "/")+1:] {
+		return "", fmt.Errorf("response filename does not match the designated package resource")
+	}
+
+	components := strings.Split(rawQuery, "&")
+	seen := make(map[string]struct{}, len(components))
+	patterns := make([]string, 0, len(components))
+	for _, component := range components {
+		key, encodedValue, found := strings.Cut(component, "=")
+		if !found || key == "" || encodedValue == "" {
+			return "", fmt.Errorf("signed query contains an empty component")
+		}
+		decodedKey, err := url.QueryUnescape(key)
+		if err != nil {
+			return "", fmt.Errorf("decode query key %q: %w", key, err)
+		}
+		if _, duplicate := seen[decodedKey]; duplicate {
+			return "", fmt.Errorf("signed query repeats parameter %q", decodedKey)
+		}
+		seen[decodedKey] = struct{}{}
+		if decodedKey == "sp" || decodedKey == "spr" || decodedKey == "sr" {
+			patterns = append(patterns, regexp.QuoteMeta(component))
+		} else {
+			patterns = append(patterns, regexp.QuoteMeta(key+"=")+`[^&#]+`)
+		}
+	}
+	if len(seen) != len(values) {
+		return "", fmt.Errorf("signed query representation is ambiguous")
+	}
+	return strings.Join(patterns, "&"), nil
 }
 
 func parseContractURI(raw string) (*url.URL, error) {

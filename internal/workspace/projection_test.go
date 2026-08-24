@@ -54,6 +54,32 @@ func TestBuildDerivesCrossRepositoryWorkspaceAndTypeScriptReferences(t *testing.
 	}
 }
 
+func TestBuildDesignatesPackageRootAtCompositeOutput(t *testing.T) {
+	projection, err := Build([]Package{{Name: "@workbench-library/shared", Directory: "pkg/@workbench-library"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var manifest struct {
+		Exports map[string]struct {
+			Types   string `json:"types"`
+			Default string `json:"default"`
+		} `json:"exports"`
+	}
+	if err := json.Unmarshal(projection.Files["pkg/@workbench-library/package.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]struct {
+		Types   string `json:"types"`
+		Default string `json:"default"`
+	}{
+		".": {Types: "./dist/index.d.ts", Default: "./dist/index.js"},
+	}
+	if !reflect.DeepEqual(manifest.Exports, want) {
+		t.Fatalf("exports = %#v, want %#v", manifest.Exports, want)
+	}
+}
+
 func TestApplyConvergesAndReplacesWholeOwnedOutputs(t *testing.T) {
 	projection, err := Build([]Package{{Name: "@basindb/core", Directory: "pkg/@basindb/core"}})
 	if err != nil {

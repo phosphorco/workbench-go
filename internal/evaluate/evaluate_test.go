@@ -86,6 +86,11 @@ func TestReleasedContractRequiresImmutablePackageModule(t *testing.T) {
 	for _, uri := range []string{
 		"https://github.com/phosphorco/workbench-go/WorkbenchSubject.pkl",
 		"package://github.com/phosphorco/workbench-go/workbench@1.0.0",
+		"package://example.com/phosphorco/workbench-go/releases/download/1.0.0/workbench@1.0.0#/WorkbenchSubject.pkl",
+		"package://github.com/phosphorco/adjacent/releases/download/1.0.0/workbench@1.0.0#/WorkbenchSubject.pkl",
+		"package://github.com/phosphorco/workbench-go/releases/download/1.0.0/workbench@1.0.1#/WorkbenchSubject.pkl",
+		"package://github.com/phosphorco/workbench-go/releases/download/1.0.0/%77orkbench@1.0.0#/WorkbenchSubject.pkl",
+		"package://github.com/phosphorco/workbench-go/releases/download/1.0.0/workbench@1.0.0?#/WorkbenchSubject.pkl",
 	} {
 		if _, err := evaluate.ReleasedContract(uri); err == nil {
 			t.Fatalf("non-module release designation %q was accepted", uri)
@@ -110,6 +115,38 @@ func TestReleasedContractReachesMissingPackageTransport(t *testing.T) {
 	}
 	if !strings.Contains(lower, "404") && !strings.Contains(lower, "not found") {
 		t.Fatalf("missing package did not reach the remote missing-release response: %v", err)
+	}
+}
+
+func TestEvaluatesPublishedReleasedSubject(t *testing.T) {
+	const released = "package://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0#/WorkbenchSubject.pkl"
+	schema, err := evaluate.ReleasedContract(released)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte("amends \"" + released + "\"\nworkLine { branch = \"workbench/proof-0.1.0\"; baseBranch = \"main\" }\nentrypoints { \"https://github.com/phosphorco/workbench-fixture-entry\" }\n")
+	subject, err := evaluate.EvaluateSubject(t.Context(), source, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject.WorkLine.Branch != "workbench/proof-0.1.0" || len(subject.Entrypoints) != 1 || subject.Entrypoints[0] != "https://github.com/phosphorco/workbench-fixture-entry" {
+		t.Fatalf("published Subject = %#v", subject)
+	}
+}
+
+func TestEvaluatesPublishedReleasedRepository(t *testing.T) {
+	const released = "package://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0#/PackageScopeRepository.pkl"
+	schema, err := evaluate.ReleasedContract(released)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte("amends \"" + released + "\"\nscope = \"@workbench-entry\"\nincludes { [\"@workbench-library\"] { github = \"phosphorco/workbench-fixture-library\"; skills { workbench { domains = Set(\"engineering\") } } } }\npackages { [\"@workbench-entry/app\"] { requiredButNotReferenced { [\"typescript\"] = \"^5.9.2\" } } }\n")
+	repository, err := evaluate.EvaluatePackageScopeRepository(t.Context(), source, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.Scope != "@workbench-entry" || repository.Includes["@workbench-library"].GitHub != "phosphorco/workbench-fixture-library" {
+		t.Fatalf("published repository = %#v", repository)
 	}
 }
 
