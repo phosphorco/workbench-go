@@ -13,17 +13,11 @@ import (
 )
 
 func TestCurrentVocabularyCensus(t *testing.T) {
-	repositoryRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	workbenchRoot, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	files := sourceFiles(t, repositoryRoot)
-	files = append(files,
-		".context/plans/workbench-go-v1/workbench-go-v1.plan.ts",
-		".context/plans/workbench-go-v1/workbench-go-v1.ledger.jsonl",
-	)
-	sort.Strings(files)
-	files = compactStrings(files)
+	files := censusFiles(t, workbenchRoot)
 
 	const (
 		apacheLegal       = "Apache legal text"
@@ -53,11 +47,10 @@ func TestCurrentVocabularyCensus(t *testing.T) {
 
 	retiredVocabulary := "wo" + "rld"
 	observed := make(map[string]struct{})
-	for _, relative := range files {
-		path := filepath.Join(repositoryRoot, filepath.FromSlash(relative))
-		contents, err := os.ReadFile(path)
+	for _, file := range files {
+		contents, err := os.ReadFile(file.path)
 		if err != nil {
-			t.Fatalf("read census source %q: %v", relative, err)
+			t.Fatalf("read census source %q: %v", file.name, err)
 		}
 		scanner := bufio.NewScanner(bytes.NewReader(contents))
 		for line := 1; scanner.Scan(); line++ {
@@ -68,7 +61,7 @@ func TestCurrentVocabularyCensus(t *testing.T) {
 					break
 				}
 				column := offset + index + 1
-				key := fmt.Sprintf("%s:%d:%d", relative, line, column)
+				key := fmt.Sprintf("%s:%d:%d", file.name, line, column)
 				if category, ok := allowed[key]; !ok {
 					t.Errorf("unclassified retired vocabulary at %s", key)
 				} else if category == "" {
@@ -79,20 +72,33 @@ func TestCurrentVocabularyCensus(t *testing.T) {
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			t.Fatalf("scan census source %q: %v", relative, err)
+			t.Fatalf("scan census source %q: %v", file.name, err)
 		}
 	}
 	for key, category := range allowed {
-		if _, ok := observed[key]; !ok {
+		if _, ok := observed[key]; !ok && censusIncludes(files, key) {
 			t.Errorf("stale %s allowlist entry %s", category, key)
 		}
 	}
 }
 
-func sourceFiles(t *testing.T, repositoryRoot string) []string {
+type censusFile struct {
+	name string
+	path string
+}
+
+func censusFiles(t *testing.T, workbenchRoot string) []censusFile {
 	t.Helper()
-	command := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "tools/workbench-go")
-	command.Dir = repositoryRoot
+	repositoryRootCommand := exec.Command("git", "rev-parse", "--show-toplevel")
+	repositoryRootCommand.Dir = workbenchRoot
+	repositoryRootOutput, err := repositoryRootCommand.Output()
+	if err != nil {
+		t.Fatalf("locate repository root: %v", err)
+	}
+	repositoryRoot := strings.TrimSpace(string(repositoryRootOutput))
+
+	command := exec.Command("git", "ls-files", "-z", "--full-name", "--cached", "--others", "--exclude-standard", "--", ".")
+	command.Dir = workbenchRoot
 	output, err := command.Output()
 	if err != nil {
 		t.Fatalf("enumerate Workbench source: %v", err)
@@ -101,18 +107,38 @@ func sourceFiles(t *testing.T, repositoryRoot string) []string {
 	if encoded == "" {
 		t.Fatal("Workbench source census is empty")
 	}
-	return strings.Split(encoded, "\x00")
-}
-
-func compactStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
+	files := make([]censusFile, 0, len(strings.Split(encoded, "\x00"))+2)
+	for _, repositoryRelative := range strings.Split(encoded, "\x00") {
+		path := filepath.Join(repositoryRoot, filepath.FromSlash(repositoryRelative))
+		workbenchRelative, err := filepath.Rel(workbenchRoot, path)
+		if err != nil || workbenchRelative == ".." || strings.HasPrefix(workbenchRelative, ".."+string(filepath.Separator)) {
+			t.Fatalf("census source escaped Workbench root: %q", repositoryRelative)
+		}
+		files = append(files, censusFile{
+			name: filepath.ToSlash(filepath.Join("tools/workbench-go", workbenchRelative)),
+			path: path,
+		})
 	}
-	result := values[:1]
-	for _, value := range values[1:] {
-		if value != result[len(result)-1] {
-			result = append(result, value)
+	for _, name := range []string{
+		".context/plans/workbench-go-v1/workbench-go-v1.plan.ts",
+		".context/plans/workbench-go-v1/workbench-go-v1.ledger.jsonl",
+	} {
+		path := filepath.Join(repositoryRoot, filepath.FromSlash(name))
+		if _, err := os.Stat(path); err == nil {
+			files = append(files, censusFile{name: name, path: path})
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("inspect optional census source %q: %v", name, err)
 		}
 	}
-	return result
+	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
+	return files
+}
+
+func censusIncludes(files []censusFile, occurrence string) bool {
+	for _, file := range files {
+		if strings.HasPrefix(occurrence, file.name+":") {
+			return true
+		}
+	}
+	return false
 }

@@ -137,7 +137,7 @@ func renderNarrative(testName, disposableRoot string, steps ...narrativeStep) st
 	for _, step := range steps {
 		writeNarrativeStep(&story, step.title, step.consequence, step.command, disposableRoot)
 	}
-	return story.String()
+	return strings.TrimSuffix(story.String(), "\n")
 }
 
 func writeNarrativeStep(story *strings.Builder, title, consequence string, command narrativeCommand, disposableRoot string) {
