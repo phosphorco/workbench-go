@@ -37,7 +37,7 @@ func TestWorkbenchV010PublicPathRemainsReproducible(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	environment := publicEnvironment(testRoot, anonymousHome)
+	environment := publicEnvironment(t, moduleRoot, testRoot, anonymousHome)
 	binary := buildPublicCLI(t, moduleRoot)
 	workbench := newPublicWorkbenchForBranch(t, testRoot, "v010-compatibility", manifest.SubjectBranch, environment)
 	runSetup(t, binary, workbench, environment)

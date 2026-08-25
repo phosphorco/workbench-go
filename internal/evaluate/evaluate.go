@@ -14,6 +14,7 @@ import (
 
 	"github.com/apple/pkl-go/pkl"
 	"github.com/phosphorco/workbench-go/internal/contract"
+	"github.com/phosphorco/workbench-go/internal/legacy/v020v030snapshot"
 )
 
 var amendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
@@ -133,8 +134,14 @@ func (runtime Evaluator) EvaluateWorkbenchCommitPlan(ctx context.Context, source
 	return evaluateDecoded(runtime, ctx, source, schema, "WorkbenchCommitPlan", contract.DecodeWorkbenchCommitPlan)
 }
 
-func (runtime Evaluator) EvaluateWorkbenchWorldSnapshot(ctx context.Context, source []byte, schema Contract) (contract.WorkbenchWorldSnapshot, error) {
-	return evaluateDecoded(runtime, ctx, source, schema, "WorkbenchWorldSnapshot", contract.DecodeWorkbenchWorldSnapshot)
+func (runtime Evaluator) EvaluateWorkbenchSnapshot(ctx context.Context, source []byte, schema Contract) (contract.WorkbenchSnapshot, error) {
+	return evaluateDecoded(runtime, ctx, source, schema, "WorkbenchSnapshot", contract.DecodeWorkbenchSnapshot)
+}
+
+// EvaluateLegacyV020V030Snapshot consumes only the immutable historical
+// contract selected by the caller. It never selects a schema or writes output.
+func (runtime Evaluator) EvaluateLegacyV020V030Snapshot(ctx context.Context, source []byte, schema Contract) (contract.WorkbenchSnapshot, error) {
+	return evaluateDecoded(runtime, ctx, source, schema, "0.2/0.3 snapshot", v020v030snapshot.Decode)
 }
 
 func evaluateDecoded[Value any](runtime Evaluator, ctx context.Context, source []byte, schema Contract, name string, decode func([]byte) (Value, error)) (Value, error) {

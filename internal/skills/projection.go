@@ -94,7 +94,7 @@ func Select(inventory Inventory, selection contract.SkillSelection) ([]Skill, er
 	}
 	for _, name := range selection.Names {
 		if _, exists := inventory[name]; !exists {
-			return nil, fmt.Errorf("selected skill %q is absent from the assembled source world", name)
+			return nil, fmt.Errorf("selected skill %q is absent from the assembled source repositories", name)
 		}
 	}
 

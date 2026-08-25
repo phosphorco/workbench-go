@@ -125,9 +125,9 @@ commits {
 			},
 		},
 		{
-			name:     "world snapshot",
-			uri:      "workbench-contract:/WorkbenchWorldSnapshot.pkl",
-			filename: "WorkbenchWorldSnapshot.pkl",
+			name:     "workbench snapshot",
+			uri:      "workbench-contract:/WorkbenchSnapshot.pkl",
+			filename: "WorkbenchSnapshot.pkl",
 			source: `
 resources {
   ["@workbench-entry"] {
@@ -139,9 +139,9 @@ resources {
 }
 `,
 			evaluate: func(ctx context.Context, source []byte, schema evaluate.Contract) error {
-				value, err := evaluator.EvaluateWorkbenchWorldSnapshot(ctx, source, schema)
+				value, err := evaluator.EvaluateWorkbenchSnapshot(ctx, source, schema)
 				if err == nil && len(value.Resources) != 1 {
-					t.Fatalf("WorkbenchWorldSnapshot = %#v", value)
+					t.Fatalf("WorkbenchSnapshot = %#v", value)
 				}
 				return err
 			},

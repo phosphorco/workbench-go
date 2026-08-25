@@ -1,3 +1,0 @@
-module phosphor.workbench.WorkbenchWorldSnapshot
-
-amends "pkl/WorkbenchWorldSnapshot.pkl"

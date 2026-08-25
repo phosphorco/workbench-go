@@ -16,7 +16,7 @@ func TestWorkbenchLocalMeaningfulSlice(t *testing.T) {
 	}
 
 	schemaURI := func(name string) string {
-		return "workbench-contract:/" + name
+		return "workbench-contract:/0.4.0/" + name
 	}
 
 	fixtureRoot := t.TempDir()
@@ -32,14 +32,14 @@ packages {
   ["@phosphorco/math"] {}
 }
 `, schemaURI("PackageScopeRepository.pkl")), map[string]string{
-		"src/math.ts": "export const answer = 42\n",
-		".agents/skills/domain-skill/SKILL.md": `---
+		"math/src/math.ts": "export const answer = 42\n",
+		"skills/domain-skill/SKILL.md": `---
 domain: engineering
 ---
 
 Compose [` + "`$composition-dependency`" + `](../composition-dependency/SKILL.md).
 `,
-		".agents/skills/composition-dependency/SKILL.md": `---
+		"skills/composition-dependency/SKILL.md": `---
 domain: general
 ---
 
@@ -51,8 +51,7 @@ Required composition support.
 scope = "@basindb"
 
 includes {
-  ["@phosphorco"] {
-    github = "phosphorco/community-packages"
+	["phosphorco/community-packages"] {
     skills {
       workbench {
         domains = Set("engineering")
@@ -65,7 +64,7 @@ packages {
   ["@basindb/client"] {}
 }
 `, schemaURI("PackageScopeRepository.pkl")), map[string]string{
-		"src/index.ts": `import { answer } from "@phosphorco/math"
+		"client/src/index.ts": `import { answer } from "@phosphorco/math"
 export const basinAnswer = answer
 `,
 	})
@@ -117,6 +116,11 @@ entrypoints {
 		"GIT_CONFIG_KEY_0=url.file://"+filepath.ToSlash(remotes)+"/.insteadOf",
 		"GIT_CONFIG_VALUE_0=https://github.com/phosphorco/",
 		"GIT_TERMINAL_PROMPT=0",
+		"MISE_CACHE_DIR="+filepath.Join(fixtureRoot, "mise-cache"),
+		"MISE_CONFIG_FILE="+filepath.Join(moduleRoot, "mise.toml"),
+		"MISE_LOG_LEVEL=error",
+		"MISE_STATE_DIR="+filepath.Join(fixtureRoot, "mise-state"),
+		"MISE_TRUSTED_CONFIG_PATHS="+filepath.Join(moduleRoot, "mise.toml"),
 		"TMPDIR="+filepath.Join(fixtureRoot, "tmp"),
 	)
 	if err := os.MkdirAll(filepath.Join(fixtureRoot, "tmp"), 0o700); err != nil {
@@ -132,7 +136,7 @@ entrypoints {
 			t.Errorf("%s branch = %q, want %q", checkout, branch, "local/meaningful-slice")
 		}
 	}
-	basinManifest := readFile(t, filepath.Join(workbench, "pkg/@basindb/package.json"))
+	basinManifest := readFile(t, filepath.Join(workbench, "pkg/@basindb/client/package.json"))
 	if !strings.Contains(basinManifest, `"@phosphorco/math": "workspace:*"`) {
 		t.Fatalf("BasinDB manifest lacks derived workspace adjacency:\n%s", basinManifest)
 	}
@@ -141,11 +145,11 @@ entrypoints {
 			t.Fatalf("projected skill %q: %v", skill, err)
 		}
 	}
-	linkedPackage, err := filepath.EvalSymlinks(filepath.Join(workbench, "pkg/@basindb/node_modules/@phosphorco/math"))
+	linkedPackage, err := filepath.EvalSymlinks(filepath.Join(workbench, "pkg/@basindb/client/node_modules/@phosphorco/math"))
 	if err != nil {
 		t.Fatalf("resolve linked cross-repository package: %v", err)
 	}
-	wantPackage := filepath.Join(workbench, "pkg/@phosphorco")
+	wantPackage := filepath.Join(workbench, "pkg/@phosphorco/math")
 	if linkedPackage != wantPackage {
 		t.Fatalf("linked package = %q, want %q", linkedPackage, wantPackage)
 	}

@@ -364,7 +364,7 @@ func TestRecoverExactRefusesAlteredMissingExtraAndDuplicatePlanWithoutGitMutatio
 		second.request("same-change-id", "selected.txt"),
 	}
 	for index := range requests {
-		requests[index].GeneratedPathPolicyID = "world-generated-paths-v1"
+		requests[index].GeneratedPathPolicyID = "repository-closure-generated-paths-v1"
 		requests[index].RejectPath = func(path string) bool { return path == "generated.json" }
 	}
 	candidates, err := change.PrepareAll(ctx, requests)
@@ -379,10 +379,10 @@ func TestRecoverExactRefusesAlteredMissingExtraAndDuplicatePlanWithoutGitMutatio
 
 	altered := append([]change.Request(nil), requests...)
 	altered[0] = first.request("same-change-id", "unselected.txt")
-	altered[0].GeneratedPathPolicyID = "world-generated-paths-v1"
+	altered[0].GeneratedPathPolicyID = "repository-closure-generated-paths-v1"
 	altered[0].RejectPath = requests[0].RejectPath
 	alteredPolicy := append([]change.Request(nil), requests...)
-	alteredPolicy[0].GeneratedPathPolicyID = "world-generated-paths-v2"
+	alteredPolicy[0].GeneratedPathPolicyID = "repository-closure-generated-paths-v2"
 	extra := append(append([]change.Request(nil), requests...), first.request("same-change-id", "selected.txt"))
 	cases := []struct {
 		name string

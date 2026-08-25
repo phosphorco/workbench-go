@@ -31,7 +31,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	root := t.TempDir()
 	inputs := distributionV1Inputs(t, root)
 	platform := distribution.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
-	assetName, err := distribution.AssetName("0.3.0", platform)
+	assetName, err := distribution.AssetName("0.4.0", platform)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,20 +61,20 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	server.Config.Handler = http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		assets := []map[string]any{}
 		for _, name := range []string{
-			"workbench-0.3.0-linux-arm64.tar.gz", "workbench-0.3.0-linux-x64.tar.gz",
-			"workbench-0.3.0-macos-arm64.tar.gz", "workbench-0.3.0-macos-x64.tar.gz",
+			"workbench-0.4.0-linux-arm64.tar.gz", "workbench-0.4.0-linux-x64.tar.gz",
+			"workbench-0.4.0-macos-arm64.tar.gz", "workbench-0.4.0-macos-x64.tar.gz",
 		} {
 			assets = append(assets,
 				map[string]any{"name": name, "browser_download_url": server.URL + "/assets/" + name, "url": server.URL + "/api/assets/" + name},
 				map[string]any{"name": name + ".sha256", "browser_download_url": server.URL + "/assets/" + name + ".sha256", "url": server.URL + "/api/assets/" + name + ".sha256"},
 			)
 		}
-		release := map[string]any{"tag_name": "0.3.0", "created_at": "2026-08-24T00:00:00Z", "draft": false, "prerelease": false, "assets": assets}
+		release := map[string]any{"tag_name": "0.4.0", "created_at": "2026-08-25T00:00:00Z", "draft": false, "prerelease": false, "assets": assets}
 		switch request.URL.Path {
 		case "/repos/phosphorco/workbench-go/releases":
 			response.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(response).Encode([]any{release})
-		case "/repos/phosphorco/workbench-go/releases/tags/0.3.0":
+		case "/repos/phosphorco/workbench-go/releases/tags/0.4.0":
 			response.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(response).Encode(release)
 		case "/assets/" + assetName, "/api/assets/" + assetName:
@@ -89,7 +89,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	t.Cleanup(server.Close)
 
 	data := filepath.Join(root, "mise-data")
-	identity := fmt.Sprintf("github:phosphorco/workbench-go[api_url=%s,github_attestations=false]@0.3.0", server.URL)
+	identity := fmt.Sprintf("github:phosphorco/workbench-go[api_url=%s,github_attestations=false]@0.4.0", server.URL)
 	command := exec.Command(mise, "install", identity)
 	command.Dir = root
 	command.Env = append(os.Environ(),
@@ -100,7 +100,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("Mise local-candidate install: %v\n%s", err, output)
 	}
-	installed := filepath.Join(data, "installs", "github-phosphorco-workbench-go", "0.3.0")
+	installed := filepath.Join(data, "installs", "github-phosphorco-workbench-go", "0.4.0")
 	for _, path := range []string{"bin/workbench", "libexec/workbench/pkl", "libexec/workbench/bun"} {
 		if _, err := os.Stat(filepath.Join(installed, filepath.FromSlash(path))); err != nil {
 			t.Fatalf("Mise installation lacks %s: %v", path, err)
@@ -108,7 +108,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	}
 
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release-acceptance.yml"))
-	for _, marker := range []string{"mise install github:phosphorco/workbench-go@0.3.0", "workbench setup", "GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\""} {
+	for _, marker := range []string{"mise install github:phosphorco/workbench-go@0.4.0", "workbench setup", "GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\""} {
 		if !strings.Contains(workflow, marker) {
 			t.Errorf("final public acceptance workflow lacks marker %q", marker)
 		}
@@ -128,7 +128,7 @@ func distributionV1Inputs(t *testing.T, root string) distribution.ArchiveInputs 
 		return path
 	}
 	return distribution.ArchiveInputs{
-		Version: "0.3.0", Revision: snapshotPruneV1Commit,
+		Version: "0.4.0", Revision: snapshotPruneV1Commit,
 		WorkbenchBinary: file("workbench", "#!/bin/sh\necho workbench\n", true),
 		PklBinary:       file("pkl", "#!/bin/sh\necho pkl\n", true), BunBinary: file("bun", "#!/bin/sh\necho bun\n", true),
 		RuntimeLock: file("runtime-lock.json", "{}\n", false), WorkbenchLicense: file("workbench-license", "license\n", false),

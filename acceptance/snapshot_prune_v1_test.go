@@ -29,7 +29,7 @@ func TestSnapshotAndPruneV1PreserveConflictsAndRequireRecoverability(t *testing.
 			Exists: true, GitHub: "someone/else", Identity: "someone/else", Commit: snapshotPruneV1Commit, Clean: true,
 		}}
 		if _, err := snapshot.Plan(value, observer); err == nil {
-			t.Fatal("conflicting exact-World destination received acquisition authority")
+			t.Fatal("conflicting exact-revision destination received acquisition authority")
 		}
 		if after := readFile(t, filepath.Join(path, "source.txt")); after != before {
 			t.Fatalf("snapshot conflict changed source: before %q after %q", before, after)

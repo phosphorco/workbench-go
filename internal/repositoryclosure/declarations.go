@@ -1,4 +1,4 @@
-package world
+package repositoryclosure
 
 import (
 	"fmt"
@@ -7,16 +7,13 @@ import (
 	"github.com/phosphorco/workbench-go/internal/contract"
 )
 
-// DeclarationSource is the read-only authority needed to assemble the closed
-// 0.2 resource-shape world. Repositories are addressed by transport identity;
-// their declarations derive the resource identity and canonical placement.
+// DeclarationSource is the read-only authority needed to assemble a closed
+// set from resource-shape declarations.
 type DeclarationSource interface {
 	LoadDeclaration(github string) (contract.Declaration, error)
 	IdentityAt(canonicalPath string) (identity string, occupied bool, err error)
 }
 
-// DeclaredResource keeps acquisition identity separate from the identity and
-// placement derived by its released resource shape.
 type DeclaredResource struct {
 	Identity      string
 	GitHub        string
@@ -24,25 +21,25 @@ type DeclaredResource struct {
 	Declaration   contract.Declaration
 }
 
-type DeclaredWorld struct {
+type DeclaredClosure struct {
 	Resources []DeclaredResource
 }
 
-// DiscoverDeclarations computes the least closure of 0.2 declarations. It
-// neither acquires repositories nor changes an existing checkout.
-func DiscoverDeclarations(subject contract.Subject, source DeclarationSource) (DeclaredWorld, error) {
+// DiscoverDeclarations computes the least closure of released declarations.
+// It neither acquires repositories nor changes an existing checkout.
+func DiscoverDeclarations(subject contract.Subject, source DeclarationSource) (DeclaredClosure, error) {
 	if source == nil {
-		return DeclaredWorld{}, fmt.Errorf("discover declared world: source is nil")
+		return DeclaredClosure{}, fmt.Errorf("discover declared repository closure: source is nil")
 	}
 	if err := subject.Validate(); err != nil {
-		return DeclaredWorld{}, fmt.Errorf("discover declared world: %w", err)
+		return DeclaredClosure{}, fmt.Errorf("discover declared repository closure: %w", err)
 	}
 
 	pending := make([]string, 0, len(subject.Entrypoints))
 	for _, entrypoint := range subject.Entrypoints {
 		github, err := contract.GitHubIdentity(entrypoint)
 		if err != nil {
-			return DeclaredWorld{}, fmt.Errorf("discover entrypoint %q: %w", entrypoint, err)
+			return DeclaredClosure{}, fmt.Errorf("discover entrypoint %q: %w", entrypoint, err)
 		}
 		pending = append(pending, github)
 	}
@@ -60,48 +57,46 @@ func DiscoverDeclarations(subject contract.Subject, source DeclarationSource) (D
 
 		declaration, err := source.LoadDeclaration(github)
 		if err != nil {
-			return DeclaredWorld{}, fmt.Errorf("load declaration %q: %w", github, err)
+			return DeclaredClosure{}, fmt.Errorf("load declaration %q: %w", github, err)
 		}
 		if err := declaration.Validate(); err != nil {
-			return DeclaredWorld{}, fmt.Errorf("validate declaration %q: %w", github, err)
+			return DeclaredClosure{}, fmt.Errorf("validate declaration %q: %w", github, err)
 		}
 		identity, err := declaration.Identity(github)
 		if err != nil {
-			return DeclaredWorld{}, fmt.Errorf("derive identity %q: %w", github, err)
+			return DeclaredClosure{}, fmt.Errorf("derive identity %q: %w", github, err)
 		}
 		canonicalPath, err := declaration.CanonicalPath(github)
 		if err != nil {
-			return DeclaredWorld{}, fmt.Errorf("derive canonical path %q: %w", github, err)
+			return DeclaredClosure{}, fmt.Errorf("derive canonical path %q: %w", github, err)
 		}
 
 		if existing, claimed := githubByIdentity[identity]; claimed && existing != github {
-			return DeclaredWorld{}, conflict(IdentityConflict, identity, existing, github)
+			return DeclaredClosure{}, conflict(IdentityConflict, identity, existing, github)
 		}
 		if existing, claimed := identityByPath[canonicalPath]; claimed && existing != identity {
-			return DeclaredWorld{}, conflict(PathConflict, canonicalPath, existing, identity)
+			return DeclaredClosure{}, conflict(PathConflict, canonicalPath, existing, identity)
 		}
 		observed, occupied, err := source.IdentityAt(canonicalPath)
 		if err != nil {
-			return DeclaredWorld{}, fmt.Errorf("observe canonical path %q: %w", canonicalPath, err)
+			return DeclaredClosure{}, fmt.Errorf("observe canonical path %q: %w", canonicalPath, err)
 		}
 		if occupied && observed != identity {
-			return DeclaredWorld{}, conflict(PathConflict, canonicalPath, observed, identity)
+			return DeclaredClosure{}, conflict(PathConflict, canonicalPath, observed, identity)
 		}
 
 		githubByIdentity[identity] = github
 		identityByPath[canonicalPath] = identity
 		loadedByGitHub[github] = DeclaredResource{
-			Identity:      identity,
-			GitHub:        github,
-			CanonicalPath: canonicalPath,
-			Declaration:   cloneV020Declaration(declaration),
+			Identity: identity, GitHub: github, CanonicalPath: canonicalPath,
+			Declaration: cloneDeclaration(declaration),
 		}
 
 		includes := make([]string, 0, len(declaration.Includes))
 		for includedGitHub := range declaration.Includes {
 			normalized, err := contract.NormalizeGitHubRepository(includedGitHub)
 			if err != nil {
-				return DeclaredWorld{}, fmt.Errorf("declaration %q include %q: %w", github, includedGitHub, err)
+				return DeclaredClosure{}, fmt.Errorf("declaration %q include %q: %w", github, includedGitHub, err)
 			}
 			includes = append(includes, normalized)
 		}
@@ -119,21 +114,14 @@ func DiscoverDeclarations(subject contract.Subject, source DeclarationSource) (D
 		}
 		return resources[left].CanonicalPath < resources[right].CanonicalPath
 	})
-	return DeclaredWorld{Resources: resources}, nil
+	return DeclaredClosure{Resources: resources}, nil
 }
 
-func cloneV020Declaration(declaration contract.Declaration) contract.Declaration {
+func cloneDeclaration(declaration contract.Declaration) contract.Declaration {
 	includes := make(map[string]contract.ResourceInclude, len(declaration.Includes))
 	for github, include := range declaration.Includes {
 		include.Skills = cloneSkillPolicy(include.Skills)
 		includes[github] = include
 	}
-	packages := make(map[string]contract.PackagePolicy, len(declaration.Packages))
-	for name, policy := range declaration.Packages {
-		policy.RequiredButNotReferenced = cloneStringMap(policy.RequiredButNotReferenced)
-		policy.PeerDependencies = cloneStringMap(policy.PeerDependencies)
-		policy.OptionalDependencies = cloneStringMap(policy.OptionalDependencies)
-		packages[name] = policy
-	}
-	return contract.Declaration{Shape: declaration.Shape, Includes: includes, Packages: packages}
+	return contract.Declaration{Shape: declaration.Shape, Includes: includes, Packages: clonePackagePolicies(declaration.Packages)}
 }

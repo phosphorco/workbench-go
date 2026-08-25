@@ -10,6 +10,8 @@ import (
 
 	"github.com/phosphorco/workbench-go/internal/change"
 	"github.com/phosphorco/workbench-go/internal/contract"
+	"github.com/phosphorco/workbench-go/internal/evaluate"
+	"github.com/phosphorco/workbench-go/internal/legacy/v020v030snapshot"
 )
 
 func TestGeneratedProjectionPolicyRefusesWorkbenchOwnedPathsBeforeRefAdvance(t *testing.T) {
@@ -59,58 +61,67 @@ func TestGeneratedProjectionPolicyRefusesWorkbenchOwnedPathsBeforeRefAdvance(t *
 	}
 }
 
-func TestLifecycleContractsMatchTheExactWorldRelease(t *testing.T) {
+func TestCommitPlanContractsMatchTheExactSubjectRelease(t *testing.T) {
 	t.Parallel()
-	for _, contractVersion := range []string{"0.2.0", "0.3.0"} {
+	for _, contractVersion := range []string{"0.2.0", "0.3.0", currentContractVersion} {
 		contractVersion := contractVersion
 		t.Run(contractVersion, func(t *testing.T) {
 			t.Parallel()
 			uri := releasedContractURI(contractVersion, "WorkbenchCommitPlan.pkl")
 			source := []byte("amends \"" + uri + "\"\n")
-			if _, err := lifecycleContractForWorld(source, "WorkbenchCommitPlan.pkl", contractVersion); err != nil {
+			if _, err := releasedCommitPlanContract(source, contractVersion); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
 
 	v020 := []byte("amends \"" + releasedContractURI("0.2.0", "WorkbenchCommitPlan.pkl") + "\"\n")
-	if _, err := lifecycleContractForWorld(v020, "WorkbenchCommitPlan.pkl", "0.3.0"); err == nil || !strings.Contains(err.Error(), "want exact Workbench 0.3.0") {
+	if _, err := releasedCommitPlanContract(v020, "0.3.0"); err == nil || !strings.Contains(err.Error(), "want exact Workbench 0.3.0") {
 		t.Fatalf("cross-release commit plan error = %v", err)
 	}
-	if _, err := lifecycleContractForWorld(v020, "WorkbenchCommitPlan.pkl", "0.1.0"); err == nil || !strings.Contains(err.Error(), "has no released WorkbenchCommitPlan.pkl") {
+	if _, err := releasedCommitPlanContract(v020, "0.1.0"); err == nil || !strings.Contains(err.Error(), "has no released WorkbenchCommitPlan.pkl") {
 		t.Fatalf("0.1 lifecycle error = %v", err)
 	}
 }
 
-func TestReleasedLifecycleContractIsSelectedOnlyFromItsExactAmendsURI(t *testing.T) {
+func TestSnapshotContractSelectionDistinguishesCurrentAndExactLegacyIdentities(t *testing.T) {
 	t.Parallel()
+	currentURI := releasedContractURI(currentContractVersion, "WorkbenchSnapshot.pkl")
+	if _, kind, err := releasedSnapshotContractFromSource([]byte("amends \"" + currentURI + "\"\n")); err != nil {
+		t.Fatalf("current snapshot contract: %v", err)
+	} else if kind != currentSnapshotContract {
+		t.Fatalf("current snapshot kind = %v", kind)
+	}
 	for _, contractVersion := range []string{"0.2.0", "0.3.0"} {
-		uri := releasedContractURI(contractVersion, "WorkbenchWorldSnapshot.pkl")
-		if _, got, err := releasedLifecycleContractFromSource([]byte("amends \""+uri+"\"\n"), "WorkbenchWorldSnapshot.pkl"); err != nil {
+		uri, err := v020v030snapshot.ContractURI(contractVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, kind, err := releasedSnapshotContractFromSource([]byte("amends \"" + uri + "\"\n")); err != nil {
 			t.Fatalf("%s snapshot contract: %v", contractVersion, err)
-		} else if got != contractVersion {
-			t.Fatalf("snapshot contract version = %q, want %q", got, contractVersion)
+		} else if kind != legacyV020V030SnapshotContract {
+			t.Fatalf("%s snapshot kind = %v", contractVersion, kind)
 		}
 	}
 	for _, invalid := range []struct {
-		version string
-		want    string
+		uri  string
+		want string
 	}{
-		{version: "0.1.0", want: "has no released WorkbenchWorldSnapshot.pkl"},
-		{version: "0.4.0", want: "unsupported Workbench contract"},
+		{uri: releasedContractURI("0.1.0", v020v030snapshot.Filename), want: "0.1.0 has no released snapshot contract"},
+		{uri: releasedContractURI(currentContractVersion, v020v030snapshot.Filename), want: "unsupported Workbench Snapshot contract"},
+		{uri: releasedContractURI("0.3.0", "WorkbenchSnapshot.pkl"), want: "unsupported Workbench Snapshot contract"},
 	} {
-		uri := releasedContractURI(invalid.version, "WorkbenchWorldSnapshot.pkl")
-		if _, _, err := releasedLifecycleContractFromSource([]byte("amends \""+uri+"\"\n"), "WorkbenchWorldSnapshot.pkl"); err == nil || !strings.Contains(err.Error(), invalid.want) {
-			t.Fatalf("%s snapshot error = %v", invalid.version, err)
+		if _, _, err := releasedSnapshotContractFromSource([]byte("amends \"" + invalid.uri + "\"\n")); err == nil || !strings.Contains(err.Error(), invalid.want) {
+			t.Fatalf("snapshot source %q error = %v", invalid.uri, err)
 		}
 	}
 }
 
-func TestReleasedSubjectContractRetainsAllSupportedWorldLines(t *testing.T) {
+func TestReleasedSubjectContractRetainsAllSupportedSubjectLines(t *testing.T) {
 	t.Parallel()
-	for _, contractVersion := range []string{"0.1.0", "0.2.0", "0.3.0"} {
+	for _, contractVersion := range []string{"0.1.0", "0.2.0", "0.3.0", currentContractVersion} {
 		uri := releasedContractURI(contractVersion, "WorkbenchSubject.pkl")
-		if _, err := releasedContractForWorld([]byte("amends \""+uri+"\"\n"), "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0"); err != nil {
+		if _, err := releasedContractForSubjectLine([]byte("amends \""+uri+"\"\n"), "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", currentContractVersion); err != nil {
 			t.Fatalf("%s Subject contract: %v", contractVersion, err)
 		}
 	}
@@ -126,9 +137,9 @@ func TestRenderSnapshotIsDeterministicByIdentity(t *testing.T) {
 		Shape:  contract.ResourceShape{Kind: contract.RepositoryShape},
 		GitHub: "phosphorco/z", CanonicalPath: "repos/z", Commit: strings.Repeat("f", 40),
 	}
-	contractURI := releasedContractURI("0.3.0", "WorkbenchWorldSnapshot.pkl")
-	forward := renderSnapshot(contract.WorkbenchWorldSnapshot{Resources: map[string]contract.SnapshotResource{"@a": resourceA, "phosphorco/z": resourceZ}}, contractURI)
-	reverse := renderSnapshot(contract.WorkbenchWorldSnapshot{Resources: map[string]contract.SnapshotResource{"phosphorco/z": resourceZ, "@a": resourceA}}, contractURI)
+	contractURI := releasedContractURI(currentContractVersion, "WorkbenchSnapshot.pkl")
+	forward := renderSnapshot(contract.WorkbenchSnapshot{Resources: map[string]contract.SnapshotResource{"@a": resourceA, "phosphorco/z": resourceZ}}, contractURI)
+	reverse := renderSnapshot(contract.WorkbenchSnapshot{Resources: map[string]contract.SnapshotResource{"phosphorco/z": resourceZ, "@a": resourceA}}, contractURI)
 	if string(forward) != string(reverse) {
 		t.Fatalf("snapshot rendering depends on map insertion order:\n%s\n---\n%s", forward, reverse)
 	}
@@ -140,6 +151,21 @@ func TestRenderSnapshotIsDeterministicByIdentity(t *testing.T) {
 	}
 }
 
+func TestSnapshotReproductionReportUsesRepositoryGrammar(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		count int
+		want  string
+	}{
+		{count: 1, want: "Reproduced and verified 1 exact repository"},
+		{count: 2, want: "Reproduced and verified 2 exact repositories"},
+	} {
+		if got := snapshotReproductionReport(test.count); got != test.want {
+			t.Errorf("snapshotReproductionReport(%d) = %q, want %q", test.count, got, test.want)
+		}
+	}
+}
+
 func TestWorkbenchPathRefusesTraversalAndAbsoluteAuthority(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -148,12 +174,33 @@ func TestWorkbenchPathRefusesTraversalAndAbsoluteAuthority(t *testing.T) {
 			t.Errorf("workbenchPath(%q) = %q, want refusal", invalid, path)
 		}
 	}
-	path, err := workbenchPath(root, ".workbench/world.pkl")
+	path, err := workbenchPath(root, ".workbench/workbench-snapshot.pkl")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(root, ".workbench", "world.pkl"); path != want {
+	if want := filepath.Join(root, ".workbench", "workbench-snapshot.pkl"); path != want {
 		t.Fatalf("workbenchPath = %q, want %q", path, want)
+	}
+}
+
+func TestUnsupportedHistoricalSnapshotIsRefusedWithoutChangingTheUserFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	relative := "preserved-snapshot.pkl"
+	path := filepath.Join(root, relative)
+	source := []byte("amends \"" + releasedContractURI("0.1.0", v020v030snapshot.Filename) + "\"\n")
+	if err := os.WriteFile(path, source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reproduceSnapshot(context.Background(), root, relative, evaluate.Evaluator{}); err == nil || !strings.Contains(err.Error(), "0.1.0 has no released snapshot contract") {
+		t.Fatalf("reproduce error = %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(source) {
+		t.Fatalf("user-authored snapshot changed: got %q want %q", after, source)
 	}
 }
 

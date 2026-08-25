@@ -14,11 +14,41 @@ import (
 )
 
 const (
-	v030SubjectContract      = "workbench-contract:/0.3.0/WorkbenchSubject.pkl"
-	v030PackageScopeContract = "workbench-contract:/0.3.0/PackageScopeRepository.pkl"
-	v030RepositoryContract   = "workbench-contract:/0.3.0/Repository.pkl"
-	v030AgentContract        = "workbench-contract:/0.3.0/AgentInstructions.pkl"
+	currentSubjectContract         = "workbench-contract:/0.4.0/WorkbenchSubject.pkl"
+	currentPackageScopeContract    = "workbench-contract:/0.4.0/PackageScopeRepository.pkl"
+	currentRepositoryContract      = "workbench-contract:/0.4.0/Repository.pkl"
+	currentAgentContract           = "workbench-contract:/0.4.0/AgentInstructions.pkl"
+	legacyV030SubjectContract      = "workbench-contract:/0.3.0/WorkbenchSubject.pkl"
+	legacyV030PackageScopeContract = "workbench-contract:/0.3.0/PackageScopeRepository.pkl"
+	legacyV030AgentContract        = "workbench-contract:/0.3.0/AgentInstructions.pkl"
 )
+
+func TestCurrentBinaryConsumesReleasedV030SubjectWithoutReinterpretation(t *testing.T) {
+	fixture := newPackageScopeFixture(t)
+	createRemote(t, fixture.root, fixture.remotes, "entry", fmt.Sprintf(`amends %q
+
+scope = "@workbench-entry"
+packages {
+  ["@workbench-entry/app"] {}
+}
+`, legacyV030PackageScopeContract), map[string]string{
+		".gitignore":       "/app/package.json\n/app/tsconfig.json\n/app/node_modules/\n/app/dist/\n/.agents/skills/\n",
+		"app/src/index.ts": "export const compatible = true\n",
+	})
+	workbench := fixture.newWorkbench(t, "released-v030", legacyV030SubjectContract, legacyV030AgentContract, "entry")
+	output := fixture.runSetup(t, workbench, true)
+	if !strings.Contains(output, "Workbench reconciled 1 repository") {
+		t.Fatalf("released 0.3 Subject was not reconciled with its historical meaning:\n%s", output)
+	}
+	for _, path := range []string{
+		filepath.Join(workbench, "pkg", "@workbench-entry", "app", "package.json"),
+		filepath.Join(workbench, "pkg", "@workbench-entry", "app", "tsconfig.json"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("released 0.3 nested PackageScope projection %q: %v", path, err)
+		}
+	}
+}
 
 func TestPackageScopeV030KeepsPackagesNestedAndResourcesIndependent(t *testing.T) {
 	fixture := newPackageScopeFixture(t)
@@ -27,7 +57,7 @@ func TestPackageScopeV030KeepsPackagesNestedAndResourcesIndependent(t *testing.T
 packages {
   ["@workbench-library/shared"] {}
 }
-`, v030RepositoryContract), map[string]string{
+`, currentRepositoryContract), map[string]string{
 		".gitignore": `/package.json
 /tsconfig.json
 /dist/
@@ -72,7 +102,7 @@ packages {
   }
   ["@workbench-entry/tool"] {}
 }
-`, v030PackageScopeContract), map[string]string{
+`, currentPackageScopeContract), map[string]string{
 		".gitignore": `/app/package.json
 /app/tsconfig.json
 /app/dist/
@@ -100,7 +130,7 @@ metadata:
 `,
 	})
 
-	workbench := fixture.newWorld(t, "nested", v030SubjectContract, v030AgentContract, "entry")
+	workbench := fixture.newWorkbench(t, "nested", currentSubjectContract, currentAgentContract, "entry")
 	first := fixture.runSetup(t, workbench, true)
 	if !strings.Contains(first, "Workbench reconciled 2 repositories") {
 		t.Fatalf("setup did not assemble both resources:\n%s", first)
@@ -243,8 +273,8 @@ scope = "@workbench-entry"
 packages {
   ["@workbench-entry/app"] {}
 }
-`, v030PackageScopeContract), files)
-			workbench := fixture.newWorld(t, "invalid", v030SubjectContract, v030AgentContract, "entry")
+`, currentPackageScopeContract), files)
+			workbench := fixture.newWorkbench(t, "invalid", currentSubjectContract, currentAgentContract, "entry")
 			sentinels := map[string]string{
 				"package.json":                          "outer manifest must survive\n",
 				"tsconfig.json":                         "outer tsconfig must survive\n",
@@ -266,7 +296,7 @@ packages {
 			for _, generated := range []string{
 				filepath.Join(entry, "package.json"), filepath.Join(entry, "tsconfig.json"),
 				filepath.Join(entry, "app", "package.json"), filepath.Join(entry, "app", "tsconfig.json"),
-				filepath.Join(entry, ".agents"), filepath.Join(workbench, ".workbench", "world.json"),
+				filepath.Join(entry, ".agents"), filepath.Join(workbench, ".workbench", "managed-checkouts.json"),
 				filepath.Join(workbench, "bun.lock"), filepath.Join(workbench, "node_modules"),
 			} {
 				if _, err := os.Stat(generated); !os.IsNotExist(err) {
@@ -295,7 +325,7 @@ packages {
 			if version == "0.2.0" {
 				subjectURI = "workbench-contract:/0.2.0/WorkbenchSubject.pkl"
 			}
-			workbench := fixture.newWorld(t, "historical", subjectURI, "", "entry")
+			workbench := fixture.newWorkbench(t, "historical", subjectURI, "", "entry")
 			fixture.runSetup(t, workbench, true)
 			checkout := filepath.Join(workbench, "pkg", "@historical")
 			for _, generated := range []string{filepath.Join(checkout, "package.json"), filepath.Join(checkout, "tsconfig.json")} {
@@ -319,6 +349,10 @@ type packageScopeFixture struct {
 
 func newPackageScopeFixture(t *testing.T) packageScopeFixture {
 	t.Helper()
+	projectRoot, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := t.TempDir()
 	remotes := filepath.Join(root, "remotes")
 	if err := os.MkdirAll(remotes, 0o700); err != nil {
@@ -330,23 +364,30 @@ func newPackageScopeFixture(t *testing.T) packageScopeFixture {
 	}
 	binary := filepath.Join(root, "workbench")
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/workbench")
-	build.Dir = filepath.Clean("..")
+	build.Dir = projectRoot
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build Workbench CLI: %v\n%s", err, output)
 	}
 	environment := append(os.Environ(),
 		"BUN_INSTALL_CACHE_DIR="+filepath.Join(root, "bun-cache"),
+		"GSETTINGS_BACKEND=memory",
 		"GIT_ALLOW_PROTOCOL=file",
 		"GIT_CONFIG_COUNT=1",
 		"GIT_CONFIG_KEY_0=url.file://"+filepath.ToSlash(remotes)+"/.insteadOf",
 		"GIT_CONFIG_VALUE_0=https://github.com/phosphorco/",
 		"GIT_TERMINAL_PROMPT=0",
+		"MISE_CACHE_DIR="+filepath.Join(root, "mise-cache"),
+		"MISE_CONFIG_FILE="+filepath.Join(projectRoot, "mise.toml"),
+		"MISE_LOG_LEVEL=error",
+		"MISE_STATE_DIR="+filepath.Join(root, "mise-state"),
+		"MISE_TRUSTED_CONFIG_PATHS="+filepath.Join(projectRoot, "mise.toml"),
 		"TMPDIR="+temporary,
+		"XDG_RUNTIME_DIR="+temporary,
 	)
 	return packageScopeFixture{root: root, remotes: remotes, binary: binary, environment: environment}
 }
 
-func (fixture packageScopeFixture) newWorld(t *testing.T, name, subjectContract, agentContract, entry string) string {
+func (fixture packageScopeFixture) newWorkbench(t *testing.T, name, subjectContract, agentContract, entry string) string {
 	t.Helper()
 	root := filepath.Join(fixture.root, name)
 	if err := os.Mkdir(root, 0o700); err != nil {
@@ -366,7 +407,7 @@ repos/
 	writeFile(t, filepath.Join(root, "workbench-subject.pkl"), fmt.Sprintf(`amends %q
 
 workLine {
-  branch = "local/package-scope-v030"
+  branch = "local/package-scope-current"
   baseBranch = "main"
 }
 entrypoints {

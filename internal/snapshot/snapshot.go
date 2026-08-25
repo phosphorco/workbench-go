@@ -7,8 +7,8 @@ import (
 	"github.com/phosphorco/workbench-go/internal/contract"
 )
 
-// Resource is the explicit immutable observation recorded for one composed
-// World member. Branch intent deliberately does not appear here.
+// Resource is the explicit immutable observation recorded for one participating
+// repository. Branch intent deliberately does not appear here.
 type Resource struct {
 	Identity      string
 	Shape         contract.ResourceShape
@@ -17,11 +17,11 @@ type Resource struct {
 	Commit        string
 }
 
-func Record(resources []Resource) (contract.WorkbenchWorldSnapshot, error) {
-	snapshot := contract.WorkbenchWorldSnapshot{Resources: make(map[string]contract.SnapshotResource, len(resources))}
+func Record(resources []Resource) (contract.WorkbenchSnapshot, error) {
+	snapshot := contract.WorkbenchSnapshot{Resources: make(map[string]contract.SnapshotResource, len(resources))}
 	for _, resource := range resources {
 		if _, exists := snapshot.Resources[resource.Identity]; exists {
-			return contract.WorkbenchWorldSnapshot{}, fmt.Errorf("record snapshot: resource identity %q is duplicated", resource.Identity)
+			return contract.WorkbenchSnapshot{}, fmt.Errorf("record snapshot: resource identity %q is duplicated", resource.Identity)
 		}
 		snapshot.Resources[resource.Identity] = contract.SnapshotResource{
 			Shape:         resource.Shape,
@@ -31,7 +31,7 @@ func Record(resources []Resource) (contract.WorkbenchWorldSnapshot, error) {
 		}
 	}
 	if err := snapshot.Validate(); err != nil {
-		return contract.WorkbenchWorldSnapshot{}, fmt.Errorf("record snapshot: %w", err)
+		return contract.WorkbenchSnapshot{}, fmt.Errorf("record snapshot: %w", err)
 	}
 	return snapshot, nil
 }
@@ -96,7 +96,7 @@ func (err *ConflictError) Error() string {
 
 // Plan observes every destination before granting any acquisition authority.
 // Existing checkouts are verification inputs and are never reset or rewritten.
-func Plan(snapshot contract.WorkbenchWorldSnapshot, observer Observer) (Reproduction, error) {
+func Plan(snapshot contract.WorkbenchSnapshot, observer Observer) (Reproduction, error) {
 	if observer == nil {
 		return Reproduction{}, fmt.Errorf("plan snapshot reproduction: observer is nil")
 	}
@@ -184,8 +184,8 @@ func Apply(plan Reproduction, acquirer Acquirer) error {
 		}
 	}
 
-	// Re-observe the complete World so concurrent drift cannot be reported as a
-	// successful exact reproduction.
+	// Re-observe every participating repository so concurrent drift cannot be
+	// reported as a successful exact reproduction.
 	for _, destination := range plan.authorization.destinations {
 		checkout, err := plan.authorization.observer.Observe(destination.acquisition.CanonicalPath)
 		if err != nil {

@@ -15,12 +15,12 @@ import (
 )
 
 const (
-	releasePackageURI     = "package://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0"
-	releasePackageZIP     = "https://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0.zip"
-	v020ReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0"
-	v020ReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
-	v030ReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0"
-	v030ReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.3.0/workbench@0.3.0.zip"
+	releasePackageURI        = "package://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0"
+	releasePackageZIP        = "https://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0.zip"
+	v020ReleasePackageURI    = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0"
+	v020ReleasePackageZIP    = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
+	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.4.0/workbench@0.4.0"
+	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.4.0/workbench@0.4.0.zip"
 )
 
 func TestReleasePackageCandidate(t *testing.T) {
@@ -28,20 +28,20 @@ func TestReleasePackageCandidate(t *testing.T) {
 	outputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, outputRoot)
 
-	metadataPath := filepath.Join(outputRoot, "workbench@0.3.0")
+	metadataPath := filepath.Join(outputRoot, "workbench@0.4.0")
 	archivePath := metadataPath + ".zip"
 	metadata := readReleaseMetadata(t, metadataPath)
 	if metadata.Name != "workbench" {
 		t.Errorf("metadata name = %q, want workbench", metadata.Name)
 	}
-	if metadata.PackageURI != v030ReleasePackageURI {
-		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, v030ReleasePackageURI)
+	if metadata.PackageURI != currentReleasePackageURI {
+		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, currentReleasePackageURI)
 	}
-	if metadata.Version != "0.3.0" {
-		t.Errorf("metadata version = %q, want 0.3.0", metadata.Version)
+	if metadata.Version != "0.4.0" {
+		t.Errorf("metadata version = %q, want 0.4.0", metadata.Version)
 	}
-	if metadata.PackageZIPURL != v030ReleasePackageZIP {
-		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, v030ReleasePackageZIP)
+	if metadata.PackageZIPURL != currentReleasePackageZIP {
+		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, currentReleasePackageZIP)
 	}
 
 	metadataChecksum := verifyReleaseChecksum(t, metadataPath)
@@ -69,14 +69,14 @@ func TestReleasePackageCandidate(t *testing.T) {
 		"PackageScopeRepository.pkl",
 		"Repository.pkl",
 		"WorkbenchCommitPlan.pkl",
+		"WorkbenchSnapshot.pkl",
 		"WorkbenchSubject.pkl",
-		"WorkbenchWorldSnapshot.pkl",
 		"pkl/AgentInstructions.pkl",
 		"pkl/PackageScopeRepository.pkl",
 		"pkl/Repository.pkl",
 		"pkl/WorkbenchCommitPlan.pkl",
+		"pkl/WorkbenchSnapshot.pkl",
 		"pkl/WorkbenchSubject.pkl",
-		"pkl/WorkbenchWorldSnapshot.pkl",
 	}
 	if !slices.Equal(entries, wantEntries) {
 		t.Fatalf("package archive entries = %v, want exactly %v", entries, wantEntries)
@@ -87,10 +87,10 @@ func TestReleasePackageCandidate(t *testing.T) {
 	secondOutputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, secondOutputRoot)
 	for _, name := range []string{
-		"workbench@0.3.0",
-		"workbench@0.3.0.sha256",
-		"workbench@0.3.0.zip",
-		"workbench@0.3.0.zip.sha256",
+		"workbench@0.4.0",
+		"workbench@0.4.0.sha256",
+		"workbench@0.4.0.zip",
+		"workbench@0.4.0.zip.sha256",
 	} {
 		first, err := os.ReadFile(filepath.Join(outputRoot, name))
 		if err != nil {
@@ -253,7 +253,7 @@ identity = "hand-authored"
 prose = "Keep Git-owned source intact."
 subject {
   workLine {
-    branch = "workbench/proof-0.3.0"
+    branch = "workbench/proof-0.4.0"
     baseBranch = "main"
   }
   entrypoints { "https://github.com/phosphorco/workbench-fixture-entry" }
@@ -264,7 +264,7 @@ resources {
     github = "phosphorco/workbench-fixture-entry"
     shape = new PackageScopeShape { scope = "@workbench-entry" }
     canonicalPath = "pkg/@workbench-entry"
-    branch = "workbench/proof-0.3.0"
+    branch = "workbench/proof-0.4.0"
     health = "healthy"
   }
 }
@@ -290,8 +290,8 @@ commits {
 			wantSuccess: true,
 		},
 		{
-			name: "valid world snapshot",
-			source: `amends "modulepath:/WorkbenchWorldSnapshot.pkl"
+			name: "valid Workbench Snapshot",
+			source: `amends "modulepath:/WorkbenchSnapshot.pkl"
 
 resources {
   ["@workbench-entry"] {

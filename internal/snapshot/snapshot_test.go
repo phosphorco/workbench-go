@@ -18,7 +18,7 @@ const (
 	libraryCommit = "89abcdef0123456789abcdef0123456789abcdef"
 )
 
-func TestRecordAndPlanExactWorldWithoutBranchAuthority(t *testing.T) {
+func TestRecordAndPlanExactParticipatingRepositoriesWithoutBranchAuthority(t *testing.T) {
 	recorded, err := snapshot.Record([]snapshot.Resource{
 		{Identity: "@workbench-entry", Shape: contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: "@workbench-entry"}, GitHub: "phosphorco/workbench-fixture-entry", CanonicalPath: "pkg/@workbench-entry", Commit: entryCommit},
 		{Identity: "phosphorco/workbench-fixture-library", Shape: contract.ResourceShape{Kind: contract.RepositoryShape}, GitHub: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library", Commit: libraryCommit},
@@ -194,7 +194,7 @@ func exactCheckout(github, commit string) snapshot.Checkout {
 	return snapshot.Checkout{Exists: true, GitHub: github, Identity: github, Commit: commit, Clean: true}
 }
 
-func mustRecord(t *testing.T, resources ...snapshot.Resource) contract.WorkbenchWorldSnapshot {
+func mustRecord(t *testing.T, resources ...snapshot.Resource) contract.WorkbenchSnapshot {
 	t.Helper()
 	recorded, err := snapshot.Record(resources)
 	if err != nil {

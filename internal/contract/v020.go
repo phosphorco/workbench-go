@@ -341,7 +341,9 @@ func (selection CommitSelection) Validate() error {
 	return nil
 }
 
-type WorkbenchWorldSnapshot struct {
+// WorkbenchSnapshot freezes the exact participating-repository revisions of an
+// assembled Workbench. Subject branch policy is deliberately not represented.
+type WorkbenchSnapshot struct {
 	Resources map[string]SnapshotResource `json:"resources"`
 }
 
@@ -352,20 +354,20 @@ type SnapshotResource struct {
 	Commit        string        `json:"commit"`
 }
 
-func DecodeWorkbenchWorldSnapshot(encoded []byte) (WorkbenchWorldSnapshot, error) {
-	var value WorkbenchWorldSnapshot
+func DecodeWorkbenchSnapshot(encoded []byte) (WorkbenchSnapshot, error) {
+	var value WorkbenchSnapshot
 	if err := decodeStrict(encoded, &value); err != nil {
-		return WorkbenchWorldSnapshot{}, fmt.Errorf("decode WorkbenchWorldSnapshot: %w", err)
+		return WorkbenchSnapshot{}, fmt.Errorf("decode WorkbenchSnapshot: %w", err)
 	}
 	if err := value.Validate(); err != nil {
-		return WorkbenchWorldSnapshot{}, err
+		return WorkbenchSnapshot{}, err
 	}
 	return value, nil
 }
 
-func (snapshot WorkbenchWorldSnapshot) Validate() error {
+func (snapshot WorkbenchSnapshot) Validate() error {
 	if len(snapshot.Resources) == 0 {
-		return fmt.Errorf("WorkbenchWorldSnapshot resources is empty")
+		return fmt.Errorf("WorkbenchSnapshot resources is empty")
 	}
 	for identity, resource := range snapshot.Resources {
 		declaration := Declaration{Shape: resource.Shape}

@@ -3,10 +3,8 @@ package setup
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,10 +14,10 @@ import (
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/orientation"
 	"github.com/phosphorco/workbench-go/internal/orphan"
-	"github.com/phosphorco/workbench-go/internal/world"
+	"github.com/phosphorco/workbench-go/internal/repositoryclosure"
 )
 
-func legacyResources(value world.World) []Resource {
+func legacyResources(value repositoryclosure.Closure) []Resource {
 	resources := make([]Resource, 0, len(value.Resources))
 	for _, resource := range value.Resources {
 		includes := make([]contract.SkillPolicy, 0, len(resource.Declaration.Includes))
@@ -40,7 +38,7 @@ func legacyResources(value world.World) []Resource {
 	return resources
 }
 
-func declaredResources(value world.DeclaredWorld) []Resource {
+func declaredResources(value repositoryclosure.DeclaredClosure) []Resource {
 	resources := make([]Resource, 0, len(value.Resources))
 	for _, resource := range value.Resources {
 		includes := make([]contract.SkillPolicy, 0, len(resource.Declaration.Includes))
@@ -58,124 +56,7 @@ func declaredResources(value world.DeclaredWorld) []Resource {
 	return resources
 }
 
-type worldReceipt struct {
-	Version   int               `json:"version"`
-	Resources []receiptResource `json:"resources"`
-}
-
-type receiptResource struct {
-	Identity           string                 `json:"identity"`
-	GitHub             string                 `json:"github"`
-	Shape              contract.ResourceShape `json:"shape"`
-	CanonicalPath      string                 `json:"canonicalPath"`
-	CreatedByWorkbench bool                   `json:"createdByWorkbench"`
-}
-
-// ManagedCheckout is durable evidence that setup either created or merely
-// adopted a canonical checkout. Prune may consider only CreatedByWorkbench;
-// it must still prove every live Git recoverability predicate independently.
-type ManagedCheckout struct {
-	Identity           string
-	GitHub             string
-	Shape              contract.ResourceShape
-	CanonicalPath      string
-	CreatedByWorkbench bool
-}
-
-// ReadManagedCheckouts exposes provenance without deletion authority.
-func ReadManagedCheckouts(root string) ([]ManagedCheckout, error) {
-	receipt, err := readWorldReceipt(root)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]ManagedCheckout, 0, len(receipt.Resources))
-	for _, resource := range receipt.Resources {
-		result = append(result, ManagedCheckout{
-			Identity: resource.Identity, GitHub: resource.GitHub, Shape: resource.Shape,
-			CanonicalPath: resource.CanonicalPath, CreatedByWorkbench: resource.CreatedByWorkbench,
-		})
-	}
-	return result, nil
-}
-
-func readWorldReceipt(root string) (worldReceipt, error) {
-	encoded, err := os.ReadFile(filepath.Join(root, ".workbench", "world.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return worldReceipt{Version: 1}, nil
-	}
-	if err != nil {
-		return worldReceipt{}, fmt.Errorf("read Workbench World receipt: %w", err)
-	}
-	var receipt worldReceipt
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&receipt); err != nil {
-		return worldReceipt{}, fmt.Errorf("decode Workbench World receipt: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return worldReceipt{}, fmt.Errorf("decode Workbench World receipt: trailing JSON value")
-		}
-		return worldReceipt{}, fmt.Errorf("decode Workbench World receipt trailing data: %w", err)
-	}
-	if receipt.Version != 1 {
-		return worldReceipt{}, fmt.Errorf("unsupported Workbench World receipt version %d", receipt.Version)
-	}
-	identities := make(map[string]struct{}, len(receipt.Resources))
-	paths := make(map[string]struct{}, len(receipt.Resources))
-	for index, resource := range receipt.Resources {
-		declaration := contract.Declaration{Shape: resource.Shape}
-		identity, identityErr := declaration.Identity(resource.GitHub)
-		canonicalPath, pathErr := declaration.CanonicalPath(resource.GitHub)
-		normalizedGitHub, githubErr := contract.NormalizeGitHubRepository(resource.GitHub)
-		if identityErr != nil || pathErr != nil || githubErr != nil || normalizedGitHub != resource.GitHub || identity != resource.Identity || canonicalPath != resource.CanonicalPath {
-			return worldReceipt{}, fmt.Errorf("Workbench World receipt resource %d disagrees with closed shape identity or placement", index)
-		}
-		if _, duplicate := identities[resource.Identity]; duplicate {
-			return worldReceipt{}, fmt.Errorf("Workbench World receipt duplicates identity %q", resource.Identity)
-		}
-		if _, duplicate := paths[resource.CanonicalPath]; duplicate {
-			return worldReceipt{}, fmt.Errorf("Workbench World receipt duplicates canonical path %q", resource.CanonicalPath)
-		}
-		identities[resource.Identity] = struct{}{}
-		paths[resource.CanonicalPath] = struct{}{}
-	}
-	return receipt, nil
-}
-
-func writeWorldReceipt(root string, resources []Resource, previous worldReceipt, created map[string]bool) (bool, error) {
-	previousOwnership := make(map[string]bool, len(previous.Resources))
-	for _, resource := range previous.Resources {
-		previousOwnership[resource.Identity] = resource.CreatedByWorkbench
-	}
-	receipt := worldReceipt{Version: 1, Resources: make([]receiptResource, 0, len(resources))}
-	current := make(map[string]struct{}, len(resources))
-	for _, resource := range resources {
-		current[resource.Identity] = struct{}{}
-		receipt.Resources = append(receipt.Resources, receiptResource{
-			Identity: resource.Identity, GitHub: resource.GitHub, Shape: resource.Shape,
-			CanonicalPath:      resource.CanonicalPath,
-			CreatedByWorkbench: previousOwnership[resource.Identity] || created[resource.Identity],
-		})
-	}
-	// Keep retired entries until an explicit prune action removes its checkout
-	// and provenance together. Ordinary setup has neither authority.
-	for _, resource := range previous.Resources {
-		if _, member := current[resource.Identity]; !member {
-			receipt.Resources = append(receipt.Resources, resource)
-		}
-	}
-	sort.Slice(receipt.Resources, func(i, j int) bool { return receipt.Resources[i].Identity < receipt.Resources[j].Identity })
-	encoded, err := json.MarshalIndent(receipt, "", "  ")
-	if err != nil {
-		return false, fmt.Errorf("encode Workbench World receipt: %w", err)
-	}
-	encoded = append(encoded, '\n')
-	return writeWholeOutput(filepath.Join(root, ".workbench", "world.json"), encoded)
-}
-
-func reportOrphans(root string, current []Resource, previous worldReceipt) ([]orphan.Candidate, error) {
+func reportOrphans(root string, current []Resource, previous managedCheckoutReceipt) ([]orphan.Candidate, error) {
 	members := make([]orphan.Resource, 0, len(current))
 	currentIdentities := make(map[string]struct{}, len(current))
 	for _, resource := range current {
@@ -228,7 +109,7 @@ func projectOrientation(ctx context.Context, root string, subject contract.Subje
 	combined = append(combined, explicitAgentFacts(subject, resources)...)
 	instructions, err := evaluator.EvaluateAgentInstructions(ctx, combined, schema)
 	if err != nil {
-		return false, fmt.Errorf("evaluate tracked AGENTS.pkl with explicit World facts: %w", err)
+		return false, fmt.Errorf("evaluate tracked AGENTS.pkl with explicit participating-repository facts: %w", err)
 	}
 	output, err := orientation.Render(instructions)
 	if err != nil {
@@ -258,7 +139,7 @@ func explicitAgentFacts(subject contract.Subject, resources []Resource) []byte {
 		}
 		fmt.Fprintf(&output, "canonicalPath = %s; branch = %s; health = \"healthy\" }\n", strconv.Quote(resource.CanonicalPath), strconv.Quote(subject.WorkLine.Branch))
 	}
-	output.WriteString("}\ngeneratedPaths { \".agents/skills\"; \".workbench/world.json\"; \"AGENTS.md\"; \"bun.lock\"; \"node_modules\"; \"package.json\"; \"tsconfig.json\" }\n")
+	output.WriteString("}\ngeneratedPaths { \".agents/skills\"; \".workbench/managed-checkouts.json\"; \"AGENTS.md\"; \"bun.lock\"; \"node_modules\"; \"package.json\"; \"tsconfig.json\" }\n")
 	output.WriteString("handOwnedPaths { \"AGENTS.pkl\"; \"workbench-subject.pkl\"")
 	for _, resource := range sorted {
 		fmt.Fprintf(&output, "; %s", strconv.Quote(resource.CanonicalPath))

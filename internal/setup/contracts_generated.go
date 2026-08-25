@@ -238,7 +238,8 @@ class ResourceFacts {
 prose: NonEmptyString
 
 /// Workbench supplies every remaining value from its explicit Subject and
-/// observed World. The contract exposes no environment or filesystem input.
+/// participating repositories. The contract exposes no environment or
+/// filesystem input.
 subject: SubjectFacts
 resources: Listing<ResourceFacts>
 generatedPaths: Listing<CanonicalPath>
@@ -271,8 +272,8 @@ summary: NonEmptyString
 commits: Mapping<ResourceIdentity, CommitSelection>(length > 0)
 `
 
-// Generated from ../../pkl/WorkbenchWorldSnapshot.pkl.
-const localWorkbenchWorldSnapshotContract = `module phosphor.workbench.WorkbenchWorldSnapshot
+// Generated from ../../pkl/WorkbenchSnapshot.pkl.
+const localWorkbenchSnapshotContract = `module phosphor.workbench.WorkbenchSnapshot
 
 typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
 typealias GitHubRepository =

@@ -31,13 +31,14 @@ func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 	}
 }
 
-func TestSchemaForSourceDiscriminatesV020AndV030PackageScopeContracts(t *testing.T) {
+func TestSchemaForSourceDiscriminatesReleasedAndCurrentPackageScopeContracts(t *testing.T) {
 	for _, test := range []struct {
 		uri     string
 		version string
 	}{
 		{uri: localV020PackageScopeURI, version: "0.2.0"},
 		{uri: localV030PackageScopeURI, version: "0.3.0"},
+		{uri: localV040PackageScopeURI, version: "0.4.0"},
 	} {
 		source := []byte(fmt.Sprintf("amends %q\n", test.uri))
 		if _, version, err := schemaForSource(source, "PackageScopeRepository.pkl"); err != nil {
@@ -51,46 +52,61 @@ func TestSchemaForSourceDiscriminatesV020AndV030PackageScopeContracts(t *testing
 	} else if version != "0.3.0" {
 		t.Fatalf("released 0.3 package selected %q", version)
 	}
+	if _, version, err := schemaForSource([]byte(`amends "package://github.com/phosphorco/workbench-go/releases/download/0.4.0/workbench@0.4.0#/PackageScopeRepository.pkl"`), "PackageScopeRepository.pkl"); err != nil {
+		t.Fatal(err)
+	} else if version != "0.4.0" {
+		t.Fatalf("released 0.4 package selected %q", version)
+	}
+	if _, _, err := schemaForSource([]byte(`amends "package://example.invalid/releases/download/0.4.0/workbench@0.4.0#/PackageScopeRepository.pkl"`), "PackageScopeRepository.pkl"); err == nil {
+		t.Fatal("foreign package URI was accepted by release-shaped substring")
+	}
+	if _, version, err := schemaForSource([]byte(`amends "workbench-contract:/0.4.0/WorkbenchSubject.pkl"`), "WorkbenchSubject.pkl"); err != nil {
+		t.Fatal(err)
+	} else if version != "0.4.0" {
+		t.Fatalf("local current Subject selected %q", version)
+	}
 }
 
-func TestObservePackagesV030UsesOneNestedLawForSingletonAndMultiplePackages(t *testing.T) {
+func TestObservePackagesV030AndV040UseOneNestedLawForSingletonAndMultiplePackages(t *testing.T) {
 	root := t.TempDir()
 	resourceRoot := filepath.Join(root, "pkg", "@workbench-entry")
 	write(t, filepath.Join(resourceRoot, "app", "src", "index.ts"), "export const app = true\n")
 	write(t, filepath.Join(resourceRoot, "tool", "src", "index.ts"), "export const tool = true\n")
 
-	resource := Resource{
-		Identity:      "@workbench-entry",
-		CanonicalPath: "pkg/@workbench-entry",
-		Shape:         contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: "@workbench-entry"},
-		Packages:      map[string]contract.PackagePolicy{"@workbench-entry/app": {}},
-	}
-	singleton, err := observePackages(root, []Resource{resource}, "0.3.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(singleton) != 1 || filepath.ToSlash(singleton[0].Directory) != "pkg/@workbench-entry/app" {
-		t.Fatalf("singleton packages = %#v", singleton)
-	}
+	for _, version := range []string{"0.3.0", "0.4.0"} {
+		resource := Resource{
+			Identity:      "@workbench-entry",
+			CanonicalPath: "pkg/@workbench-entry",
+			Shape:         contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: "@workbench-entry"},
+			Packages:      map[string]contract.PackagePolicy{"@workbench-entry/app": {}},
+		}
+		singleton, err := observePackages(root, []Resource{resource}, version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(singleton) != 1 || filepath.ToSlash(singleton[0].Directory) != "pkg/@workbench-entry/app" {
+			t.Fatalf("%s singleton packages = %#v", version, singleton)
+		}
 
-	resource.Packages["@workbench-entry/tool"] = contract.PackagePolicy{}
-	multiple, err := observePackages(root, []Resource{resource}, "0.3.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := make(map[string]string, len(multiple))
-	for _, pkg := range multiple {
-		got[pkg.Name] = filepath.ToSlash(pkg.Directory)
-	}
-	want := map[string]string{
-		"@workbench-entry/app":  "pkg/@workbench-entry/app",
-		"@workbench-entry/tool": "pkg/@workbench-entry/tool",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("multiple package directories = %#v, want %#v", got, want)
-	}
-	if got["@workbench-entry/app"] != filepath.ToSlash(singleton[0].Directory) {
-		t.Fatalf("adding a package relocated app from %q to %q", singleton[0].Directory, got["@workbench-entry/app"])
+		resource.Packages["@workbench-entry/tool"] = contract.PackagePolicy{}
+		multiple, err := observePackages(root, []Resource{resource}, version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make(map[string]string, len(multiple))
+		for _, pkg := range multiple {
+			got[pkg.Name] = filepath.ToSlash(pkg.Directory)
+		}
+		want := map[string]string{
+			"@workbench-entry/app":  "pkg/@workbench-entry/app",
+			"@workbench-entry/tool": "pkg/@workbench-entry/tool",
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s multiple package directories = %#v, want %#v", version, got, want)
+		}
+		if got["@workbench-entry/app"] != filepath.ToSlash(singleton[0].Directory) {
+			t.Fatalf("%s adding a package relocated app from %q to %q", version, singleton[0].Directory, got["@workbench-entry/app"])
+		}
 	}
 }
 
@@ -355,8 +371,8 @@ func TestRunAssemblesClosureConvergesAndPreservesSource(t *testing.T) {
 	if first.ContractVersion != "0.1.0" {
 		t.Fatalf("contract version = %q, want 0.1.0", first.ContractVersion)
 	}
-	if len(first.World.Resources) != 2 {
-		t.Fatalf("resources = %#v", first.World.Resources)
+	if len(first.Resources) != 2 {
+		t.Fatalf("resources = %#v", first.Resources)
 	}
 	for _, path := range []string{"pkg/@basindb", "pkg/@phosphorco"} {
 		if branch := git(t, filepath.Join(fixture.workbench, filepath.FromSlash(path)), "branch", "--show-current"); branch != "local/meaningful-slice" {
@@ -413,7 +429,7 @@ func TestReadManagedCheckoutsRejectsTamperedDeletionProvenance(t *testing.T) {
 			if err := os.Mkdir(filepath.Join(root, ".workbench"), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			write(t, filepath.Join(root, ".workbench", "world.json"), encoded)
+			write(t, filepath.Join(root, ".workbench", "managed-checkouts.json"), encoded)
 			if _, err := ReadManagedCheckouts(root); err == nil {
 				t.Fatal("tampered Workbench-created provenance was accepted")
 			}
@@ -645,7 +661,7 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library", Includes: []contract.SkillPolicy{{Editing: &entryExportSelection}}},
 	}
 
-	plan, err := planSkills(root, resources, "0.2.0", worldReceipt{Version: 1})
+	plan, err := planSkills(root, resources, "0.2.0", managedCheckoutReceipt{Version: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +684,7 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 	}
 
 	remaining := []Resource{{Identity: "@workbench-entry", CanonicalPath: "pkg/@workbench-entry"}}
-	previous := worldReceipt{Version: 1, Resources: []receiptResource{
+	previous := managedCheckoutReceipt{Version: 1, Resources: []receiptResource{
 		{Identity: "@workbench-entry", GitHub: "phosphorco/workbench-fixture-entry", Shape: contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: "@workbench-entry"}, CanonicalPath: "pkg/@workbench-entry"},
 		{Identity: "phosphorco/workbench-fixture-library", GitHub: "phosphorco/workbench-fixture-library", Shape: contract.ResourceShape{Kind: contract.RepositoryShape}, CanonicalPath: "repos/workbench-fixture-library"},
 	}}
@@ -717,7 +733,7 @@ func TestProjectSkillsV020RefusesSymlinkedRetiredCheckoutWithoutMutation(t *test
 		{Identity: "@workbench-entry", CanonicalPath: "pkg/@workbench-entry"},
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library", Includes: []contract.SkillPolicy{{Editing: &selection}}},
 	}
-	plan, err := planSkills(root, resources, "0.2.0", worldReceipt{Version: 1})
+	plan, err := planSkills(root, resources, "0.2.0", managedCheckoutReceipt{Version: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -731,7 +747,7 @@ func TestProjectSkillsV020RefusesSymlinkedRetiredCheckoutWithoutMutation(t *test
 	if err := os.Symlink(external, library); err != nil {
 		t.Fatal(err)
 	}
-	previous := worldReceipt{Version: 1, Resources: []receiptResource{{
+	previous := managedCheckoutReceipt{Version: 1, Resources: []receiptResource{{
 		Identity: "phosphorco/workbench-fixture-library", GitHub: "phosphorco/workbench-fixture-library",
 		Shape: contract.ResourceShape{Kind: contract.RepositoryShape}, CanonicalPath: "repos/workbench-fixture-library",
 	}}}
@@ -773,14 +789,14 @@ func TestProjectSkillsV020RefusesRetiredCheckoutWithWrongOriginWithoutMutation(t
 		{Identity: "@workbench-entry", CanonicalPath: "pkg/@workbench-entry"},
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library", Includes: []contract.SkillPolicy{{Editing: &selection}}},
 	}
-	plan, err := planSkills(root, resources, "0.2.0", worldReceipt{Version: 1})
+	plan, err := planSkills(root, resources, "0.2.0", managedCheckoutReceipt{Version: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := plan.Apply(); err != nil {
 		t.Fatal(err)
 	}
-	previous := worldReceipt{Version: 1, Resources: []receiptResource{{
+	previous := managedCheckoutReceipt{Version: 1, Resources: []receiptResource{{
 		Identity: "phosphorco/workbench-fixture-library", GitHub: "phosphorco/workbench-fixture-library",
 		Shape: contract.ResourceShape{Kind: contract.RepositoryShape}, CanonicalPath: "repos/workbench-fixture-library",
 	}}}
@@ -808,12 +824,12 @@ func TestProjectSkillsV020RefusesForeignSelectedNameWithoutMutation(t *testing.T
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library", Includes: []contract.SkillPolicy{{Editing: &selection}}},
 	}
 	before := readTree(t, root)
-	if _, err := planSkills(root, resources, "0.2.0", worldReceipt{Version: 1}); err == nil || !strings.Contains(err.Error(), "foreign projection") {
+	if _, err := planSkills(root, resources, "0.2.0", managedCheckoutReceipt{Version: 1}); err == nil || !strings.Contains(err.Error(), "foreign projection") {
 		t.Fatalf("foreign selected-name error = %v", err)
 	}
 	after := readTree(t, root)
 	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("foreign collision mutated the World:\nbefore=%#v\nafter=%#v", before, after)
+		t.Fatalf("foreign collision mutated the Workbench:\nbefore=%#v\nafter=%#v", before, after)
 	}
 }
 
@@ -840,7 +856,7 @@ func TestProjectSkillsV020RefusesTrackedForgedOwnershipWithoutMutation(t *testin
 		{Identity: "@workbench-entry", CanonicalPath: "pkg/@workbench-entry", Includes: []contract.SkillPolicy{{Editing: &selection}}},
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library"},
 	}
-	plan, err := planSkills(root, selectedResources, "0.2.0", worldReceipt{Version: 1})
+	plan, err := planSkills(root, selectedResources, "0.2.0", managedCheckoutReceipt{Version: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -856,7 +872,7 @@ func TestProjectSkillsV020RefusesTrackedForgedOwnershipWithoutMutation(t *testin
 		{Identity: "@workbench-entry", CanonicalPath: "pkg/@workbench-entry"},
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library"},
 	}
-	if _, err := planSkills(root, deselectedResources, "0.2.0", worldReceipt{Version: 1}); err == nil || !strings.Contains(err.Error(), "tracked") {
+	if _, err := planSkills(root, deselectedResources, "0.2.0", managedCheckoutReceipt{Version: 1}); err == nil || !strings.Contains(err.Error(), "tracked") {
 		t.Fatalf("tracked forged ownership error = %v", err)
 	}
 	afterGit := exactGitSnapshot(t, entry)
@@ -877,24 +893,25 @@ func TestRunWithRefusesAmbientBunAuthority(t *testing.T) {
 	}
 }
 
-func TestWorldReceiptKeepsOrphanProvenanceWithoutDeleting(t *testing.T) {
+func TestManagedCheckoutReceiptKeepsOrphanProvenanceWithoutDeleting(t *testing.T) {
 	root := t.TempDir()
 	orphanPath := filepath.Join(root, "repos", "retired")
 	if err := os.MkdirAll(orphanPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	previous := worldReceipt{Version: 1, Resources: []receiptResource{{
+	previous := managedCheckoutReceipt{Version: 1, Resources: []receiptResource{{
 		Identity: "phosphorco/retired", GitHub: "phosphorco/retired",
 		Shape:         contract.ResourceShape{Kind: contract.RepositoryShape},
 		CanonicalPath: "repos/retired", CreatedByWorkbench: true,
 	}}}
-	if _, err := writeWorldReceipt(root, nil, previous, nil); err != nil {
+	if _, err := writeManagedCheckoutReceipt(root, nil, previous, nil); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := readWorldReceipt(root)
+	loadedPlan, err := preflightManagedCheckoutMigration(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	loaded := loadedPlan.receipt
 	orphans, err := reportOrphans(root, nil, loaded)
 	if err != nil {
 		t.Fatal(err)

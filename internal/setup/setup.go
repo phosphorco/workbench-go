@@ -15,9 +15,9 @@ import (
 	"github.com/phosphorco/workbench-go/internal/evaluate"
 	"github.com/phosphorco/workbench-go/internal/gitreconcile"
 	"github.com/phosphorco/workbench-go/internal/orphan"
+	"github.com/phosphorco/workbench-go/internal/repositoryclosure"
 	"github.com/phosphorco/workbench-go/internal/skills"
 	"github.com/phosphorco/workbench-go/internal/workspace"
-	"github.com/phosphorco/workbench-go/internal/world"
 )
 
 const (
@@ -31,6 +31,10 @@ const (
 	localV030PackageScopeURI      = "workbench-contract:/0.3.0/PackageScopeRepository.pkl"
 	localV030RepositoryURI        = "workbench-contract:/0.3.0/Repository.pkl"
 	localV030AgentInstructionsURI = "workbench-contract:/0.3.0/AgentInstructions.pkl"
+	localV040SubjectURI           = "workbench-contract:/0.4.0/WorkbenchSubject.pkl"
+	localV040PackageScopeURI      = "workbench-contract:/0.4.0/PackageScopeRepository.pkl"
+	localV040RepositoryURI        = "workbench-contract:/0.4.0/Repository.pkl"
+	localV040AgentInstructionsURI = "workbench-contract:/0.4.0/AgentInstructions.pkl"
 )
 
 var (
@@ -39,7 +43,6 @@ var (
 )
 
 type Result struct {
-	World           world.World
 	Resources       []Resource
 	Orphans         []orphan.Candidate
 	ChangedPaths    []string
@@ -94,7 +97,7 @@ func Run(ctx context.Context, workbenchRoot string) (Result, error) {
 	return run(ctx, workbenchRoot, Toolchain{Evaluator: ambientEvaluator{}, Bun: "bun"}, true)
 }
 
-// RunWith reconciles a World using only the explicitly supplied evaluator and
+// RunWith reconciles a Workbench using only the explicitly supplied evaluator and
 // Bun executable. Released composition must use this entrypoint.
 func RunWith(ctx context.Context, workbenchRoot string, toolchain Toolchain) (Result, error) {
 	return run(ctx, workbenchRoot, toolchain, false)
@@ -126,14 +129,20 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, err
 	}
-
+	migration, err := preflightManagedCheckoutMigration(root)
+	if err != nil {
+		return Result{}, err
+	}
 	var evaluatorVersioned versionedEvaluator
-	if version == "0.2.0" || version == "0.3.0" {
+	if version == "0.2.0" || version == "0.3.0" || version == "0.4.0" {
 		var ok bool
 		evaluatorVersioned, ok = toolchain.Evaluator.(versionedEvaluator)
 		if !ok {
 			return Result{}, fmt.Errorf("Workbench %s setup requires an explicitly configured Pkl evaluator", version)
 		}
+	}
+	if err := migration.Apply(); err != nil {
+		return Result{}, err
 	}
 	source := &discoverySource{
 		ctx:                ctx,
@@ -145,16 +154,16 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		declarations:       make(map[string]contract.PackageScopeRepository),
 		v020Declarations:   make(map[string]contract.Declaration),
 	}
-	var legacy world.World
+	var closure repositoryclosure.Closure
 	var resources []Resource
 	if version == "0.1.0" {
-		legacy, err = world.Discover(subject, source)
+		closure, err = repositoryclosure.Discover(subject, source)
 		if err == nil {
-			resources = legacyResources(legacy)
+			resources = legacyResources(closure)
 		}
 	} else {
-		var declared world.DeclaredWorld
-		declared, err = world.DiscoverDeclarations(subject, source)
+		var declared repositoryclosure.DeclaredClosure
+		declared, err = repositoryclosure.DiscoverDeclarations(subject, source)
 		if err == nil {
 			resources = declaredResources(declared)
 		}
@@ -162,10 +171,7 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, err
 	}
-	previousReceipt, err := readWorldReceipt(root)
-	if err != nil {
-		return Result{}, err
-	}
+	previousReceipt := migration.receipt
 
 	desired := make([]gitreconcile.Checkout, 0, len(resources))
 	created := make(map[string]bool, len(resources))
@@ -231,14 +237,14 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, err
 	}
-	receiptChanged, err := writeWorldReceipt(root, resources, previousReceipt, created)
+	receiptChanged, err := writeManagedCheckoutReceipt(root, resources, previousReceipt, created)
 	if err != nil {
 		return Result{}, err
 	}
 	if receiptChanged {
-		changed = append(changed, ".workbench/world.json")
+		changed = append(changed, ".workbench/managed-checkouts.json")
 	}
-	if version == "0.2.0" || version == "0.3.0" {
+	if version == "0.2.0" || version == "0.3.0" || version == "0.4.0" {
 		orientationChanged, err := projectOrientation(ctx, root, subject, resources, evaluatorVersioned, version)
 		if err != nil {
 			return Result{}, err
@@ -248,7 +254,7 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		}
 	}
 	sort.Strings(changed)
-	return Result{World: legacy, Resources: resources, Orphans: orphans, ChangedPaths: changed, ContractVersion: version}, nil
+	return Result{Resources: resources, Orphans: orphans, ChangedPaths: changed, ContractVersion: version}, nil
 }
 
 func reconcileDependencies(ctx context.Context, root, bun string) error {
@@ -337,12 +343,12 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	if err != nil {
 		return contract.Declaration{}, fmt.Errorf("select %q repository contract: %w", github, err)
 	}
-	if source.version != version || (version != "0.2.0" && version != "0.3.0") {
+	if source.version != version || (version != "0.2.0" && version != "0.3.0" && version != "0.4.0") {
 		return contract.Declaration{}, fmt.Errorf("repository %q declaration is %s, want exact %s", github, version, source.version)
 	}
 	var declaration contract.Declaration
 	if filename == "PackageScopeRepository.pkl" {
-		if version == "0.3.0" {
+		if version == "0.3.0" || version == "0.4.0" {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclarationV030(source.ctx, encoded, schema)
 		} else {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclaration(source.ctx, encoded, schema)
@@ -380,7 +386,7 @@ func (source *discoverySource) IdentityAt(canonicalPath string) (string, bool, e
 	if err != nil {
 		return "", true, err
 	}
-	if (source.version == "0.2.0" || source.version == "0.3.0") && strings.HasPrefix(filepath.ToSlash(canonicalPath), "pkg/") {
+	if (source.version == "0.2.0" || source.version == "0.3.0" || source.version == "0.4.0") && strings.HasPrefix(filepath.ToSlash(canonicalPath), "pkg/") {
 		// PackageScope identity is derived from the closed placement arm, while
 		// origin remains independent and must still name the declaration source.
 		for github, declaration := range source.v020Declarations {
@@ -453,11 +459,23 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 	case localV030AgentInstructionsURI:
 		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
 		return value, "0.3.0", err
+	case localV040SubjectURI:
+		value, err := evaluate.LocalContract(uri, localSubjectContract)
+		return value, "0.4.0", err
+	case localV040PackageScopeURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		return value, "0.4.0", err
+	case localV040RepositoryURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryDeclarationContract)
+		return value, "0.4.0", err
+	case localV040AgentInstructionsURI:
+		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
+		return value, "0.4.0", err
 	default:
 		version := ""
-		for _, candidate := range []string{"0.1.0", "0.2.0", "0.3.0"} {
-			needle := "/releases/download/" + candidate + "/workbench@" + candidate + "#/"
-			if strings.Contains(uri, needle) {
+		for _, candidate := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0"} {
+			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate + "/workbench@" + candidate + "#/" + filename
+			if uri == exact {
 				version = candidate
 			}
 		}
@@ -506,7 +524,7 @@ func observePackages(root string, resources []Resource, contractVersion string) 
 }
 
 func locatePackage(resourceRoot string, resource Resource, name, contractVersion string, allowRoot bool) (string, error) {
-	if contractVersion == "0.3.0" && resource.Shape.Kind == contract.PackageScopeShape {
+	if (contractVersion == "0.3.0" || contractVersion == "0.4.0") && resource.Shape.Kind == contract.PackageScopeShape {
 		return locatePackageScopePackage(resourceRoot, resource.Shape.Scope, name)
 	}
 	return locateLegacyPackage(resourceRoot, name, allowRoot)
@@ -675,7 +693,7 @@ type skillProjectionPlan struct {
 	entries []skillProjectionEntry
 }
 
-func planSkills(root string, resources []Resource, contractVersion string, previous worldReceipt) (skillProjectionPlan, error) {
+func planSkills(root string, resources []Resource, contractVersion string, previous managedCheckoutReceipt) (skillProjectionPlan, error) {
 	sources := make([]skills.Source, 0, len(resources))
 	for _, resource := range resources {
 		sources = append(sources, skills.Source{Root: filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))})

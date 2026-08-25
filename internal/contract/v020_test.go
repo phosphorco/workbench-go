@@ -48,7 +48,7 @@ func TestV020ClosedResourceShapesDeriveIdentityAndPlacement(t *testing.T) {
 
 func TestV020AgentInstructionsAcceptOnlyExplicitFacts(t *testing.T) {
 	instructions, err := DecodeAgentInstructions([]byte(`{
-  "prose":"Work inside this assembled World.",
+  "prose":"Work inside this assembled Workbench.",
   "subject":{"workLine":{"branch":"workbench/proof-0.2.0","baseBranch":"main"},"entrypoints":["https://github.com/phosphorco/workbench-fixture-entry"]},
   "resources":[{"identity":"@workbench-entry","github":"phosphorco/workbench-fixture-entry","shape":{"kind":"packageScope","scope":"@workbench-entry"},"canonicalPath":"pkg/@workbench-entry","branch":"workbench/proof-0.2.0","health":"healthy"}],
   "generatedPaths":["AGENTS.md","package.json"],
@@ -97,8 +97,8 @@ func TestV020CommitPlanModelsExactAtomicSelections(t *testing.T) {
 	}
 }
 
-func TestV020WorldSnapshotRecordsExactWorldWithoutBranchAuthority(t *testing.T) {
-	snapshot, err := DecodeWorkbenchWorldSnapshot([]byte(`{
+func TestWorkbenchSnapshotRecordsExactParticipatingRepositoryRevisionsWithoutBranchAuthority(t *testing.T) {
+	snapshot, err := DecodeWorkbenchSnapshot([]byte(`{
   "resources":{
     "@workbench-entry":{"shape":{"kind":"packageScope","scope":"@workbench-entry"},"github":"phosphorco/workbench-fixture-entry","canonicalPath":"pkg/@workbench-entry","commit":"0123456789abcdef0123456789abcdef01234567"},
     "phosphorco/workbench-fixture-library":{"shape":{"kind":"repository"},"github":"phosphorco/workbench-fixture-library","canonicalPath":"repos/workbench-fixture-library","commit":"89abcdef0123456789abcdef0123456789abcdef"}
@@ -116,7 +116,7 @@ func TestV020WorldSnapshotRecordsExactWorldWithoutBranchAuthority(t *testing.T) 
 		`{"resources":{"wrong":{"shape":{"kind":"packageScope","scope":"@entry"},"github":"phosphorco/entry","canonicalPath":"pkg/@entry","commit":"0123456789abcdef0123456789abcdef01234567"}}}`,
 		`{"resources":{"phosphorco/library":{"shape":{"kind":"repository"},"github":"phosphorco/library","canonicalPath":"repos/elsewhere","commit":"0123456789abcdef0123456789abcdef01234567"}}}`,
 	} {
-		if _, err := DecodeWorkbenchWorldSnapshot([]byte(encoded)); err == nil {
+		if _, err := DecodeWorkbenchSnapshot([]byte(encoded)); err == nil {
 			t.Fatalf("invalid snapshot decoded: %s", encoded)
 		}
 	}

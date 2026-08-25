@@ -19,6 +19,7 @@ import (
 	"github.com/phosphorco/workbench-go/internal/change"
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/evaluate"
+	"github.com/phosphorco/workbench-go/internal/legacy/v020v030snapshot"
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	workbenchruntime "github.com/phosphorco/workbench-go/internal/runtime"
 	"github.com/phosphorco/workbench-go/internal/setup"
@@ -27,6 +28,8 @@ import (
 )
 
 const generatedPolicyID = "workbench-0.2-generated-projections-v2"
+
+const currentContractVersion = "0.4.0"
 
 var releasedAmendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
 
@@ -160,7 +163,7 @@ func runCommit(ctx context.Context, root, planName string, environment commandEn
 	if err != nil {
 		return "", fmt.Errorf("read commit plan: %w", err)
 	}
-	schema, err := lifecycleContractForWorld(source, "WorkbenchCommitPlan.pkl", result.ContractVersion)
+	schema, err := releasedCommitPlanContract(source, result.ContractVersion)
 	if err != nil {
 		return "", err
 	}
@@ -185,7 +188,7 @@ func runCommit(ctx context.Context, root, planName string, environment commandEn
 	for _, identity := range identities {
 		resource, exists := resources[identity]
 		if !exists {
-			return "", fmt.Errorf("commit plan resource %q is not in the current World", identity)
+			return "", fmt.Errorf("commit plan resource %q is not a participating repository", identity)
 		}
 		selection := plan.Commits[identity]
 		requests = append(requests, change.Request{
@@ -259,7 +262,7 @@ func releasedContractURI(contractVersion, filename string) string {
 
 func lifecycleContractURI(contractVersion, filename string) (string, error) {
 	switch contractVersion {
-	case "0.2.0", "0.3.0":
+	case "0.2.0", "0.3.0", currentContractVersion:
 		return releasedContractURI(contractVersion, filename), nil
 	case "0.1.0":
 		return "", fmt.Errorf("Workbench 0.1.0 has no released %s contract", filename)
@@ -276,7 +279,7 @@ func amendedContractURI(source []byte) (string, error) {
 	return string(match[1]), nil
 }
 
-func releasedContractForWorld(source []byte, filename, contractVersion string, supportedVersions ...string) (evaluate.Contract, error) {
+func releasedContractForSubjectLine(source []byte, filename, contractVersion string, supportedVersions ...string) (evaluate.Contract, error) {
 	supported := false
 	for _, candidate := range supportedVersions {
 		if contractVersion == candidate {
@@ -298,29 +301,45 @@ func releasedContractForWorld(source []byte, filename, contractVersion string, s
 	return evaluate.ReleasedContract(want)
 }
 
-func lifecycleContractForWorld(source []byte, filename, contractVersion string) (evaluate.Contract, error) {
+func releasedCommitPlanContract(source []byte, contractVersion string) (evaluate.Contract, error) {
+	const filename = "WorkbenchCommitPlan.pkl"
 	if _, err := lifecycleContractURI(contractVersion, filename); err != nil {
 		return evaluate.Contract{}, err
 	}
-	return releasedContractForWorld(source, filename, contractVersion, "0.2.0", "0.3.0")
+	return releasedContractForSubjectLine(source, filename, contractVersion, "0.2.0", "0.3.0", currentContractVersion)
 }
 
-func releasedLifecycleContractFromSource(source []byte, filename string) (evaluate.Contract, string, error) {
+type snapshotContractKind uint8
+
+const (
+	currentSnapshotContract snapshotContractKind = iota + 1
+	legacyV020V030SnapshotContract
+)
+
+func releasedSnapshotContractFromSource(source []byte) (evaluate.Contract, snapshotContractKind, error) {
 	got, err := amendedContractURI(source)
 	if err != nil {
-		return evaluate.Contract{}, "", err
+		return evaluate.Contract{}, 0, err
+	}
+	current := releasedContractURI(currentContractVersion, "WorkbenchSnapshot.pkl")
+	if got == current {
+		schema, err := evaluate.ReleasedContract(current)
+		return schema, currentSnapshotContract, err
 	}
 	for _, contractVersion := range []string{"0.2.0", "0.3.0"} {
-		want := releasedContractURI(contractVersion, filename)
+		want, err := v020v030snapshot.ContractURI(contractVersion)
+		if err != nil {
+			return evaluate.Contract{}, 0, err
+		}
 		if got == want {
 			schema, err := evaluate.ReleasedContract(want)
-			return schema, contractVersion, err
+			return schema, legacyV020V030SnapshotContract, err
 		}
 	}
-	if got == releasedContractURI("0.1.0", filename) {
-		return evaluate.Contract{}, "", fmt.Errorf("Workbench 0.1.0 has no released %s contract", filename)
+	if got == releasedContractURI("0.1.0", v020v030snapshot.Filename) {
+		return evaluate.Contract{}, 0, errors.New("Workbench 0.1.0 has no released snapshot contract")
 	}
-	return evaluate.Contract{}, "", fmt.Errorf("Pkl source amends unsupported Workbench contract %q for %s", got, filename)
+	return evaluate.Contract{}, 0, fmt.Errorf("Pkl source amends unsupported Workbench Snapshot contract %q", got)
 }
 
 func evaluateSubject(ctx context.Context, root string, evaluator evaluate.Evaluator, contractVersion string) (contract.Subject, error) {
@@ -328,7 +347,7 @@ func evaluateSubject(ctx context.Context, root string, evaluator evaluate.Evalua
 	if err != nil {
 		return contract.Subject{}, fmt.Errorf("read workbench-subject.pkl: %w", err)
 	}
-	schema, err := releasedContractForWorld(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0")
+	schema, err := releasedContractForSubjectLine(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", currentContractVersion)
 	if err != nil {
 		return contract.Subject{}, err
 	}
@@ -340,10 +359,7 @@ func recordSnapshot(ctx context.Context, root, output string, environment comman
 	if err != nil {
 		return "", err
 	}
-	snapshotURI, err := lifecycleContractURI(result.ContractVersion, "WorkbenchWorldSnapshot.pkl")
-	if err != nil {
-		return "", err
-	}
+	snapshotURI := releasedContractURI(currentContractVersion, "WorkbenchSnapshot.pkl")
 	resources := make([]snapshot.Resource, 0, len(result.Resources))
 	for _, resource := range result.Resources {
 		checkout := filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))
@@ -368,7 +384,7 @@ func recordSnapshot(ctx context.Context, root, output string, environment comman
 	if err := atomicWrite(path, encoded); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Recorded exact World snapshot at %s", output), nil
+	return fmt.Sprintf("Recorded Workbench Snapshot at %s", output), nil
 }
 
 func requirePublicCommit(ctx context.Context, github, commit string) error {
@@ -384,7 +400,7 @@ func requirePublicCommit(ctx context.Context, github, commit string) error {
 	return fmt.Errorf("commit %s is not reachable from an advertised public ref", commit)
 }
 
-func renderSnapshot(value contract.WorkbenchWorldSnapshot, contractURI string) []byte {
+func renderSnapshot(value contract.WorkbenchSnapshot, contractURI string) []byte {
 	identities := make([]string, 0, len(value.Resources))
 	for identity := range value.Resources {
 		identities = append(identities, identity)
@@ -413,13 +429,21 @@ func reproduceSnapshot(ctx context.Context, root, input string, evaluator evalua
 	}
 	source, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read World snapshot: %w", err)
+		return "", fmt.Errorf("read Workbench Snapshot: %w", err)
 	}
-	schema, _, err := releasedLifecycleContractFromSource(source, "WorkbenchWorldSnapshot.pkl")
+	schema, kind, err := releasedSnapshotContractFromSource(source)
 	if err != nil {
 		return "", err
 	}
-	value, err := evaluator.EvaluateWorkbenchWorldSnapshot(ctx, source, schema)
+	var value contract.WorkbenchSnapshot
+	switch kind {
+	case currentSnapshotContract:
+		value, err = evaluator.EvaluateWorkbenchSnapshot(ctx, source, schema)
+	case legacyV020V030SnapshotContract:
+		value, err = evaluator.EvaluateLegacyV020V030Snapshot(ctx, source, schema)
+	default:
+		return "", errors.New("snapshot contract selection is invalid")
+	}
 	if err != nil {
 		return "", err
 	}
@@ -437,9 +461,13 @@ func reproduceSnapshot(ctx context.Context, root, input string, evaluator evalua
 	}
 	acquireCount, verifiedCount := verified.Counts()
 	if acquireCount != 0 || verifiedCount != len(value.Resources) {
-		return "", errors.New("snapshot reproduction did not converge to the exact World")
+		return "", errors.New("snapshot reproduction did not converge to the exact participating-repository revisions")
 	}
-	return fmt.Sprintf("Reproduced and verified %d exact repositories", verifiedCount), nil
+	return snapshotReproductionReport(verifiedCount), nil
+}
+
+func snapshotReproductionReport(repositoryCount int) string {
+	return fmt.Sprintf("Reproduced and verified %d exact %s", repositoryCount, plural(repositoryCount, "repository", "repositories"))
 }
 
 type snapshotGit struct {
@@ -448,8 +476,8 @@ type snapshotGit struct {
 	resources map[string]contract.SnapshotResource
 }
 
-func (world *snapshotGit) Observe(canonicalPath string) (snapshot.Checkout, error) {
-	path := filepath.Join(world.root, filepath.FromSlash(canonicalPath))
+func (repositories *snapshotGit) Observe(canonicalPath string) (snapshot.Checkout, error) {
+	path := filepath.Join(repositories.root, filepath.FromSlash(canonicalPath))
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return snapshot.Checkout{}, nil
@@ -460,11 +488,11 @@ func (world *snapshotGit) Observe(canonicalPath string) (snapshot.Checkout, erro
 	if !info.IsDir() {
 		return snapshot.Checkout{}, fmt.Errorf("observe snapshot path %q: destination is not a directory", canonicalPath)
 	}
-	resource, exists := world.resourceAt(canonicalPath)
+	resource, exists := repositories.resourceAt(canonicalPath)
 	if !exists {
 		return snapshot.Checkout{}, fmt.Errorf("snapshot has no resource at %q", canonicalPath)
 	}
-	github, err := originGitHub(world.ctx, path)
+	github, err := originGitHub(repositories.ctx, path)
 	if err != nil {
 		return snapshot.Checkout{}, err
 	}
@@ -472,37 +500,37 @@ func (world *snapshotGit) Observe(canonicalPath string) (snapshot.Checkout, erro
 	if err != nil {
 		return snapshot.Checkout{}, err
 	}
-	head, err := gitText(world.ctx, path, "rev-parse", "HEAD")
+	head, err := gitText(repositories.ctx, path, "rev-parse", "HEAD")
 	if err != nil {
 		return snapshot.Checkout{}, err
 	}
-	status, err := git(world.ctx, path, "status", "--porcelain=v2", "-z", "--untracked-files=all")
+	status, err := git(repositories.ctx, path, "status", "--porcelain=v2", "-z", "--untracked-files=all")
 	if err != nil {
 		return snapshot.Checkout{}, err
 	}
 	return snapshot.Checkout{Exists: true, GitHub: github, Identity: identity, Commit: head, Clean: len(status) == 0}, nil
 }
 
-func (world *snapshotGit) CreateExactIfAbsent(acquisition snapshot.Acquisition) error {
-	path := filepath.Join(world.root, filepath.FromSlash(acquisition.CanonicalPath))
+func (repositories *snapshotGit) CreateExactIfAbsent(acquisition snapshot.Acquisition) error {
+	path := filepath.Join(repositories.root, filepath.FromSlash(acquisition.CanonicalPath))
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("snapshot destination %q is no longer absent", acquisition.CanonicalPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if _, err := git(world.ctx, "", "clone", "--no-checkout", "https://github.com/"+acquisition.GitHub+".git", path); err != nil {
+	if _, err := git(repositories.ctx, "", "clone", "--no-checkout", "https://github.com/"+acquisition.GitHub+".git", path); err != nil {
 		return err
 	}
-	if _, err := git(world.ctx, path, "cat-file", "-e", acquisition.Commit+"^{commit}"); err != nil {
+	if _, err := git(repositories.ctx, path, "cat-file", "-e", acquisition.Commit+"^{commit}"); err != nil {
 		return fmt.Errorf("exact public commit is absent after clone: %w", err)
 	}
-	_, err := git(world.ctx, path, "checkout", "--detach", acquisition.Commit)
+	_, err := git(repositories.ctx, path, "checkout", "--detach", acquisition.Commit)
 	return err
 }
 
-func (world *snapshotGit) resourceAt(path string) (contract.SnapshotResource, bool) {
-	for _, resource := range world.resources {
+func (repositories *snapshotGit) resourceAt(path string) (contract.SnapshotResource, bool) {
+	for _, resource := range repositories.resources {
 		if resource.CanonicalPath == path {
 			return resource, true
 		}
@@ -541,14 +569,14 @@ func pruneCheckouts(ctx context.Context, root string, identities []string, envir
 		candidates = append(candidates, candidate)
 		disposable[identity] = true
 	}
-	world := make([]orphan.Resource, 0, len(result.Resources))
+	participatingRepositories := make([]orphan.Resource, 0, len(result.Resources))
 	for _, resource := range result.Resources {
-		world = append(world, orphan.Resource{Identity: resource.Identity, GitHub: resource.GitHub, Shape: resource.Shape, CanonicalPath: resource.CanonicalPath})
+		participatingRepositories = append(participatingRepositories, orphan.Resource{Identity: resource.Identity, GitHub: resource.GitHub, Shape: resource.Shape, CanonicalPath: resource.CanonicalPath})
 	}
 	observe := func(candidate orphan.Candidate) (orphan.Observation, error) {
 		return observeOrphan(ctx, candidate, disposable[candidate.Identity])
 	}
-	plan, err := orphan.Preflight(orphan.Request{Root: root, World: world, Candidates: candidates}, observe)
+	plan, err := orphan.Preflight(orphan.Request{Root: root, RepositoryClosure: participatingRepositories, Candidates: candidates}, observe)
 	if err != nil {
 		return "", err
 	}

@@ -40,14 +40,14 @@ func TestWorkbenchFirstMeaningfulSlice(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	anonymousEnvironment := publicEnvironment(testRoot, anonymousHome)
+	anonymousEnvironment := publicEnvironment(t, moduleRoot, testRoot, anonymousHome)
 	binary := buildPublicCLI(t, moduleRoot)
 
 	t.Run("assembles and converges", func(t *testing.T) {
 		workbench := newPublicWorkbench(t, testRoot, "convergent-workbench", anonymousEnvironment)
 		firstOutput := runSetup(t, binary, workbench, anonymousEnvironment)
 		if !strings.Contains(firstOutput, "Workbench reconciled 2 repositories") {
-			t.Fatalf("first setup did not report the real two-repository world:\n%s", firstOutput)
+			t.Fatalf("first setup did not report the real two-repository Workbench:\n%s", firstOutput)
 		}
 
 		entry := filepath.Join(workbench, "pkg", "@workbench-entry")
@@ -97,7 +97,7 @@ func TestWorkbenchFirstMeaningfulSlice(t *testing.T) {
 			t.Fatalf("setup consumed Git-owned source state: status before %q after %q", beforeStatus, afterStatus)
 		}
 		if status := publicGit(t, anonymousEnvironment, workbench, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
-			t.Fatalf("outer context observes ignored local/generated world:\n%s", status)
+			t.Fatalf("outer context observes ignored local/generated Workbench state:\n%s", status)
 		}
 	})
 
@@ -196,10 +196,12 @@ entrypoints {
 	return root
 }
 
-func publicEnvironment(testRoot, anonymousHome string) []string {
+func publicEnvironment(t *testing.T, moduleRoot, testRoot, anonymousHome string) []string {
+	t.Helper()
 	drop := []string{
 		"GH_TOKEN=", "GITHUB_TOKEN=", "GIT_ASKPASS=", "SSH_ASKPASS=", "GIT_CONFIG_",
 		"HOME=", "XDG_CONFIG_HOME=", "XDG_CACHE_HOME=", "XDG_RUNTIME_DIR=", "NPM_CONFIG_USERCONFIG=", "NODE_AUTH_TOKEN=", "NPM_TOKEN=",
+		"MISE_",
 	}
 	environment := make([]string, 0, len(os.Environ())+8)
 	for _, variable := range os.Environ() {
@@ -214,6 +216,8 @@ func publicEnvironment(testRoot, anonymousHome string) []string {
 			environment = append(environment, variable)
 		}
 	}
+	toolPath := developmentToolPath(t, moduleRoot, testRoot, "pkl")
+	bunPath := developmentToolPath(t, moduleRoot, testRoot, "bun")
 	return append(environment,
 		"HOME="+anonymousHome,
 		"XDG_CONFIG_HOME="+filepath.Join(anonymousHome, ".config"),
@@ -225,8 +229,31 @@ func publicEnvironment(testRoot, anonymousHome string) []string {
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_TERMINAL_PROMPT=0",
 		"BUN_INSTALL_CACHE_DIR="+filepath.Join(testRoot, "bun-cache"),
+		"PATH="+filepath.Dir(toolPath)+string(os.PathListSeparator)+filepath.Dir(bunPath)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"TMPDIR="+filepath.Join(testRoot, "tmp"),
 	)
+}
+
+func developmentToolPath(t *testing.T, moduleRoot, testRoot, name string) string {
+	t.Helper()
+	command := exec.Command("mise", "which", name)
+	command.Dir = moduleRoot
+	command.Env = append(os.Environ(),
+		"MISE_CACHE_DIR="+filepath.Join(testRoot, "mise-cache"),
+		"MISE_CONFIG_FILE="+filepath.Join(moduleRoot, "mise.toml"),
+		"MISE_LOG_LEVEL=error",
+		"MISE_STATE_DIR="+filepath.Join(testRoot, "mise-state"),
+		"MISE_TRUSTED_CONFIG_PATHS="+filepath.Join(moduleRoot, "mise.toml"),
+	)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("resolve development %s: %v", name, err)
+	}
+	path := strings.TrimSpace(string(output))
+	if !filepath.IsAbs(path) {
+		t.Fatalf("development %s path = %q, want absolute path", name, path)
+	}
+	return path
 }
 
 func runSetup(t *testing.T, binary, workbench string, environment []string) string {

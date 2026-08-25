@@ -42,7 +42,7 @@ packages {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("immutable 0.2 PackageScope contract rejected its historical declaration: %v\n%s", err, output)
 	}
-	if v020ReleasePackageURI == v030ReleasePackageURI || v020ReleasePackageZIP == v030ReleasePackageZIP {
-		t.Fatal("0.2 compatibility designation collapsed into the 0.3 candidate")
+	if v020ReleasePackageURI == currentReleasePackageURI || v020ReleasePackageZIP == currentReleasePackageZIP {
+		t.Fatal("0.2 compatibility designation collapsed into the current candidate")
 	}
 }

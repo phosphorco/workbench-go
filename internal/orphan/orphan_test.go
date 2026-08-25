@@ -35,6 +35,35 @@ func TestReportOrphansNeverDeletes(t *testing.T) {
 	}
 }
 
+func TestPreflightRefusesParticipatingRepository(t *testing.T) {
+	root := t.TempDir()
+	candidate := repositoryCandidate(root, "phosphorco/library")
+	mustMkdir(t, candidate.Path)
+	participatingRepository := orphan.Resource{
+		Identity:      candidate.Identity,
+		GitHub:        candidate.GitHub,
+		Shape:         candidate.Shape,
+		CanonicalPath: candidate.CanonicalPath,
+	}
+	observer := fixedObserver(map[string]orphan.Observation{candidate.Path: safeObservation(candidate)})
+
+	plan, err := orphan.Preflight(orphan.Request{
+		Root:              root,
+		RepositoryClosure: []orphan.Resource{participatingRepository},
+		Candidates:        []orphan.Candidate{candidate},
+	}, observer)
+	if err == nil {
+		t.Fatalf("participating repository received deletion authorization: %#v", plan)
+	}
+	removeCalls := 0
+	if _, applyErr := orphan.Apply(plan, observer, func(string) error { removeCalls++; return nil }); applyErr == nil {
+		t.Fatal("refused plan applied")
+	}
+	if removeCalls != 0 {
+		t.Fatalf("remover called %d times", removeCalls)
+	}
+}
+
 func TestPreflightRefusalsAuthorizeZeroDeletion(t *testing.T) {
 	root := t.TempDir()
 	candidate := repositoryCandidate(root, "phosphorco/library")

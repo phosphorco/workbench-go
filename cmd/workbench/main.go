@@ -6,15 +6,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
+	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/setup"
 	"github.com/phosphorco/workbench-go/internal/version"
 )
 
 const (
 	defaultCommitPlan = "commit-plan.pkl"
-	defaultSnapshot   = ".workbench/world-snapshot.pkl"
+	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
 	usage             = "usage: workbench setup | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | version"
 )
 
@@ -100,10 +102,19 @@ func runWith(ctx context.Context, arguments []string, workingDirectory func() (s
 			return fmt.Errorf("setup: %w", err)
 		}
 		repositories := len(result.Resources)
-		if repositories == 0 {
-			repositories = len(result.World.Resources)
+		var report strings.Builder
+		fmt.Fprintf(&report, "Workbench reconciled %d %s; %d generated %s changed.", repositories, plural(repositories, "repository", "repositories"), len(result.ChangedPaths), plural(len(result.ChangedPaths), "path", "paths"))
+		orphans := slices.Clone(result.Orphans)
+		slices.SortFunc(orphans, func(left, right orphan.Candidate) int {
+			if order := strings.Compare(left.Identity, right.Identity); order != 0 {
+				return order
+			}
+			return strings.Compare(left.CanonicalPath, right.CanonicalPath)
+		})
+		for _, candidate := range orphans {
+			fmt.Fprintf(&report, "\nOrphaned checkout: %s at %s", candidate.Identity, candidate.CanonicalPath)
 		}
-		return writeReport(output, fmt.Sprintf("Workbench reconciled %d repositories; %d generated paths changed.", repositories, len(result.ChangedPaths)))
+		return writeReport(output, report.String())
 	case commandCommit:
 		if application.commit == nil {
 			return errors.New("commit application is absent")
@@ -143,6 +154,13 @@ func runWith(ctx context.Context, arguments []string, workingDirectory func() (s
 	default:
 		return errors.New(usage)
 	}
+}
+
+func plural(count int, singular, plural string) string {
+	if count == 1 {
+		return singular
+	}
+	return plural
 }
 
 func parseInvocation(arguments []string) (invocation, error) {

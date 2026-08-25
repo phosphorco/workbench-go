@@ -1,4 +1,4 @@
-module phosphor.workbench.WorkbenchWorldSnapshot
+module phosphor.workbench.WorkbenchSnapshot
 
 typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
 typealias GitHubRepository =

@@ -1,4 +1,4 @@
-package world
+package repositoryclosure
 
 import (
 	"fmt"
@@ -21,7 +21,8 @@ type Resource struct {
 	Declaration   contract.PackageScopeRepository
 }
 
-type World struct {
+// Closure is the least recursively included set of participating repositories.
+type Closure struct {
 	Resources []Resource
 }
 
@@ -50,13 +51,13 @@ type claim struct {
 }
 
 // Discover computes the least repository closure rooted at Subject entrypoints.
-// It does not acquire repositories or mutate the observed world.
-func Discover(subject contract.Subject, source Source) (World, error) {
+// It neither acquires repositories nor mutates an observed checkout.
+func Discover(subject contract.Subject, source Source) (Closure, error) {
 	if source == nil {
-		return World{}, fmt.Errorf("discover world: source is nil")
+		return Closure{}, fmt.Errorf("discover repository closure: source is nil")
 	}
 	if err := subject.Validate(); err != nil {
-		return World{}, fmt.Errorf("discover world: %w", err)
+		return Closure{}, fmt.Errorf("discover repository closure: %w", err)
 	}
 
 	discovery := discovery{
@@ -70,7 +71,7 @@ func Discover(subject contract.Subject, source Source) (World, error) {
 	for _, entrypoint := range subject.Entrypoints {
 		identity, err := contract.GitHubIdentity(entrypoint)
 		if err != nil {
-			return World{}, fmt.Errorf("discover entrypoint %q: %w", entrypoint, err)
+			return Closure{}, fmt.Errorf("discover entrypoint %q: %w", entrypoint, err)
 		}
 		discovery.pending = append(discovery.pending, claim{identity: identity})
 	}
@@ -85,7 +86,7 @@ func Discover(subject contract.Subject, source Source) (World, error) {
 		next := discovery.pending[0]
 		discovery.pending = discovery.pending[1:]
 		if err := discovery.reach(next); err != nil {
-			return World{}, err
+			return Closure{}, err
 		}
 	}
 
@@ -99,7 +100,7 @@ func Discover(subject contract.Subject, source Source) (World, error) {
 		}
 		return resources[left].CanonicalPath < resources[right].CanonicalPath
 	})
-	return World{Resources: resources}, nil
+	return Closure{Resources: resources}, nil
 }
 
 type discovery struct {
@@ -150,10 +151,8 @@ func (state *discovery) reach(next claim) error {
 	state.identityByPath[canonicalPath] = next.identity
 
 	state.loaded[next.identity] = Resource{
-		Identity:      next.identity,
-		Designation:   declaration.Scope,
-		CanonicalPath: canonicalPath,
-		Declaration:   cloneDeclaration(declaration),
+		Identity: next.identity, Designation: declaration.Scope,
+		CanonicalPath: canonicalPath, Declaration: clonePackageScopeRepository(declaration),
 	}
 
 	designations := make([]string, 0, len(declaration.Includes))
@@ -175,7 +174,7 @@ func (state *discovery) reach(next claim) error {
 	return nil
 }
 
-func (state *discovery) claimDesignation(identity string, designation string) error {
+func (state *discovery) claimDesignation(identity, designation string) error {
 	if designation == "" {
 		return nil
 	}
@@ -198,49 +197,43 @@ func normalizeGitHubName(name string) (string, error) {
 	return identity, nil
 }
 
-func conflict(kind ConflictKind, key string, existing string, claimed string) error {
+func conflict(kind ConflictKind, key, existing, claimed string) error {
 	return &ConflictError{Kind: kind, Key: key, Existing: existing, Claimed: claimed}
 }
 
-func cloneDeclaration(declaration contract.PackageScopeRepository) contract.PackageScopeRepository {
+func clonePackageScopeRepository(declaration contract.PackageScopeRepository) contract.PackageScopeRepository {
 	includes := make(map[string]contract.Include, len(declaration.Includes))
 	for designation, include := range declaration.Includes {
 		include.Skills = cloneSkillPolicy(include.Skills)
 		includes[designation] = include
 	}
-	packages := make(map[string]contract.PackagePolicy, len(declaration.Packages))
-	for name, policy := range declaration.Packages {
-		policy.RequiredButNotReferenced = cloneStringMap(policy.RequiredButNotReferenced)
-		policy.PeerDependencies = cloneStringMap(policy.PeerDependencies)
-		policy.OptionalDependencies = cloneStringMap(policy.OptionalDependencies)
-		packages[name] = policy
-	}
-	return contract.PackageScopeRepository{
-		Scope:    declaration.Scope,
-		Includes: includes,
-		Packages: packages,
-	}
+	packages := clonePackagePolicies(declaration.Packages)
+	return contract.PackageScopeRepository{Scope: declaration.Scope, Includes: includes, Packages: packages}
 }
 
 func cloneSkillPolicy(policy *contract.SkillPolicy) *contract.SkillPolicy {
 	if policy == nil {
 		return nil
 	}
-	return &contract.SkillPolicy{
-		Editing:   cloneSkillSelection(policy.Editing),
-		Workbench: cloneSkillSelection(policy.Workbench),
-	}
+	return &contract.SkillPolicy{Editing: cloneSkillSelection(policy.Editing), Workbench: cloneSkillSelection(policy.Workbench)}
 }
 
 func cloneSkillSelection(selection *contract.SkillSelection) *contract.SkillSelection {
 	if selection == nil {
 		return nil
 	}
-	return &contract.SkillSelection{
-		All:     selection.All,
-		Domains: append([]string(nil), selection.Domains...),
-		Names:   append([]string(nil), selection.Names...),
+	return &contract.SkillSelection{All: selection.All, Domains: append([]string(nil), selection.Domains...), Names: append([]string(nil), selection.Names...)}
+}
+
+func clonePackagePolicies(source map[string]contract.PackagePolicy) map[string]contract.PackagePolicy {
+	result := make(map[string]contract.PackagePolicy, len(source))
+	for name, policy := range source {
+		policy.RequiredButNotReferenced = cloneStringMap(policy.RequiredButNotReferenced)
+		policy.PeerDependencies = cloneStringMap(policy.PeerDependencies)
+		policy.OptionalDependencies = cloneStringMap(policy.OptionalDependencies)
+		result[name] = policy
 	}
+	return result
 }
 
 func cloneStringMap(source map[string]string) map[string]string {

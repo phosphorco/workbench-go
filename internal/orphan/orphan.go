@@ -1,4 +1,4 @@
-// Package orphan reports checkouts outside the current World and gates their
+// Package orphan reports checkouts outside the current repository closure and gates their
 // explicit removal behind recoverability proof.
 package orphan
 
@@ -34,20 +34,20 @@ type ReportResult struct {
 	Orphans []Candidate
 }
 
-// Report returns present checkouts that are not members of the current World.
+// Report returns present checkouts that are not participating repositories.
 // It receives no deletion capability and cannot mutate a checkout.
-func Report(world []Resource, present []Candidate) (ReportResult, error) {
-	members := make(map[string]struct{}, len(world))
-	canonicalPaths := make(map[string]string, len(world))
-	for index, resource := range world {
+func Report(repositoryClosure []Resource, present []Candidate) (ReportResult, error) {
+	members := make(map[string]struct{}, len(repositoryClosure))
+	canonicalPaths := make(map[string]string, len(repositoryClosure))
+	for index, resource := range repositoryClosure {
 		if err := validateResource(resource); err != nil {
-			return ReportResult{}, fmt.Errorf("World resource %d: %w", index, err)
+			return ReportResult{}, fmt.Errorf("repository closure resource %d: %w", index, err)
 		}
 		if _, exists := members[resource.Identity]; exists {
-			return ReportResult{}, fmt.Errorf("World identity %q is ambiguous", resource.Identity)
+			return ReportResult{}, fmt.Errorf("repository closure identity %q is ambiguous", resource.Identity)
 		}
 		if identity, exists := canonicalPaths[resource.CanonicalPath]; exists {
-			return ReportResult{}, fmt.Errorf("World canonical path %q is claimed by %q and %q", resource.CanonicalPath, identity, resource.Identity)
+			return ReportResult{}, fmt.Errorf("repository closure canonical path %q is claimed by %q and %q", resource.CanonicalPath, identity, resource.Identity)
 		}
 		members[resource.Identity] = struct{}{}
 		canonicalPaths[resource.CanonicalPath] = resource.Identity
@@ -104,9 +104,9 @@ type Observe func(Candidate) (Observation, error)
 type Remove func(path string) error
 
 type Request struct {
-	Root       string
-	World      []Resource
-	Candidates []Candidate
+	Root              string
+	RepositoryClosure []Resource
+	Candidates        []Candidate
 }
 
 type approvedCandidate struct {
@@ -142,12 +142,12 @@ func Preflight(request Request, observe Observe) (Plan, error) {
 		return Plan{}, fmt.Errorf("prune request has no candidates")
 	}
 
-	report, err := Report(request.World, request.Candidates)
+	report, err := Report(request.RepositoryClosure, request.Candidates)
 	if err != nil {
 		return Plan{}, err
 	}
 	if len(report.Orphans) != len(request.Candidates) {
-		return Plan{}, fmt.Errorf("prune request contains a current World member")
+		return Plan{}, fmt.Errorf("prune request contains a participating repository")
 	}
 
 	approved := make([]approvedCandidate, 0, len(request.Candidates))

@@ -60,7 +60,7 @@ func TestAgentOrientationV1ConvergesUpdatesAndPreservesTrackedInput(t *testing.T
 		t.Fatal(err)
 	}
 	if slices.Equal(first, updated) || strings.Contains(string(updated), "@workbench-entry") {
-		t.Fatal("removed World member remained in regenerated orientation")
+		t.Fatal("removed participating repository remained in regenerated orientation")
 	}
 	if got := readFile(t, tracked); got != trackedBefore {
 		t.Fatalf("Git-owned AGENTS.pkl changed: before %q after %q", trackedBefore, got)

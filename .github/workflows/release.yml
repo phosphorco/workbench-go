@@ -1,12 +1,12 @@
-name: Release 0.3.0
+name: Release 0.4.0
 
 on:
   push:
-    tags: ["0.3.0"]
+    tags: ["0.4.0"]
   workflow_dispatch:
 
 env:
-  WORKBENCH_VERSION: 0.3.0
+  WORKBENCH_VERSION: 0.4.0
 
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
         with:
           version: 2026.8.12
           cache: false
-      - name: Verify the exact tag candidate and 0.1 compatibility
+      - name: Verify the exact candidate and 0.1-0.3 compatibility
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -151,7 +151,7 @@ jobs:
           archive=$(find candidate/out -name '*.tar.gz' -type f)
           mkdir candidate/installed
           tar -xzf "$archive" --strip-components=1 -C candidate/installed
-          test "$(candidate/installed/bin/workbench version)" = "workbench 0.3.0 (${{ github.sha }})"
+          test "$(candidate/installed/bin/workbench version)" = "workbench 0.4.0 (${{ github.sha }})"
           candidate/installed/libexec/workbench/pkl --version | grep -F '0.32.1'
           test "$(candidate/installed/libexec/workbench/bun --version)" = '1.3.14'
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
@@ -181,12 +181,12 @@ jobs:
           test "$(sed -n 's/^  version = "\([^"]*\)"$/\1/p' PklProject)" = "$WORKBENCH_VERSION"
           mkdir contracts
           mise exec -- pkl project package --skip-publish-check --output-path contracts .
-          for artifact in contracts/workbench@0.3.0 contracts/workbench@0.3.0.zip; do
+          for artifact in contracts/workbench@0.4.0 contracts/workbench@0.4.0.zip; do
             shasum -a 256 "$artifact" | awk '{print $1}' > "$artifact.sha256"
           done
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: contracts/workbench@0.3.0.zip
+          subject-path: contracts/workbench@0.4.0.zip
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: workbench-contracts
