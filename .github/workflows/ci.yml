@@ -22,4 +22,6 @@ jobs:
           version: 2026.8.12
           cache: false
       - run: go test ./...
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: go vet ./...
