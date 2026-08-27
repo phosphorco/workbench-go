@@ -63,7 +63,7 @@ func TestGeneratedProjectionPolicyRefusesWorkbenchOwnedPathsBeforeRefAdvance(t *
 
 func TestCommitPlanContractsMatchTheExactSubjectRelease(t *testing.T) {
 	t.Parallel()
-	for _, contractVersion := range []string{"0.2.0", "0.3.0", currentContractVersion} {
+	for _, contractVersion := range []string{"0.2.0", "0.3.0", "0.4.0", currentContractVersion} {
 		contractVersion := contractVersion
 		t.Run(contractVersion, func(t *testing.T) {
 			t.Parallel()
@@ -103,6 +103,12 @@ func TestSnapshotContractSelectionDistinguishesCurrentAndExactLegacyIdentities(t
 			t.Fatalf("%s snapshot kind = %v", contractVersion, kind)
 		}
 	}
+	previousURI := releasedContractURI("0.4.0", "WorkbenchSnapshot.pkl")
+	if _, kind, err := releasedSnapshotContractFromSource([]byte("amends \"" + previousURI + "\"\n")); err != nil {
+		t.Fatalf("0.4.0 snapshot contract: %v", err)
+	} else if kind != currentSnapshotContract {
+		t.Fatalf("0.4.0 snapshot kind = %v", kind)
+	}
 	for _, invalid := range []struct {
 		uri  string
 		want string
@@ -119,9 +125,9 @@ func TestSnapshotContractSelectionDistinguishesCurrentAndExactLegacyIdentities(t
 
 func TestReleasedSubjectContractRetainsAllSupportedSubjectLines(t *testing.T) {
 	t.Parallel()
-	for _, contractVersion := range []string{"0.1.0", "0.2.0", "0.3.0", currentContractVersion} {
+	for _, contractVersion := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0", currentContractVersion} {
 		uri := releasedContractURI(contractVersion, "WorkbenchSubject.pkl")
-		if _, err := releasedContractForSubjectLine([]byte("amends \""+uri+"\"\n"), "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", currentContractVersion); err != nil {
+		if _, err := releasedContractForSubjectLine([]byte("amends \""+uri+"\"\n"), "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", currentContractVersion); err != nil {
 			t.Fatalf("%s Subject contract: %v", contractVersion, err)
 		}
 	}

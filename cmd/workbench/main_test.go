@@ -11,6 +11,7 @@ import (
 
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/setup"
+	"github.com/phosphorco/workbench-go/internal/skills"
 	"github.com/phosphorco/workbench-go/internal/version"
 )
 
@@ -28,6 +29,7 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 		{"explicit snapshot", []string{"snapshot", "record", "exact.pkl"}, call{name: "snapshot record", root: "/workbench", values: []string{"exact.pkl"}}},
 		{"reproduce", []string{"snapshot", "reproduce", "exact.pkl"}, call{name: "snapshot reproduce", root: "/workbench", values: []string{"exact.pkl"}}},
 		{"prune", []string{"prune", "@scope", "owner/repository"}, call{name: "prune", root: "/workbench", values: []string{"@scope", "owner/repository"}}},
+		{"skills check", []string{"skills", "check"}, call{name: "skills check", root: "/workbench"}},
 		{"version", []string{"version"}, call{name: "version"}},
 	}
 	for _, test := range tests {
@@ -36,7 +38,7 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 			err := runWith(context.Background(), test.arguments, func() (string, error) {
 				calls = append(calls, call{name: "cwd"})
 				return "/workbench", nil
-			}, io.Discard, recordingApplications(&calls))
+			}, io.Discard, io.Discard, recordingApplications(&calls))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -56,14 +58,14 @@ func TestInvalidCommandsAcquireNoAuthority(t *testing.T) {
 	invalid := [][]string{
 		nil, {"inspect"}, {"setup", "extra"}, {"commit", "a", "b"},
 		{"snapshot"}, {"snapshot", "record", "a", "b"}, {"snapshot", "reproduce"},
-		{"prune"}, {"prune", ""}, {"version", "extra"},
+		{"prune"}, {"prune", ""}, {"skills"}, {"skills", "check", "--root", "/tmp"}, {"skills", "list"}, {"version", "extra"},
 	}
 	for _, arguments := range invalid {
 		var calls []call
 		err := runWith(context.Background(), arguments, func() (string, error) {
 			calls = append(calls, call{name: "cwd"})
 			return "/workbench", nil
-		}, io.Discard, recordingApplications(&calls))
+		}, io.Discard, io.Discard, recordingApplications(&calls))
 		if err == nil || err.Error() != usage {
 			t.Fatalf("run %q error = %v", arguments, err)
 		}
@@ -83,7 +85,7 @@ func TestVersionDoesNotObserveWorkingDirectory(t *testing.T) {
 	if err := runWith(context.Background(), []string{"version"}, func() (string, error) {
 		t.Fatal("version observed cwd")
 		return "", nil
-	}, &output, application); err != nil {
+	}, &output, io.Discard, application); err != nil {
 		t.Fatal(err)
 	}
 	if got := output.String(); got != "workbench 0.3.0 ("+strings.Repeat("a", 40)+")\n" {
@@ -140,7 +142,7 @@ func TestSetupReportsEveryOrphanThroughTheCommandSeam(t *testing.T) {
 			var output bytes.Buffer
 			if err := runWith(context.Background(), []string{"setup"}, func() (string, error) {
 				return "/workbench", nil
-			}, &output, application); err != nil {
+			}, &output, io.Discard, application); err != nil {
 				t.Fatal(err)
 			}
 			if got := output.String(); got != test.want {
@@ -166,7 +168,7 @@ func TestConvergentSetupRepeatsTheSameOrphanReportWithoutReorderingResult(t *tes
 		var output bytes.Buffer
 		if err := runWith(context.Background(), []string{"setup"}, func() (string, error) {
 			return "/workbench", nil
-		}, &output, application); err != nil {
+		}, &output, io.Discard, application); err != nil {
 			t.Fatal(err)
 		}
 		outputs = append(outputs, output.String())
@@ -179,17 +181,131 @@ func TestConvergentSetupRepeatsTheSameOrphanReportWithoutReorderingResult(t *tes
 	}
 }
 
+func TestSetupRendersCatalogWarningsBeforeSuccessWithoutRecomputing(t *testing.T) {
+	t.Parallel()
+	warnings := []skills.Diagnostic{
+		{Source: "phosphorco/entry", Path: "alpha/SKILL.md", Line: 7, Message: "first warning"},
+		{Source: "phosphorco/library", Path: "beta/SKILL.md", Line: 11, Message: "second warning"},
+	}
+	application := recordingApplications(new([]call))
+	application.setup = func(context.Context, string) (setup.Result, error) {
+		return setup.Result{SkillWarnings: warnings}, nil
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runWith(context.Background(), []string{"setup"}, func() (string, error) {
+		return "/workbench", nil
+	}, &stdout, &stderr, application); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stderr.String(), "phosphorco/entry:alpha/SKILL.md:7: warning: first warning\nphosphorco/library:beta/SKILL.md:11: warning: second warning\n"; got != want {
+		t.Fatalf("setup warnings = %q, want %q", got, want)
+	}
+	if got, want := stdout.String(), "Workbench reconciled 0 repositories; 0 generated paths changed.\n"; got != want {
+		t.Fatalf("setup summary = %q, want %q", got, want)
+	}
+	if !reflect.DeepEqual(warnings, []skills.Diagnostic{
+		{Source: "phosphorco/entry", Path: "alpha/SKILL.md", Line: 7, Message: "first warning"},
+		{Source: "phosphorco/library", Path: "beta/SKILL.md", Line: 11, Message: "second warning"},
+	}) {
+		t.Fatalf("setup warning carrier mutated: %#v", warnings)
+	}
+}
+
 func TestWorkingDirectoryFailurePrecedesApplication(t *testing.T) {
 	t.Parallel()
 	want := errors.New("unavailable")
 	var calls []call
-	err := runWith(context.Background(), []string{"setup"}, func() (string, error) { return "", want }, io.Discard, recordingApplications(&calls))
+	err := runWith(context.Background(), []string{"setup"}, func() (string, error) { return "", want }, io.Discard, io.Discard, recordingApplications(&calls))
 	if err == nil || !strings.Contains(err.Error(), want.Error()) {
 		t.Fatalf("run error = %v", err)
 	}
 	if len(calls) != 0 {
 		t.Fatalf("application called after cwd failure: %#v", calls)
 	}
+}
+
+func TestSkillsCheckRendersWarningsBeforeIssuesAndRepairAction(t *testing.T) {
+	t.Parallel()
+	application := recordingApplications(new([]call))
+	application.skillsCheck = func(context.Context, string) (skills.Report, error) {
+		return skills.Report{
+			SkillCount:           2,
+			CompositionEdgeCount: 1,
+			Warnings:             []skills.Diagnostic{{Path: "zeta/SKILL.md", Line: 7, Message: "review this reference"}},
+			Issues: []skills.Diagnostic{
+				{Path: "alpha/SKILL.md", Line: 4, Message: "missing link target ../missing/SKILL.md"},
+				{Path: "zeta/SKILL.md", Line: 7, Message: "composition link must name $alpha"},
+			},
+		}, nil
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runWith(context.Background(), []string{"skills", "check"}, func() (string, error) {
+		return "/workbench", nil
+	}, &stdout, &stderr, application)
+	if err == nil || err.Error() != "skills check: 2 skill contract violations" {
+		t.Fatalf("skills check error = %v", err)
+	}
+	if got := stdout.String(); got != "" {
+		t.Fatalf("invalid catalog wrote stdout = %q", got)
+	}
+	want := "zeta/SKILL.md:7: warning: review this reference\n" +
+		"alpha/SKILL.md:4: missing link target ../missing/SKILL.md\n" +
+		"zeta/SKILL.md:7: composition link must name $alpha\n" +
+		"Fix the 2 listed skill contract violations, then rerun 'workbench skills check'.\n"
+	if got := stderr.String(); got != want {
+		t.Fatalf("skills diagnostics = %q, want %q", got, want)
+	}
+}
+
+func TestSkillsCheckWarningsRemainNonblockingAndCounted(t *testing.T) {
+	t.Parallel()
+	application := recordingApplications(new([]call))
+	application.skillsCheck = func(context.Context, string) (skills.Report, error) {
+		return skills.Report{
+			SkillCount:           2,
+			CompositionEdgeCount: 1,
+			Warnings:             []skills.Diagnostic{{Path: "planner/SKILL.md", Line: 8, Message: "cross-domain reference"}},
+		}, nil
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runWith(context.Background(), []string{"skills", "check"}, func() (string, error) {
+		return "/workbench", nil
+	}, &stdout, &stderr, application); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stderr.String(), "planner/SKILL.md:8: warning: cross-domain reference\n"; got != want {
+		t.Fatalf("skills warnings = %q, want %q", got, want)
+	}
+	if got, want := stdout.String(), "2 skills · 1 composition edges · domain, link, and skill-reference contracts valid · 1 warning\n"; got != want {
+		t.Fatalf("skills summary = %q, want %q", got, want)
+	}
+}
+
+func TestSkillsCheckDoesNotMarkDiagnosticWriteFailureAsReported(t *testing.T) {
+	t.Parallel()
+	application := recordingApplications(new([]call))
+	application.skillsCheck = func(context.Context, string) (skills.Report, error) {
+		return skills.Report{Warnings: []skills.Diagnostic{{Path: "skill/SKILL.md", Message: "warning"}}}, nil
+	}
+	err := runWith(context.Background(), []string{"skills", "check"}, func() (string, error) {
+		return "/workbench", nil
+	}, io.Discard, rejectingWriter{}, application)
+	if err == nil || !strings.Contains(err.Error(), "write skill warning") {
+		t.Fatalf("diagnostic write error = %v", err)
+	}
+	var reported reportedError
+	if errors.As(err, &reported) {
+		t.Fatalf("operational write error was marked as already reported: %v", err)
+	}
+}
+
+type rejectingWriter struct{}
+
+func (rejectingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write denied")
 }
 
 func TestBuildIdentitySelectsDevelopmentOrReleasedWithoutFallback(t *testing.T) {
@@ -252,6 +368,10 @@ func recordingApplications(calls *[]call) applications {
 		prune: func(_ context.Context, root string, identities []string) (string, error) {
 			*calls = append(*calls, call{name: "prune", root: root, values: append([]string(nil), identities...)})
 			return "", nil
+		},
+		skillsCheck: func(_ context.Context, root string) (skills.Report, error) {
+			*calls = append(*calls, call{name: "skills check", root: root})
+			return skills.Report{}, nil
 		},
 		version: func() (version.Info, error) {
 			*calls = append(*calls, call{name: "version"})

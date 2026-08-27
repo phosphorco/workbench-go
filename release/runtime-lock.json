@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "workbenchVersion": "0.4.0",
+  "workbenchVersion": "0.5.0",
   "runtimes": {
     "pkl": {
       "version": "0.32.1",
@@ -135,6 +135,17 @@
           "url": "https://raw.githubusercontent.com/vmihailenco/tagparser/2147fb31205921d022818561da850209b44b0097/LICENSE",
           "sha256": "0f02aac22084ef463aa5f42f566feeec6aa4c99653519744a8c25cb079da5b5d",
           "archivePath": "tagparser/LICENSE"
+        }
+      ]
+    },
+    "yaml": {
+      "version": "3.0.1",
+      "sourceRevision": "f6f7691b1fdeb513f56608cd2c32c51f8194bf51",
+      "licenses": [
+        {
+          "url": "https://raw.githubusercontent.com/go-yaml/yaml/f6f7691b1fdeb513f56608cd2c32c51f8194bf51/LICENSE",
+          "sha256": "d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b",
+          "archivePath": "yaml/LICENSE"
         }
       ]
     }

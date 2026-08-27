@@ -16,7 +16,7 @@ func TestWorkbenchLocalMeaningfulSlice(t *testing.T) {
 	}
 
 	schemaURI := func(name string) string {
-		return "workbench-contract:/0.4.0/" + name
+		return "workbench-contract:/0.5.0/" + name
 	}
 
 	fixtureRoot := t.TempDir()
@@ -34,13 +34,19 @@ packages {
 `, schemaURI("PackageScopeRepository.pkl")), map[string]string{
 		"math/src/math.ts": "export const answer = 42\n",
 		"skills/domain-skill/SKILL.md": `---
-domain: engineering
+name: domain-skill
+description: Exercise one engineering-domain resource skill and its explicit composition edge.
+metadata:
+  domain: engineering
 ---
 
 Compose [` + "`$composition-dependency`" + `](../composition-dependency/SKILL.md).
 `,
 		"skills/composition-dependency/SKILL.md": `---
-domain: general
+name: composition-dependency
+description: Supply the explicit composition dependency used by the domain skill.
+metadata:
+  domain: general
 ---
 
 Required composition support.

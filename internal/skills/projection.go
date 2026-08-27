@@ -10,124 +10,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
-
-	"github.com/phosphorco/workbench-go/internal/contract"
 )
-
-var compositionLinkPattern = regexp.MustCompile(`\[\x60\$([a-z0-9][a-z0-9-]*)\x60\]\([^)]+\)`)
-var skillNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 const ownershipManifestRelativePath = ".agents/skills/.workbench-owned.json"
 const ownershipManifestVersion = 1
-
-type Source struct {
-	Root string
-}
-
-type Skill struct {
-	Name         string
-	Domain       string
-	Dependencies []string
-	Files        map[string][]byte
-}
-
-type Inventory map[string]Skill
-
-func Discover(sources []Source) (Inventory, error) {
-	return discover(sources, "skills")
-}
-
-// DiscoverLegacy reads the historical 0.1 source layout. Current contract
-// lines must use Discover so authored source and generated projection never
-// share an ownership path.
-func DiscoverLegacy(sources []Source) (Inventory, error) {
-	return discover(sources, filepath.Join(".agents", "skills"))
-}
-
-func discover(sources []Source, sourcePath string) (Inventory, error) {
-	inventory := make(Inventory)
-	for _, source := range sources {
-		root := filepath.Join(source.Root, sourcePath)
-		info, err := os.Lstat(root)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect skill root %q: %w", root, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return nil, fmt.Errorf("skill root %q is not a real directory", root)
-		}
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			return nil, fmt.Errorf("read skill root %q: %w", root, err)
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			skill, err := readSkill(filepath.Join(root, entry.Name()), entry.Name())
-			if err != nil {
-				return nil, err
-			}
-			if previous, exists := inventory[skill.Name]; exists {
-				if !equalSkill(previous, skill) {
-					return nil, fmt.Errorf("skill %q has conflicting sources", skill.Name)
-				}
-				continue
-			}
-			inventory[skill.Name] = skill
-		}
-	}
-	return inventory, nil
-}
-
-func Select(inventory Inventory, selection contract.SkillSelection) ([]Skill, error) {
-	selected := make(map[string]struct{})
-	for name, skill := range inventory {
-		if selection.All || contains(selection.Domains, skill.Domain) || contains(selection.Names, name) {
-			selected[name] = struct{}{}
-		}
-	}
-	for _, name := range selection.Names {
-		if _, exists := inventory[name]; !exists {
-			return nil, fmt.Errorf("selected skill %q is absent from the assembled source repositories", name)
-		}
-	}
-
-	queue := make([]string, 0, len(selected))
-	for name := range selected {
-		queue = append(queue, name)
-	}
-	for len(queue) > 0 {
-		name := queue[0]
-		queue = queue[1:]
-		for _, dependency := range inventory[name].Dependencies {
-			if _, exists := selected[dependency]; exists {
-				continue
-			}
-			if _, exists := inventory[dependency]; !exists {
-				return nil, fmt.Errorf("skill %q composes absent skill %q", name, dependency)
-			}
-			selected[dependency] = struct{}{}
-			queue = append(queue, dependency)
-		}
-	}
-
-	names := make([]string, 0, len(selected))
-	for name := range selected {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	result := make([]Skill, 0, len(names))
-	for _, name := range names {
-		result = append(result, inventory[name])
-	}
-	return result, nil
-}
 
 // Projection is an opaque, write-free projection plan. Callers projecting
 // several destinations should plan all of them and pass the complete set to
@@ -172,6 +60,9 @@ func plan(root string, selected []Skill, tracks TrackedPathObserver) (Projection
 		return Projection{}, fmt.Errorf("resolve projected skill destination: %w", err)
 	}
 	projectionRoot := filepath.Join(root, ".agents", "skills")
+	if err := preflightProjectedLinks(projectionRoot, desired); err != nil {
+		return Projection{}, err
+	}
 	if err := preflightProjectionParents(root); err != nil {
 		return Projection{}, err
 	}
@@ -301,6 +192,9 @@ func revalidateProjection(projection Projection) error {
 	if projection.noOp {
 		return nil
 	}
+	if err := preflightProjectedLinks(projection.projectionRoot, projection.desired); err != nil {
+		return fmt.Errorf("revalidate projected skill links: %w", err)
+	}
 	for _, owned := range projection.previous.Skills {
 		observed, err := observeTree(filepath.Join(projection.projectionRoot, owned.Name))
 		if err != nil {
@@ -411,45 +305,6 @@ func applyProjection(projection Projection) ([]string, error) {
 	return changed, nil
 }
 
-// ApplyLegacy preserves the historical 0.1 write-only projection behavior.
-// It intentionally does not mint current-line ownership records.
-func ApplyLegacy(root string, selected []Skill) ([]string, error) {
-	files := make(map[string][]byte)
-	for _, skill := range selected {
-		for relative, contents := range skill.Files {
-			path := filepath.Join(".agents", "skills", skill.Name, relative)
-			if filepath.IsAbs(relative) || filepath.Clean(relative) != relative || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-				return nil, fmt.Errorf("skill %q contains escaping path %q", skill.Name, relative)
-			}
-			files[path] = contents
-		}
-	}
-	paths := make([]string, 0, len(files))
-	for path := range files {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	changed := make([]string, 0, len(paths))
-	for _, relative := range paths {
-		target := filepath.Join(root, relative)
-		before, err := os.ReadFile(target)
-		if err == nil && bytes.Equal(before, files[relative]) {
-			continue
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("read projected skill path %q: %w", relative, err)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return nil, fmt.Errorf("create projected skill parent %q: %w", relative, err)
-		}
-		if err := os.WriteFile(target, files[relative], 0o644); err != nil {
-			return nil, fmt.Errorf("write projected skill path %q: %w", relative, err)
-		}
-		changed = append(changed, filepath.ToSlash(relative))
-	}
-	return changed, nil
-}
-
 type ownedSkill struct {
 	Name   string `json:"name"`
 	Digest string `json:"digest"`
@@ -499,12 +354,47 @@ func desiredSkills(selected []Skill) (map[string]Skill, error) {
 		}
 		desired[skill.Name] = Skill{
 			Name:         skill.Name,
+			Description:  skill.Description,
 			Domain:       skill.Domain,
 			Dependencies: append([]string(nil), skill.Dependencies...),
+			Links:        append([]LocalLink(nil), skill.Links...),
 			Files:        files,
 		}
 	}
 	return desired, nil
+}
+
+func preflightProjectedLinks(projectionRoot string, desired map[string]Skill) error {
+	expected := make(map[string]struct{})
+	for name, skill := range desired {
+		for relative := range skill.Files {
+			expected[filepath.Clean(filepath.Join(projectionRoot, name, relative))] = struct{}{}
+		}
+	}
+	for _, name := range sortedKeys(desired) {
+		skill := desired[name]
+		for _, link := range skill.Links {
+			document := filepath.Join(projectionRoot, name, filepath.FromSlash(link.DocumentPath))
+			target := filepath.Clean(filepath.Join(filepath.Dir(document), filepath.FromSlash(link.Target)))
+			if _, projected := expected[target]; projected {
+				continue
+			}
+			if _, err := os.Stat(target); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				return fmt.Errorf("inspect projected link target %q: %w", target, err)
+			}
+			location := filepath.ToSlash(filepath.Join(name, link.DocumentPath))
+			if link.Source != "" {
+				location = link.Source + ":" + location
+			}
+			if link.Line > 0 {
+				location = fmt.Sprintf("%s:%d", location, link.Line)
+			}
+			return fmt.Errorf("%s: projected link target %q would be absent at %q; keep linked material inside the skill, select the peer skill, or use an external link because Workbench copies skill bytes without rewriting authored paths", location, link.Target, target)
+		}
+	}
+	return nil
 }
 
 func validateSkillFilePath(relative string) error {
@@ -739,81 +629,6 @@ func writeFileAtomically(target string, contents []byte) error {
 	return os.Rename(temporaryPath, target)
 }
 
-func readSkill(root string, name string) (Skill, error) {
-	files := make(map[string][]byte)
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("skill %q contains symlink %q", name, path)
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		files[relative] = contents
-		return nil
-	})
-	if err != nil {
-		return Skill{}, fmt.Errorf("read skill %q: %w", name, err)
-	}
-	skillFile, exists := files["SKILL.md"]
-	if !exists {
-		return Skill{}, fmt.Errorf("skill %q has no SKILL.md", name)
-	}
-	domain, err := frontmatterDomain(string(skillFile))
-	if err != nil {
-		return Skill{}, fmt.Errorf("skill %q: %w", name, err)
-	}
-	dependencies := make([]string, 0)
-	seen := make(map[string]struct{})
-	for _, match := range compositionLinkPattern.FindAllSubmatch(skillFile, -1) {
-		dependency := string(match[1])
-		if dependency == name {
-			return Skill{}, fmt.Errorf("skill %q composes itself", name)
-		}
-		if _, exists := seen[dependency]; !exists {
-			seen[dependency] = struct{}{}
-			dependencies = append(dependencies, dependency)
-		}
-	}
-	sort.Strings(dependencies)
-	return Skill{Name: name, Domain: domain, Dependencies: dependencies, Files: files}, nil
-}
-
-func frontmatterDomain(contents string) (string, error) {
-	if !strings.HasPrefix(contents, "---\n") {
-		return "", fmt.Errorf("SKILL.md has no YAML frontmatter")
-	}
-	end := strings.Index(contents[4:], "\n---\n")
-	if end < 0 {
-		return "", fmt.Errorf("SKILL.md has unterminated YAML frontmatter")
-	}
-	frontmatter := contents[4 : 4+end]
-	for _, line := range strings.Split(frontmatter, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "domain:") {
-			continue
-		}
-		domain := strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "domain:")), `"'`)
-		switch domain {
-		case "orchestration", "engineering", "general":
-			return domain, nil
-		default:
-			return "", fmt.Errorf("unknown skill domain %q", domain)
-		}
-	}
-	return "", fmt.Errorf("SKILL.md has no metadata.domain")
-}
-
 func equalSkill(left Skill, right Skill) bool {
 	if left.Name != right.Name || left.Domain != right.Domain || !equalStrings(left.Dependencies, right.Dependencies) || len(left.Files) != len(right.Files) {
 		return false
@@ -836,13 +651,4 @@ func equalStrings(left []string, right []string) bool {
 		}
 	}
 	return true
-}
-
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }

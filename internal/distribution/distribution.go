@@ -41,6 +41,7 @@ type ArchiveInputs struct {
 	PklGoNotice         string
 	MsgpackLicense      string
 	TagparserLicense    string
+	YAMLLicense         string
 }
 
 func AssetName(version string, platform Platform) (string, error) {
@@ -104,6 +105,8 @@ func WriteArchive(output string, inputs ArchiveInputs) error {
 		file(root+"/share/licenses/tagparser/LICENSE", inputs.TagparserLicense, 0o644),
 		directory(root + "/share/licenses/workbench/"),
 		file(root+"/share/licenses/workbench/LICENSE", inputs.WorkbenchLicense, 0o644),
+		directory(root + "/share/licenses/yaml/"),
+		file(root+"/share/licenses/yaml/LICENSE", inputs.YAMLLicense, 0o644),
 		directory(root + "/share/workbench/"),
 		contentsFile(root+"/share/workbench/build.json", buildMetadata, 0o644),
 		file(root+"/share/workbench/runtime-lock.json", inputs.RuntimeLock, 0o644),
