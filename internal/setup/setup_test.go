@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/evaluate"
@@ -1062,6 +1064,54 @@ func TestProjectSkillsV020RefusesTrackedForgedOwnershipWithoutMutation(t *testin
 	}
 }
 
+func TestExactGitSnapshotIsPureAndDetectsRawIndexMutation(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-b", "main")
+	git(t, root, "config", "user.email", "snapshot@example.invalid")
+	git(t, root, "config", "user.name", "Snapshot Test")
+	tracked := filepath.Join(root, "tracked.txt")
+	write(t, tracked, "stable bytes\n")
+	git(t, root, "add", "tracked.txt")
+	git(t, root, "commit", "-m", "establish tracked state")
+
+	setTrackedTime := func(offset time.Duration) {
+		t.Helper()
+		changed := time.Now().Add(offset)
+		if err := os.Chtimes(tracked, changed, changed); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	setTrackedTime(2 * time.Hour)
+	oldBefore := rawIndexDigest(t, root)
+	oldObserver := exec.Command("git", "status", "--porcelain=v1", "--untracked-files=all")
+	oldObserver.Dir = root
+	oldObserver.Env = testGitEnvironment("1")
+	if output, err := oldObserver.CombinedOutput(); err != nil {
+		t.Fatalf("run prior status observer: %v\n%s", err, output)
+	}
+	if oldAfter := rawIndexDigest(t, root); oldAfter == oldBefore {
+		t.Fatal("causal witness did not reproduce optional status refreshing raw index bytes")
+	}
+
+	setTrackedTime(4 * time.Hour)
+	pureBefore := rawIndexDigest(t, root)
+	baseline := exactGitSnapshot(t, root)
+	if pureAfter := rawIndexDigest(t, root); pureAfter != pureBefore {
+		t.Fatalf("exact Git observer changed raw index digest from %s to %s", pureBefore, pureAfter)
+	}
+
+	setTrackedTime(6 * time.Hour)
+	git(t, root, "update-index", "--refresh")
+	changed := exactGitSnapshot(t, root)
+	if baseline.IndexDigest == changed.IndexDigest {
+		t.Fatal("deliberate raw index mutation was not detected")
+	}
+	if baseline.Git != changed.Git || baseline.Index != changed.Index {
+		t.Fatalf("stat-only index mutation changed semantic Git state:\nbefore=%#v\nafter=%#v", baseline, changed)
+	}
+}
+
 func TestRetiredV010SkillSourceRefusesWithRecreationGuidance(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, ".agents", "skills", "retired", "SKILL.md"), "legacy source\n")
@@ -1193,16 +1243,32 @@ type snapshot struct {
 }
 
 type exactSnapshot struct {
-	Git   snapshot
-	Index string
+	Git         snapshot
+	Index       string
+	IndexDigest string
 }
 
 func exactGitSnapshot(t *testing.T, root string) exactSnapshot {
 	t.Helper()
-	return exactSnapshot{
-		Git:   gitSnapshot(t, root),
-		Index: git(t, root, "ls-files", "--stage"),
+	before := rawIndexDigest(t, root)
+	result := exactSnapshot{
+		Git:         gitSnapshot(t, root),
+		Index:       git(t, root, "ls-files", "--stage"),
+		IndexDigest: before,
 	}
+	if after := rawIndexDigest(t, root); after != before {
+		t.Fatalf("exact Git observation changed raw index digest from %s to %s", before, after)
+	}
+	return result
+}
+
+func rawIndexDigest(t *testing.T, root string) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(root, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(contents))
 }
 
 func gitSnapshot(t *testing.T, root string) snapshot {
@@ -1219,12 +1285,27 @@ func git(t *testing.T, root string, arguments ...string) string {
 	t.Helper()
 	command := exec.Command("git", arguments...)
 	command.Dir = root
-	command.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+	command.Env = testGitEnvironment("0")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func testGitEnvironment(optionalLocks string) []string {
+	environment := make([]string, 0, len(os.Environ())+3)
+	for _, variable := range os.Environ() {
+		if strings.HasPrefix(variable, "GIT_OPTIONAL_LOCKS=") {
+			continue
+		}
+		environment = append(environment, variable)
+	}
+	return append(environment,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS="+optionalLocks,
+	)
 }
 
 func write(t *testing.T, path string, contents string) {
