@@ -185,7 +185,7 @@ func developmentToolPath(t *testing.T, moduleRoot, testRoot, name string) string
 		"MISE_CACHE_DIR="+filepath.Join(testRoot, "mise-cache"),
 		"MISE_CEILING_PATHS="+filepath.Dir(moduleRoot),
 		"MISE_CONFIG_FILE="+filepath.Join(moduleRoot, "mise.toml"),
-		"MISE_GLOBAL_CONFIG_FILE=/dev/null",
+		"MISE_GLOBAL_CONFIG_FILE=",
 		"MISE_LOG_LEVEL=error",
 		"MISE_STATE_DIR="+filepath.Join(testRoot, "mise-state"),
 		"MISE_TRUSTED_CONFIG_PATHS="+filepath.Join(moduleRoot, "mise.toml"),
