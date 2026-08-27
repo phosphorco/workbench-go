@@ -6,18 +6,20 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/setup"
+	"github.com/phosphorco/workbench-go/internal/skills"
 	"github.com/phosphorco/workbench-go/internal/version"
 )
 
 const (
 	defaultCommitPlan = "commit-plan.pkl"
 	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
-	usage             = "usage: workbench setup | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | version"
+	usage             = "usage: workbench setup | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | skills check | version"
 )
 
 type setupApplication func(context.Context, string) (setup.Result, error)
@@ -25,6 +27,7 @@ type commitApplication func(context.Context, string, string) (string, error)
 type snapshotRecordApplication func(context.Context, string, string) (string, error)
 type snapshotReproduceApplication func(context.Context, string, string) (string, error)
 type pruneApplication func(context.Context, string, []string) (string, error)
+type skillsCheckApplication func(context.Context, string) (skills.Report, error)
 type versionApplication func() (version.Info, error)
 
 // applications contains command-scoped capabilities. Parsing succeeds before
@@ -35,6 +38,7 @@ type applications struct {
 	snapshotRecord    snapshotRecordApplication
 	snapshotReproduce snapshotReproduceApplication
 	prune             pruneApplication
+	skillsCheck       skillsCheckApplication
 	version           versionApplication
 }
 
@@ -46,6 +50,7 @@ const (
 	commandSnapshotRecord
 	commandSnapshotReproduce
 	commandPrune
+	commandSkillsCheck
 	commandVersion
 )
 
@@ -54,16 +59,33 @@ type invocation struct {
 	arguments []string
 }
 
+// reportedError marks a subject failure whose complete actionable diagnostic
+// has already reached stderr. Operational failures never use this type.
+type reportedError struct {
+	err error
+}
+
+func (failure reportedError) Error() string {
+	return failure.err.Error()
+}
+
+func (failure reportedError) Unwrap() error {
+	return failure.err
+}
+
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Getwd, os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "workbench: %v\n", err)
+	if err := run(context.Background(), os.Args[1:], os.Getwd, os.Stdout, os.Stderr); err != nil {
+		var reported reportedError
+		if !errors.As(err, &reported) {
+			fmt.Fprintf(os.Stderr, "workbench: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, arguments []string, workingDirectory func() (string, error), output io.Writer) error {
+func run(ctx context.Context, arguments []string, workingDirectory func() (string, error), output, diagnostics io.Writer) error {
 	application := chooseApplications(version.IsDevelopment(), developmentApplications, releasedApplications)
-	return runWith(ctx, arguments, workingDirectory, output, application)
+	return runWith(ctx, arguments, workingDirectory, output, diagnostics, application)
 }
 
 func chooseApplications(development bool, developmentFactory, releasedFactory func() applications) applications {
@@ -73,7 +95,7 @@ func chooseApplications(development bool, developmentFactory, releasedFactory fu
 	return releasedFactory()
 }
 
-func runWith(ctx context.Context, arguments []string, workingDirectory func() (string, error), output io.Writer, application applications) error {
+func runWith(ctx context.Context, arguments []string, workingDirectory func() (string, error), output, diagnostics io.Writer, application applications) error {
 	command, err := parseInvocation(arguments)
 	if err != nil {
 		return err
@@ -100,6 +122,9 @@ func runWith(ctx context.Context, arguments []string, workingDirectory func() (s
 		result, err := application.setup(ctx, root)
 		if err != nil {
 			return fmt.Errorf("setup: %w", err)
+		}
+		if err := writeSkillWarnings(diagnostics, result.SkillWarnings); err != nil {
+			return err
 		}
 		repositories := len(result.Resources)
 		var report strings.Builder
@@ -151,6 +176,21 @@ func runWith(ctx context.Context, arguments []string, workingDirectory func() (s
 			return fmt.Errorf("prune: %w", err)
 		}
 		return writeReport(output, report)
+	case commandSkillsCheck:
+		if application.skillsCheck == nil {
+			return errors.New("skills check application is absent")
+		}
+		report, err := application.skillsCheck(ctx, root)
+		if err != nil {
+			return fmt.Errorf("skills check: %w", err)
+		}
+		if err := writeSkillDiagnostics(diagnostics, report); err != nil {
+			return err
+		}
+		if len(report.Issues) > 0 {
+			return reportedError{err: fmt.Errorf("skills check: %d skill contract %s", len(report.Issues), plural(len(report.Issues), "violation", "violations"))}
+		}
+		return writeReport(output, skillsCheckSummary(report))
 	default:
 		return errors.New(usage)
 	}
@@ -198,6 +238,10 @@ func parseInvocation(arguments []string) (invocation, error) {
 			}
 			return invocation{kind: commandPrune, arguments: append([]string(nil), arguments[1:]...)}, nil
 		}
+	case "skills":
+		if len(arguments) == 2 && arguments[1] == "check" {
+			return invocation{kind: commandSkillsCheck}, nil
+		}
 	case "version":
 		if len(arguments) == 1 {
 			return invocation{kind: commandVersion}, nil
@@ -222,4 +266,47 @@ func writeReport(output io.Writer, report string) error {
 		return fmt.Errorf("write command report: %w", err)
 	}
 	return nil
+}
+
+func checkSkills(_ context.Context, root string) (skills.Report, error) {
+	catalog, err := skills.Load([]skills.Source{{Root: filepath.Join(root, ".agents", "skills")}})
+	if err != nil {
+		return skills.Report{}, err
+	}
+	return catalog.Report(), nil
+}
+
+func writeSkillDiagnostics(output io.Writer, report skills.Report) error {
+	if err := writeSkillWarnings(output, report.Warnings); err != nil {
+		return err
+	}
+	for _, issue := range report.Issues {
+		if _, err := fmt.Fprintf(output, "%s: %s\n", issue.Location(), issue.Message); err != nil {
+			return fmt.Errorf("write skill issue: %w", err)
+		}
+	}
+	if len(report.Issues) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(output, "Fix the %d listed skill contract %s, then rerun 'workbench skills check'.\n", len(report.Issues), plural(len(report.Issues), "violation", "violations")); err != nil {
+		return fmt.Errorf("write skill repair action: %w", err)
+	}
+	return nil
+}
+
+func writeSkillWarnings(output io.Writer, warnings []skills.Diagnostic) error {
+	for _, warning := range warnings {
+		if _, err := fmt.Fprintf(output, "%s: warning: %s\n", warning.Location(), warning.Message); err != nil {
+			return fmt.Errorf("write skill warning: %w", err)
+		}
+	}
+	return nil
+}
+
+func skillsCheckSummary(report skills.Report) string {
+	summary := fmt.Sprintf("%d skills · %d composition edges · domain, link, and skill-reference contracts valid", report.SkillCount, report.CompositionEdgeCount)
+	if len(report.Warnings) > 0 {
+		summary += fmt.Sprintf(" · %d %s", len(report.Warnings), plural(len(report.Warnings), "warning", "warnings"))
+	}
+	return summary
 }

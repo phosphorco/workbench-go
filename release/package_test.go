@@ -20,7 +20,7 @@ func TestRunWritesNamedArchiveAndExactChecksum(t *testing.T) {
 	}
 	outputDirectory := filepath.Join(root, "out")
 	arguments := []string{
-		"--version", "0.4.0",
+		"--version", "0.5.0",
 		"--revision", "0123456789abcdef0123456789abcdef01234567",
 		"--goos", "linux", "--goarch", "amd64", "--output", outputDirectory,
 		"--workbench", file("workbench"), "--pkl", file("pkl"), "--bun", file("bun"),
@@ -31,12 +31,13 @@ func TestRunWritesNamedArchiveAndExactChecksum(t *testing.T) {
 		"--go-license", file("go-license"), "--go-patents", file("go-patents"),
 		"--pkl-go-license", file("pkl-go-license"), "--pkl-go-notice", file("pkl-go-notice"),
 		"--msgpack-license", file("msgpack-license"), "--tagparser-license", file("tagparser-license"),
+		"--yaml-license", file("yaml-license"),
 	}
 	var output bytes.Buffer
 	if err := run(arguments, &output); err != nil {
 		t.Fatalf("run(): %v", err)
 	}
-	archive := filepath.Join(outputDirectory, "workbench-0.4.0-linux-x64.tar.gz")
+	archive := filepath.Join(outputDirectory, "workbench-0.5.0-linux-x64.tar.gz")
 	if output.String() != archive+"\n" {
 		t.Fatalf("output = %q, want archive path", output.String())
 	}
@@ -76,6 +77,7 @@ func TestRunRequiresThePinnedRuntimeLock(t *testing.T) {
 		"--go-license", file("go-license"), "--go-patents", file("go-patents"),
 		"--pkl-go-license", file("pkl-go-license"), "--pkl-go-notice", file("pkl-go-notice"),
 		"--msgpack-license", file("msgpack-license"), "--tagparser-license", file("tagparser-license"),
+		"--yaml-license", file("yaml-license"),
 	}
 	if err := run(arguments, &bytes.Buffer{}); err == nil {
 		t.Fatal("run succeeded when release and runtime-lock versions diverged")

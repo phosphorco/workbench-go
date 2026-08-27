@@ -168,6 +168,56 @@ func TestDirtySourceOnSubjectBranchIsPreserved(t *testing.T) {
 	}
 }
 
+func TestPreparedReconciliationRefusesRemoteAdvanceBeforeTargetMutation(t *testing.T) {
+	fixture := newGitFixture(t, false)
+	target := filepath.Join(t.TempDir(), "resource")
+	desired := []gitreconcile.Checkout{{
+		Path: target, RemoteURL: fixture.remote,
+		Branch: "cole/shared-line", BaseBranch: "main",
+	}}
+	prepared, err := gitreconcile.Prepare(context.Background(), desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkouts := prepared.Prepared()
+	if len(checkouts) != 1 || checkouts[0].Commit != fixture.baseCommit {
+		t.Fatalf("prepared revisions = %#v, want base %q", checkouts, fixture.baseCommit)
+	}
+
+	advance := filepath.Join(t.TempDir(), "advance")
+	git(t, "", "clone", fixture.remote, advance)
+	git(t, advance, "config", "user.email", "gitreconcile@example.invalid")
+	git(t, advance, "config", "user.name", "Git Reconcile Test")
+	writeFile(t, filepath.Join(advance, "unvalidated.txt"), "must never reach the prepared target\n")
+	git(t, advance, "add", "unvalidated.txt")
+	git(t, advance, "commit", "-m", "advance after prepare")
+	git(t, advance, "push", "origin", "main")
+
+	err = gitreconcile.Apply(context.Background(), prepared)
+	if err == nil || !strings.Contains(err.Error(), "changed after reconciliation was prepared") {
+		t.Fatalf("remote-advance refusal = %v", err)
+	}
+	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("prepared target was mutated after remote advance: %v", statErr)
+	}
+}
+
+func TestPreparationBindsCallerValidatedCommitBeforeMutation(t *testing.T) {
+	fixture := newGitFixture(t, false)
+	target := filepath.Join(t.TempDir(), "resource")
+	_, err := gitreconcile.Prepare(context.Background(), []gitreconcile.Checkout{{
+		Path: target, RemoteURL: fixture.remote,
+		Branch: "cole/shared-line", BaseBranch: "main",
+		ExpectedCommit: strings.Repeat("0", 40),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "want previously validated commit") {
+		t.Fatalf("validated-commit refusal = %v", err)
+	}
+	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("target was mutated while binding validated revision: %v", statErr)
+	}
+}
+
 type gitFixture struct {
 	remote        string
 	baseCommit    string

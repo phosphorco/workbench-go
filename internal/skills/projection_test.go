@@ -2,10 +2,12 @@ package skills
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/phosphorco/workbench-go/internal/contract"
@@ -17,11 +19,8 @@ func TestDomainSelectionFollowsExplicitCompositionDependency(t *testing.T) {
 	writeSkill(t, root, "skills", "writing-go", "general", "Go semantics.")
 	writeSkill(t, root, "skills", "unselected", "general", "Not selected.")
 
-	inventory, err := Discover([]Source{{Root: root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	selected, err := Select(inventory, contract.SkillSelection{Domains: []string{"engineering"}})
+	catalog := loadRepositoryCatalog(t, root)
+	selected, err := Select(catalog, contract.SkillSelection{Domains: []string{"engineering"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,57 +59,45 @@ func TestDomainSelectionFollowsExplicitCompositionDependency(t *testing.T) {
 func TestSelectionRejectsMissingNamedAndComposedSkills(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "skills", "basindb", "engineering", "Compose with [`$missing`](../missing/SKILL.md).")
-	inventory, err := Discover([]Source{{Root: root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Select(inventory, contract.SkillSelection{Names: []string{"absent"}}); err == nil {
+	catalog := loadRepositoryCatalog(t, root)
+	if _, err := Select(catalog, contract.SkillSelection{Names: []string{"absent"}}); err == nil {
 		t.Fatal("absent selected root was accepted")
 	}
-	if _, err := Select(inventory, contract.SkillSelection{Names: []string{"basindb"}}); err == nil {
+	if _, err := Select(catalog, contract.SkillSelection{Names: []string{"basindb"}}); err == nil {
 		t.Fatal("absent composition dependency was accepted")
 	}
 }
 
-func TestDiscoverRejectsConflictingSkillSources(t *testing.T) {
+func TestCatalogReportsConflictingSkillSources(t *testing.T) {
 	first := t.TempDir()
 	second := t.TempDir()
 	writeSkill(t, first, "skills", "shared", "engineering", "first")
 	writeSkill(t, second, "skills", "shared", "engineering", "second")
-	if _, err := Discover([]Source{{Root: first}, {Root: second}}); err == nil {
-		t.Fatal("conflicting skill sources were accepted")
+	catalog := loadRepositoryCatalog(t, first, second)
+	if len(catalog.Report().Issues) != 1 || !strings.Contains(catalog.Report().Issues[0].Message, "conflicting sources") {
+		t.Fatalf("conflicting skill issues = %#v", catalog.Report().Issues)
 	}
 }
 
-func TestDiscoverReadsOnlyGitOwnedSkillsForCurrentLine(t *testing.T) {
+func TestCatalogReadsOnlyExplicitGitOwnedSkillRoot(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "skills", "authored", "engineering", "Source skill.")
 	writeSkill(t, root, filepath.Join(".agents", "skills"), "projected", "engineering", "Projection.")
 
-	current, err := Discover([]Source{{Root: root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(inventoryNames(current), []string{"authored"}) {
-		t.Fatalf("current inventory = %#v", inventoryNames(current))
-	}
-	legacy, err := DiscoverLegacy([]Source{{Root: root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(inventoryNames(legacy), []string{"projected"}) {
-		t.Fatalf("legacy inventory = %#v", inventoryNames(legacy))
+	catalog := loadRepositoryCatalog(t, root)
+	if !reflect.DeepEqual(inventoryNames(catalog.inventory), []string{"authored"}) {
+		t.Fatalf("current inventory = %#v", inventoryNames(catalog.inventory))
 	}
 }
 
-func TestDiscoverRefusesSymlinkedSourceRoot(t *testing.T) {
+func TestCatalogRefusesSymlinkedSourceRoot(t *testing.T) {
 	root := t.TempDir()
 	external := t.TempDir()
 	writeSkill(t, external, ".", "redirected", "engineering", "Redirected.")
 	if err := os.Symlink(external, filepath.Join(root, "skills")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Discover([]Source{{Root: root}}); err == nil {
+	if _, err := Load([]Source{{Root: filepath.Join(root, "skills")}}); err == nil {
 		t.Fatal("symlinked skill source root was accepted")
 	}
 }
@@ -119,10 +106,7 @@ func TestApplyPreservesForeignSiblingAndRemovesOnlyStaleOwnedSkill(t *testing.T)
 	source := t.TempDir()
 	writeSkill(t, source, "skills", "exported", "engineering", "Exported.")
 	writeSkill(t, source, "skills", "imported", "general", "Imported.")
-	inventory, err := Discover([]Source{{Root: source}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	inventory := loadRepositoryCatalog(t, source).inventory
 
 	destination := t.TempDir()
 	foreignPath := filepath.Join(destination, ".agents", "skills", "context-owned", "SKILL.md")
@@ -154,10 +138,7 @@ func TestApplyPreservesForeignSiblingAndRemovesOnlyStaleOwnedSkill(t *testing.T)
 func TestApplyRefusesForeignSelectedNameWithZeroMutation(t *testing.T) {
 	source := t.TempDir()
 	writeSkill(t, source, "skills", "shared", "engineering", "Selected source.")
-	inventory, err := Discover([]Source{{Root: source}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	inventory := loadRepositoryCatalog(t, source).inventory
 	destination := t.TempDir()
 	writeSkill(t, destination, filepath.Join(".agents", "skills"), "shared", "engineering", "Foreign projection.")
 	before := snapshotTree(t, destination)
@@ -173,10 +154,7 @@ func TestApplyRefusesForeignSelectedNameWithZeroMutation(t *testing.T) {
 func TestApplyRefusesModifiedOwnedTreeBeforeDeselection(t *testing.T) {
 	source := t.TempDir()
 	writeSkill(t, source, "skills", "owned", "engineering", "Original.")
-	inventory, err := Discover([]Source{{Root: source}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	inventory := loadRepositoryCatalog(t, source).inventory
 	destination := t.TempDir()
 	if _, err := Apply(destination, []Skill{inventory["owned"]}); err != nil {
 		t.Fatal(err)
@@ -195,10 +173,7 @@ func TestApplyRefusesModifiedOwnedTreeBeforeDeselection(t *testing.T) {
 func TestPlanWithTrackingRefusesTrackedManifestOrSkillSubtree(t *testing.T) {
 	source := t.TempDir()
 	writeSkill(t, source, "skills", "owned", "engineering", "Original.")
-	inventory, err := Discover([]Source{{Root: source}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	inventory := loadRepositoryCatalog(t, source).inventory
 	destination := t.TempDir()
 	if _, err := Apply(destination, []Skill{inventory["owned"]}); err != nil {
 		t.Fatal(err)
@@ -247,10 +222,7 @@ func TestApplyRefusesSymlinkedOwnershipManifest(t *testing.T) {
 func TestApplyPlansRevalidatesEveryDestinationBeforeFirstMutation(t *testing.T) {
 	source := t.TempDir()
 	writeSkill(t, source, "skills", "selected", "engineering", "Selected.")
-	inventory, err := Discover([]Source{{Root: source}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	inventory := loadRepositoryCatalog(t, source).inventory
 	first := t.TempDir()
 	second := t.TempDir()
 	firstPlan, err := Plan(first, []Skill{inventory["selected"]})
@@ -285,19 +257,13 @@ func TestApplyPlansRejectsUnmintedProjection(t *testing.T) {
 func TestApplyUpdatesValidSkillNamedPrevious(t *testing.T) {
 	source := t.TempDir()
 	writeSkill(t, source, "skills", "previous", "engineering", "First.")
-	inventory, err := Discover([]Source{{Root: source}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	inventory := loadRepositoryCatalog(t, source).inventory
 	destination := t.TempDir()
 	if _, err := Apply(destination, []Skill{inventory["previous"]}); err != nil {
 		t.Fatal(err)
 	}
 	writeSkill(t, source, "skills", "previous", "engineering", "Second.")
-	inventory, err = Discover([]Source{{Root: source}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	inventory = loadRepositoryCatalog(t, source).inventory
 	if _, err := Apply(destination, []Skill{inventory["previous"]}); err != nil {
 		t.Fatal(err)
 	}
@@ -311,10 +277,7 @@ func TestSourceCanExportOneSkillAndReceiveAnotherConvergently(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "skills", "exported", "engineering", "Exported source.")
 	writeSkill(t, root, "skills", "imported", "general", "Imported source.")
-	inventory, err := Discover([]Source{{Root: root}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	inventory := loadRepositoryCatalog(t, root).inventory
 	sourceBefore := snapshotTreeAt(t, filepath.Join(root, "skills"))
 	if _, err := Apply(root, []Skill{inventory["imported"]}); err != nil {
 		t.Fatal(err)
@@ -335,26 +298,6 @@ func TestSourceCanExportOneSkillAndReceiveAnotherConvergently(t *testing.T) {
 	}
 }
 
-func TestLegacyDiscoveryAndProjectionRetainHistoricalLayout(t *testing.T) {
-	root := t.TempDir()
-	writeSkill(t, root, filepath.Join(".agents", "skills"), "historical", "engineering", "Historical source.")
-	inventory, err := DiscoverLegacy([]Source{{Root: root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination := t.TempDir()
-	changed, err := ApplyLegacy(destination, []Skill{inventory["historical"]})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(changed, []string{".agents/skills/historical/SKILL.md"}) {
-		t.Fatalf("legacy projection = %#v", changed)
-	}
-	if _, err := os.Stat(filepath.Join(destination, ".agents", "skills", ".workbench-owned.json")); !os.IsNotExist(err) {
-		t.Fatalf("legacy projection wrote ownership manifest: %v", err)
-	}
-}
-
 func writeSkill(t *testing.T, root string, sourcePath string, name string, domain string, body string) {
 	t.Helper()
 	path := filepath.Join(root, sourcePath, name, "SKILL.md")
@@ -365,6 +308,19 @@ func writeSkill(t *testing.T, root string, sourcePath string, name string, domai
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func loadRepositoryCatalog(t *testing.T, roots ...string) Catalog {
+	t.Helper()
+	sources := make([]Source, 0, len(roots))
+	for index, root := range roots {
+		sources = append(sources, Source{Name: fmt.Sprintf("repository-%d", index), Root: filepath.Join(root, "skills")})
+	}
+	catalog, err := Load(sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
 }
 
 func inventoryNames(inventory Inventory) []string {

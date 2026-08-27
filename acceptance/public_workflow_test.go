@@ -14,20 +14,20 @@ import (
 )
 
 const (
-	publicSubjectContract = releasePackageURI + "#/WorkbenchSubject.pkl"
-	proofBranch           = "workbench/proof-0.1.0"
+	publicSubjectContract = "package://github.com/phosphorco/workbench-go/releases/download/0.4.0/workbench@0.4.0#/WorkbenchSubject.pkl"
+	proofBranch           = "workbench/proof-0.4.0"
 	subjectBranch         = proofBranch
 	entryRepositoryURL    = "https://github.com/phosphorco/workbench-fixture-entry"
 	libraryRepositoryURL  = "https://github.com/phosphorco/workbench-fixture-library"
-	entryProofRevision    = "74ee45909df2540b4056209d9e0d39e8dcabc56a"
-	libraryProofRevision  = "d4a36b29b5a8e66de6b2410c2ee8c32150741123"
+	entryProofRevision    = "1d982333f9fc61e32a24810b08a0c11e046b267e"
+	libraryProofRevision  = "20f3298cbe29415de923c96af9a08a957253a4f5"
 )
 
-// TestWorkbenchFirstMeaningfulSlice exercises Workbench only through its
-// released contract, public CLI, anonymous HTTPS repositories, and resulting
-// filesystem and Git state. The repositories and release are permanent proof
-// inputs; this test creates only disposable developer workbenches.
-func TestWorkbenchFirstMeaningfulSlice(t *testing.T) {
+// TestWorkbenchV040LegacySkillFrontmatterRefusesWithoutMutation preserves the
+// immutable public fixture as a negative compatibility oracle. Workbench 0.5
+// must not reinterpret or silently normalize skill bytes that predate the
+// current Skill Catalog contract.
+func TestWorkbenchV040LegacySkillFrontmatterRefusesWithoutMutation(t *testing.T) {
 	moduleRoot, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
@@ -42,105 +42,44 @@ func TestWorkbenchFirstMeaningfulSlice(t *testing.T) {
 	}
 	anonymousEnvironment := publicEnvironment(t, moduleRoot, testRoot, anonymousHome)
 	binary := buildPublicCLI(t, moduleRoot)
-
-	t.Run("assembles and converges", func(t *testing.T) {
-		workbench := newPublicWorkbench(t, testRoot, "convergent-workbench", anonymousEnvironment)
-		firstOutput := runSetup(t, binary, workbench, anonymousEnvironment)
-		if !strings.Contains(firstOutput, "Workbench reconciled 2 repositories") {
-			t.Fatalf("first setup did not report the real two-repository Workbench:\n%s", firstOutput)
+	entryBefore := remoteProofBranch(t, anonymousEnvironment, entryRepositoryURL)
+	libraryBefore := remoteProofBranch(t, anonymousEnvironment, libraryRepositoryURL)
+	if entryBefore != entryProofRevision {
+		t.Fatalf("immutable 0.4 entry proof branch = %q, want accepted revision %q", entryBefore, entryProofRevision)
+	}
+	if libraryBefore != libraryProofRevision {
+		t.Fatalf("immutable 0.4 library proof branch = %q, want accepted revision %q", libraryBefore, libraryProofRevision)
+	}
+	workbench := newPublicWorkbench(t, testRoot, "v040-compatibility", anonymousEnvironment)
+	command := exec.Command(binary, "setup")
+	command.Dir = workbench
+	command.Env = anonymousEnvironment
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("Workbench 0.5 consumed invalid immutable 0.4 skill frontmatter:\n%s", output)
+	}
+	for _, fact := range []string{
+		"phosphorco/workbench-fixture-entry:workbench-fixture-entry-source/SKILL.md:1",
+		"frontmatter must declare name and a valid metadata.domain",
+	} {
+		if !strings.Contains(string(output), fact) {
+			t.Fatalf("0.4 repair refusal omits %q:\n%s", fact, output)
 		}
-
-		entry := filepath.Join(workbench, "pkg", "@workbench-entry")
-		library := filepath.Join(workbench, "pkg", "@workbench-library")
-		assertCheckout(t, anonymousEnvironment, entry, entryRepositoryURL)
-		assertCheckout(t, anonymousEnvironment, library, libraryRepositoryURL)
-		if entryRoot := publicGit(t, anonymousEnvironment, entry, "rev-parse", "--show-toplevel"); entryRoot == publicGit(t, anonymousEnvironment, library, "rev-parse", "--show-toplevel") {
-			t.Fatalf("entry and library resolve to the same Git authority %q", entryRoot)
+	}
+	if status := publicGit(t, anonymousEnvironment, workbench, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+		t.Fatalf("0.4 repair refusal changed the outer context: %q", status)
+	}
+	for _, target := range []string{"pkg", "repos", ".workbench", "package.json", "tsconfig.json", "bun.lock", "node_modules"} {
+		if _, statErr := os.Lstat(filepath.Join(workbench, target)); !os.IsNotExist(statErr) {
+			t.Fatalf("0.4 repair refusal created %q: %v", target, statErr)
 		}
-		assertRemoteProofBranch(t, anonymousEnvironment, entryRepositoryURL, entryProofRevision)
-		assertRemoteProofBranch(t, anonymousEnvironment, libraryRepositoryURL, libraryProofRevision)
-
-		assertWorkspaceProjection(t, workbench)
-		assertWorkspaceLink(t, entry, library)
-		assertProjectedSkills(t, workbench)
-		runCrossRepositoryTypecheck(t, anonymousEnvironment, workbench, entry)
-		beforeProjection := projectionDigest(t, workbench)
-
-		trackedSource := filepath.Join(entry, "src", "index.ts")
-		beforeSource, err := os.ReadFile(trackedSource)
-		if err != nil {
-			t.Fatalf("read Git-owned entry source: %v", err)
-		}
-		wantSource := append([]byte(nil), beforeSource...)
-		wantSource = append(wantSource, []byte("\n// preserved local source state\n")...)
-		if err := os.WriteFile(trackedSource, wantSource, 0o644); err != nil {
-			t.Fatalf("create pre-existing Git-owned source change: %v", err)
-		}
-		beforeStatus := publicGit(t, anonymousEnvironment, entry, "status", "--porcelain=v1", "--untracked-files=all")
-		if !strings.Contains(beforeStatus, "src/index.ts") {
-			t.Fatalf("pre-existing source change is not visible to Git: %q", beforeStatus)
-		}
-
-		secondOutput := runSetup(t, binary, workbench, anonymousEnvironment)
-		if !strings.Contains(secondOutput, "0 generated paths changed") {
-			t.Fatalf("second setup did not converge:\n%s", secondOutput)
-		}
-		if afterProjection := projectionDigest(t, workbench); afterProjection != beforeProjection {
-			t.Fatalf("second setup changed Workbench-owned projection: before %s after %s", beforeProjection, afterProjection)
-		}
-		afterStatus := publicGit(t, anonymousEnvironment, entry, "status", "--porcelain=v1", "--untracked-files=all")
-		afterSource, err := os.ReadFile(trackedSource)
-		if err != nil {
-			t.Fatalf("read preserved Git-owned entry source: %v", err)
-		}
-		if beforeStatus != afterStatus || !slices.Equal(afterSource, wantSource) {
-			t.Fatalf("setup consumed Git-owned source state: status before %q after %q", beforeStatus, afterStatus)
-		}
-		if status := publicGit(t, anonymousEnvironment, workbench, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
-			t.Fatalf("outer context observes ignored local/generated Workbench state:\n%s", status)
-		}
-	})
-
-	t.Run("refuses dirty other branch without Git mutation", func(t *testing.T) {
-		workbench := newPublicWorkbench(t, testRoot, "unsafe-workbench", anonymousEnvironment)
-		runSetup(t, binary, workbench, anonymousEnvironment)
-		entry := filepath.Join(workbench, "pkg", "@workbench-entry")
-		library := filepath.Join(workbench, "pkg", "@workbench-library")
-
-		publicGit(t, anonymousEnvironment, entry, "checkout", "main")
-		source := filepath.Join(entry, "app", "src", "index.ts")
-		contents, err := os.ReadFile(source)
-		if err != nil {
-			t.Fatalf("read source before adversarial edit: %v", err)
-		}
-		if err := os.WriteFile(source, append(contents, []byte("\n// dirty on the other branch\n")...), 0o644); err != nil {
-			t.Fatalf("make checkout dirty on main: %v", err)
-		}
-
-		before := map[string]gitState{
-			entry:   observeGitState(t, anonymousEnvironment, entry),
-			library: observeGitState(t, anonymousEnvironment, library),
-		}
-		command := exec.Command(binary, "setup")
-		command.Dir = workbench
-		command.Env = anonymousEnvironment
-		output, err := command.CombinedOutput()
-		if err == nil {
-			t.Fatalf("setup accepted a dirty checkout on main:\n%s", output)
-		}
-		if !strings.Contains(string(output), "dirty checkout") || !strings.Contains(string(output), subjectBranch) {
-			t.Fatalf("setup returned the wrong public refusal: %v\n%s", err, output)
-		}
-		after := map[string]gitState{
-			entry:   observeGitState(t, anonymousEnvironment, entry),
-			library: observeGitState(t, anonymousEnvironment, library),
-		}
-		for _, checkout := range []string{entry, library} {
-			if before[checkout] != after[checkout] {
-				t.Errorf("refused setup mutated Git state in %q:\nbefore: %#v\nafter:  %#v", checkout, before[checkout], after[checkout])
-			}
-		}
-	})
+	}
+	if entryAfter := remoteProofBranch(t, anonymousEnvironment, entryRepositoryURL); entryAfter != entryBefore {
+		t.Fatalf("0.4 refusal changed entry proof ref from %q to %q", entryBefore, entryAfter)
+	}
+	if libraryAfter := remoteProofBranch(t, anonymousEnvironment, libraryRepositoryURL); libraryAfter != libraryBefore {
+		t.Fatalf("0.4 refusal changed library proof ref from %q to %q", libraryBefore, libraryAfter)
+	}
 }
 
 func buildPublicCLI(t *testing.T, moduleRoot string) string {
@@ -159,6 +98,10 @@ func newPublicWorkbench(t *testing.T, testRoot, name string, environment []strin
 }
 
 func newPublicWorkbenchForBranch(t *testing.T, testRoot, name, branch string, environment []string) string {
+	return newPublicWorkbenchForContractAndBranch(t, testRoot, name, publicSubjectContract, branch, environment)
+}
+
+func newPublicWorkbenchForContractAndBranch(t *testing.T, testRoot, name, contractURI, branch string, environment []string) string {
 	t.Helper()
 	root := filepath.Join(testRoot, name)
 	if err := os.Mkdir(root, 0o700); err != nil {
@@ -189,7 +132,7 @@ workLine {
 entrypoints {
   %q
 }
-`, publicSubjectContract, branch, entryRepositoryURL))
+`, contractURI, branch, entryRepositoryURL))
 	if ignored := publicGit(t, environment, root, "check-ignore", "workbench-subject.pkl"); ignored != "workbench-subject.pkl" {
 		t.Fatalf("Subject is not ignored by the outer context: %q", ignored)
 	}
@@ -240,7 +183,9 @@ func developmentToolPath(t *testing.T, moduleRoot, testRoot, name string) string
 	command.Dir = moduleRoot
 	command.Env = append(os.Environ(),
 		"MISE_CACHE_DIR="+filepath.Join(testRoot, "mise-cache"),
+		"MISE_CEILING_PATHS="+filepath.Dir(moduleRoot),
 		"MISE_CONFIG_FILE="+filepath.Join(moduleRoot, "mise.toml"),
+		"MISE_GLOBAL_CONFIG_FILE=/dev/null",
 		"MISE_LOG_LEVEL=error",
 		"MISE_STATE_DIR="+filepath.Join(testRoot, "mise-state"),
 		"MISE_TRUSTED_CONFIG_PATHS="+filepath.Join(moduleRoot, "mise.toml"),
@@ -289,16 +234,29 @@ func assertCheckout(t *testing.T, environment []string, root, remote string) {
 
 func assertRemoteProofBranch(t *testing.T, environment []string, remote, wantRevision string) {
 	t.Helper()
-	command := exec.Command("git", "ls-remote", "--heads", remote, "refs/heads/"+proofBranch)
+	got := remoteProofBranch(t, environment, remote)
+	if got != wantRevision {
+		t.Fatalf("Subject proof branch at %q = %q, want %s", remote, got, wantRevision)
+	}
+}
+
+func remoteProofBranch(t *testing.T, environment []string, remote string) string {
+	return remoteBranchRevision(t, environment, remote, proofBranch)
+}
+
+func remoteBranchRevision(t *testing.T, environment []string, remote, branch string) string {
+	t.Helper()
+	command := exec.Command("git", "ls-remote", "--heads", remote, "refs/heads/"+branch)
 	command.Env = environment
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("observe public remote branches for %q: %v\n%s", remote, err, output)
 	}
 	fields := strings.Fields(string(output))
-	if len(fields) != 2 || fields[0] != wantRevision || fields[1] != "refs/heads/"+proofBranch {
-		t.Fatalf("Subject proof branch at %q = %q, want %s refs/heads/%s", remote, strings.TrimSpace(string(output)), wantRevision, proofBranch)
+	if len(fields) != 2 || fields[1] != "refs/heads/"+branch {
+		t.Fatalf("Subject proof branch at %q = %q, want refs/heads/%s", remote, strings.TrimSpace(string(output)), branch)
 	}
+	return fields[0]
 }
 
 func assertWorkspaceProjection(t *testing.T, workbench string) {

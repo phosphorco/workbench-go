@@ -2,8 +2,10 @@ package setup
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +37,10 @@ const (
 	localV040PackageScopeURI      = "workbench-contract:/0.4.0/PackageScopeRepository.pkl"
 	localV040RepositoryURI        = "workbench-contract:/0.4.0/Repository.pkl"
 	localV040AgentInstructionsURI = "workbench-contract:/0.4.0/AgentInstructions.pkl"
+	localV050SubjectURI           = "workbench-contract:/0.5.0/WorkbenchSubject.pkl"
+	localV050PackageScopeURI      = "workbench-contract:/0.5.0/PackageScopeRepository.pkl"
+	localV050RepositoryURI        = "workbench-contract:/0.5.0/Repository.pkl"
+	localV050AgentInstructionsURI = "workbench-contract:/0.5.0/AgentInstructions.pkl"
 )
 
 var (
@@ -47,6 +53,7 @@ type Result struct {
 	Orphans         []orphan.Candidate
 	ChangedPaths    []string
 	ContractVersion string
+	SkillWarnings   []skills.Diagnostic
 }
 
 // Resource is setup's version-neutral view. Identity is derived by the
@@ -134,44 +141,84 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		return Result{}, err
 	}
 	var evaluatorVersioned versionedEvaluator
-	if version == "0.2.0" || version == "0.3.0" || version == "0.4.0" {
+	if isVersionedContract(version) {
 		var ok bool
 		evaluatorVersioned, ok = toolchain.Evaluator.(versionedEvaluator)
 		if !ok {
 			return Result{}, fmt.Errorf("Workbench %s setup requires an explicitly configured Pkl evaluator", version)
 		}
 	}
-	if err := migration.Apply(); err != nil {
+	scratchRoot, err := os.MkdirTemp("", "workbench-setup-preflight-*")
+	if err != nil {
+		return Result{}, fmt.Errorf("create setup preflight scratch: %w", err)
+	}
+	defer os.RemoveAll(scratchRoot)
+	previousReceipt := migration.receipt
+	overrides, err := existingSubjectSources(root, previousReceipt, subject.WorkLine)
+	if err != nil {
 		return Result{}, err
 	}
 	source := &discoverySource{
 		ctx:                ctx,
-		root:               root,
+		targetRoot:         root,
+		scratchRoot:        scratchRoot,
 		workLine:           subject.WorkLine,
 		evaluator:          toolchain.Evaluator,
 		evaluatorVersioned: evaluatorVersioned,
 		version:            version,
 		declarations:       make(map[string]contract.PackageScopeRepository),
 		v020Declarations:   make(map[string]contract.Declaration),
+		checkouts:          make(map[string]string),
+		commits:            make(map[string]string),
+		overrides:          overrides,
 	}
-	var closure repositoryclosure.Closure
 	var resources []Resource
-	if version == "0.1.0" {
-		closure, err = repositoryclosure.Discover(subject, source)
-		if err == nil {
-			resources = legacyResources(closure)
+	for {
+		resources, err = discoverResources(subject, source, version)
+		if err != nil {
+			return Result{}, err
 		}
-	} else {
-		var declared repositoryclosure.DeclaredClosure
-		declared, err = repositoryclosure.DiscoverDeclarations(subject, source)
-		if err == nil {
-			resources = declaredResources(declared)
+		added, err := source.preferCanonicalSubjectSources(resources)
+		if err != nil {
+			return Result{}, err
+		}
+		if !added {
+			break
 		}
 	}
+	sourceRoots := make(map[string]string, len(resources))
+	for _, resource := range resources {
+		checkout, exists := source.checkouts[resource.GitHub]
+		if !exists {
+			return Result{}, fmt.Errorf("preflight source for %q was not acquired", resource.GitHub)
+		}
+		sourceRoots[resource.Identity] = checkout
+	}
+	if version == "0.1.0" {
+		if err := rejectRetiredV010SkillSources(resources, sourceRoots); err != nil {
+			return Result{}, err
+		}
+	}
+	catalog, catalogObservations, err := loadSkillCatalog(resources, sourceRoots)
 	if err != nil {
 		return Result{}, err
 	}
-	previousReceipt := migration.receipt
+	report := catalog.Report()
+	if len(report.Issues) != 0 {
+		return Result{}, skillCatalogError(report.Issues)
+	}
+	skillPlan, err := planSkillsWithCatalog(root, resources, previousReceipt, catalog, sourceRoots)
+	if err != nil {
+		return Result{}, err
+	}
+	packages, err := observePackagesAt(resources, version, sourceRoots)
+	if err != nil {
+		return Result{}, err
+	}
+	projection, err := workspace.Build(packages)
+	if err != nil {
+		return Result{}, fmt.Errorf("build workspace projection: %w", err)
+	}
 
 	desired := make([]gitreconcile.Checkout, 0, len(resources))
 	created := make(map[string]bool, len(resources))
@@ -179,31 +226,33 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		canonicalPath := filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))
 		_, statErr := os.Stat(canonicalPath)
 		created[resource.Identity] = errors.Is(statErr, os.ErrNotExist)
-		if err := os.MkdirAll(filepath.Dir(canonicalPath), 0o755); err != nil {
-			return Result{}, fmt.Errorf("create canonical checkout parent: %w", err)
+		commit := source.commits[resource.GitHub]
+		if commit == "" {
+			return Result{}, fmt.Errorf("preflight source for %q has no exact commit", resource.GitHub)
 		}
 		desired = append(desired, gitreconcile.Checkout{
-			Path:       canonicalPath,
-			RemoteURL:  "https://github.com/" + resource.GitHub,
-			Branch:     subject.WorkLine.Branch,
-			BaseBranch: subject.WorkLine.BaseBranch,
+			Path:           canonicalPath,
+			RemoteURL:      "https://github.com/" + resource.GitHub,
+			Branch:         subject.WorkLine.Branch,
+			BaseBranch:     subject.WorkLine.BaseBranch,
+			ExpectedCommit: commit,
 		})
 	}
-	if err := gitreconcile.Reconcile(ctx, desired); err != nil {
+	canonicalChanges, err := gitreconcile.Prepare(ctx, desired)
+	if err != nil {
 		return Result{}, fmt.Errorf("reconcile canonical checkouts: %w", err)
 	}
-
-	packages, err := observePackages(root, resources, version)
-	if err != nil {
+	if err := reobserveCatalogs(catalogObservations); err != nil {
 		return Result{}, err
 	}
-	skillPlan, err := planSkills(root, resources, version, previousReceipt)
-	if err != nil {
+	if err := gitreconcile.Apply(ctx, canonicalChanges); err != nil {
+		return Result{}, fmt.Errorf("reconcile canonical checkouts: %w", err)
+	}
+	if err := verifyCanonicalCatalogs(resources, root, catalogObservations); err != nil {
 		return Result{}, err
 	}
-	projection, err := workspace.Build(packages)
-	if err != nil {
-		return Result{}, fmt.Errorf("build workspace projection: %w", err)
+	if err := migration.Apply(); err != nil {
+		return Result{}, err
 	}
 	changed, err := workspace.Apply(root, projection)
 	if err != nil {
@@ -222,7 +271,7 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, fmt.Errorf("confirm workspace projection convergence: %w", err)
 	}
-	convergencePlan, err := planSkills(root, resources, version, previousReceipt)
+	convergencePlan, err := planSkillsWithCatalog(root, resources, previousReceipt, catalog, nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("plan skill projection convergence: %w", err)
 	}
@@ -244,7 +293,7 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if receiptChanged {
 		changed = append(changed, ".workbench/managed-checkouts.json")
 	}
-	if version == "0.2.0" || version == "0.3.0" || version == "0.4.0" {
+	if isVersionedContract(version) {
 		orientationChanged, err := projectOrientation(ctx, root, subject, resources, evaluatorVersioned, version)
 		if err != nil {
 			return Result{}, err
@@ -254,7 +303,26 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		}
 	}
 	sort.Strings(changed)
-	return Result{Resources: resources, Orphans: orphans, ChangedPaths: changed, ContractVersion: version}, nil
+	return Result{Resources: resources, Orphans: orphans, ChangedPaths: changed, ContractVersion: version, SkillWarnings: report.Warnings}, nil
+}
+
+func discoverResources(subject contract.Subject, source *discoverySource, version string) ([]Resource, error) {
+	if version == "0.1.0" {
+		closure, err := repositoryclosure.Discover(subject, source)
+		if err != nil {
+			return nil, err
+		}
+		return legacyResources(closure), nil
+	}
+	declared, err := repositoryclosure.DiscoverDeclarations(subject, source)
+	if err != nil {
+		return nil, err
+	}
+	return declaredResources(declared), nil
+}
+
+func isVersionedContract(version string) bool {
+	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0"
 }
 
 func reconcileDependencies(ctx context.Context, root, bun string) error {
@@ -270,30 +338,181 @@ func reconcileDependencies(ctx context.Context, root, bun string) error {
 
 type discoverySource struct {
 	ctx                context.Context
-	root               string
+	targetRoot         string
+	scratchRoot        string
 	workLine           contract.WorkLine
 	evaluator          contractEvaluator
 	evaluatorVersioned versionedEvaluator
 	version            string
 	declarations       map[string]contract.PackageScopeRepository
 	v020Declarations   map[string]contract.Declaration
+	checkouts          map[string]string
+	commits            map[string]string
+	overrides          map[string]string
+}
+
+func (source *discoverySource) acquire(github string) (string, error) {
+	if checkout, exists := source.checkouts[github]; exists {
+		return checkout, nil
+	}
+	if checkout, exists := source.overrides[github]; exists {
+		commit, err := runSetupGit(checkout, "rev-parse", "HEAD")
+		if err != nil {
+			return "", fmt.Errorf("observe existing Subject source for %q: %w", github, err)
+		}
+		source.checkouts[github] = checkout
+		source.commits[github] = strings.TrimSpace(commit)
+		return checkout, nil
+	}
+	checkout := filepath.Join(source.scratchRoot, "repositories", strings.ReplaceAll(github, "/", "--"))
+	if err := os.MkdirAll(filepath.Dir(checkout), 0o755); err != nil {
+		return "", fmt.Errorf("create scratch repository parent: %w", err)
+	}
+	changes, err := gitreconcile.Prepare(source.ctx, []gitreconcile.Checkout{{
+		Path:       checkout,
+		RemoteURL:  "https://github.com/" + github,
+		Branch:     source.workLine.Branch,
+		BaseBranch: source.workLine.BaseBranch,
+	}})
+	if err != nil {
+		return "", fmt.Errorf("acquire scratch repository for %q: %w", github, err)
+	}
+	prepared := changes.Prepared()
+	if len(prepared) != 1 || prepared[0].Commit == "" {
+		return "", fmt.Errorf("acquire scratch repository for %q: prepared revision is absent", github)
+	}
+	if err := gitreconcile.Apply(source.ctx, changes); err != nil {
+		return "", fmt.Errorf("acquire scratch repository for %q: %w", github, err)
+	}
+	source.checkouts[github] = checkout
+	source.commits[github] = prepared[0].Commit
+	return checkout, nil
+}
+
+func existingSubjectSources(root string, receipt managedCheckoutReceipt, workLine contract.WorkLine) (map[string]string, error) {
+	result := make(map[string]string)
+	for _, resource := range receipt.Resources {
+		path := filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))
+		matches, err := isCanonicalSubjectSource(path, resource.GitHub, workLine.Branch)
+		if err != nil {
+			return nil, fmt.Errorf("observe existing source %q: %w", resource.Identity, err)
+		}
+		if matches {
+			result[resource.GitHub] = path
+		}
+	}
+	return result, nil
+}
+
+func (source *discoverySource) preferCanonicalSubjectSources(resources []Resource) (bool, error) {
+	added := false
+	for _, resource := range resources {
+		if _, exists := source.overrides[resource.GitHub]; exists {
+			continue
+		}
+		path := filepath.Join(source.targetRoot, filepath.FromSlash(resource.CanonicalPath))
+		matches, err := isCanonicalSubjectSource(path, resource.GitHub, source.workLine.Branch)
+		if err != nil {
+			return false, fmt.Errorf("observe canonical Subject source %q: %w", resource.Identity, err)
+		}
+		if !matches {
+			localScratch, ok, err := source.scratchLocalSubject(resource.GitHub, path)
+			if err != nil {
+				return false, fmt.Errorf("observe local Subject source %q: %w", resource.Identity, err)
+			}
+			if !ok {
+				continue
+			}
+			path = localScratch
+		}
+		source.overrides[resource.GitHub] = path
+		delete(source.checkouts, resource.GitHub)
+		delete(source.commits, resource.GitHub)
+		added = true
+	}
+	if added {
+		source.declarations = make(map[string]contract.PackageScopeRepository)
+		source.v020Declarations = make(map[string]contract.Declaration)
+	}
+	return added, nil
+}
+
+func (source *discoverySource) scratchLocalSubject(github, canonicalPath string) (string, bool, error) {
+	info, err := os.Lstat(canonicalPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", false, err
+	}
+	top, err := runSetupGit(canonicalPath, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", false, nil
+	}
+	absoluteTop, err := filepath.Abs(strings.TrimSpace(top))
+	if err != nil || filepath.Clean(absoluteTop) != filepath.Clean(canonicalPath) {
+		return "", false, nil
+	}
+	origin, err := runSetupGit(canonicalPath, "config", "--get", "remote.origin.url")
+	if err != nil || strings.TrimSpace(origin) != "https://github.com/"+github {
+		return "", false, nil
+	}
+	localCommit, err := runSetupGit(canonicalPath, "for-each-ref", "--format=%(objectname)", "refs/heads/"+source.workLine.Branch)
+	if err != nil || strings.TrimSpace(localCommit) == "" {
+		return "", false, nil
+	}
+	checkout := filepath.Join(source.scratchRoot, "local-subjects", strings.ReplaceAll(github, "/", "--"))
+	changes, err := gitreconcile.Prepare(source.ctx, []gitreconcile.Checkout{{
+		Path: checkout, RemoteURL: canonicalPath,
+		Branch: source.workLine.Branch, BaseBranch: source.workLine.BaseBranch,
+		ExpectedCommit: strings.TrimSpace(localCommit),
+	}})
+	if err != nil {
+		return "", false, err
+	}
+	if err := gitreconcile.Apply(source.ctx, changes); err != nil {
+		return "", false, err
+	}
+	return checkout, true, nil
+}
+
+func isCanonicalSubjectSource(path, github, branchName string) (bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, nil
+	}
+	top, err := runSetupGit(path, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return false, nil
+	}
+	absoluteTop, err := filepath.Abs(strings.TrimSpace(top))
+	if err != nil || filepath.Clean(absoluteTop) != filepath.Clean(path) {
+		return false, nil
+	}
+	origin, err := runSetupGit(path, "config", "--get", "remote.origin.url")
+	if err != nil || strings.TrimSpace(origin) != "https://github.com/"+github {
+		return false, nil
+	}
+	branch, err := runSetupGit(path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil || strings.TrimSpace(branch) != branchName {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (source *discoverySource) LoadRepository(identity string) (contract.PackageScopeRepository, error) {
 	if declaration, exists := source.declarations[identity]; exists {
 		return declaration, nil
 	}
-	discoveryPath := filepath.Join(source.root, ".workbench", "discovery", strings.ReplaceAll(identity, "/", "--"))
-	if err := os.MkdirAll(filepath.Dir(discoveryPath), 0o755); err != nil {
-		return contract.PackageScopeRepository{}, fmt.Errorf("create discovery checkout parent: %w", err)
-	}
-	if err := gitreconcile.Reconcile(source.ctx, []gitreconcile.Checkout{{
-		Path:       discoveryPath,
-		RemoteURL:  "https://github.com/" + identity,
-		Branch:     source.workLine.Branch,
-		BaseBranch: source.workLine.BaseBranch,
-	}}); err != nil {
-		return contract.PackageScopeRepository{}, fmt.Errorf("acquire declaration for %q: %w", identity, err)
+	discoveryPath, err := source.acquire(identity)
+	if err != nil {
+		return contract.PackageScopeRepository{}, err
 	}
 	encoded, err := os.ReadFile(filepath.Join(discoveryPath, "workbench.pkl"))
 	if err != nil {
@@ -318,15 +537,9 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	if declaration, exists := source.v020Declarations[github]; exists {
 		return declaration, nil
 	}
-	discoveryPath := filepath.Join(source.root, ".workbench", "discovery", strings.ReplaceAll(github, "/", "--"))
-	if err := os.MkdirAll(filepath.Dir(discoveryPath), 0o755); err != nil {
-		return contract.Declaration{}, fmt.Errorf("create discovery checkout parent: %w", err)
-	}
-	if err := gitreconcile.Reconcile(source.ctx, []gitreconcile.Checkout{{
-		Path: discoveryPath, RemoteURL: "https://github.com/" + github,
-		Branch: source.workLine.Branch, BaseBranch: source.workLine.BaseBranch,
-	}}); err != nil {
-		return contract.Declaration{}, fmt.Errorf("acquire declaration for %q: %w", github, err)
+	discoveryPath, err := source.acquire(github)
+	if err != nil {
+		return contract.Declaration{}, err
 	}
 	encoded, err := os.ReadFile(filepath.Join(discoveryPath, "workbench.pkl"))
 	if err != nil {
@@ -343,12 +556,12 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	if err != nil {
 		return contract.Declaration{}, fmt.Errorf("select %q repository contract: %w", github, err)
 	}
-	if source.version != version || (version != "0.2.0" && version != "0.3.0" && version != "0.4.0") {
+	if source.version != version || !isVersionedContract(version) {
 		return contract.Declaration{}, fmt.Errorf("repository %q declaration is %s, want exact %s", github, version, source.version)
 	}
 	var declaration contract.Declaration
 	if filename == "PackageScopeRepository.pkl" {
-		if version == "0.3.0" || version == "0.4.0" {
+		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclarationV030(source.ctx, encoded, schema)
 		} else {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclaration(source.ctx, encoded, schema)
@@ -364,7 +577,7 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 }
 
 func (source *discoverySource) IdentityAt(canonicalPath string) (string, bool, error) {
-	path := filepath.Join(source.root, filepath.FromSlash(canonicalPath))
+	path := filepath.Join(source.targetRoot, filepath.FromSlash(canonicalPath))
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
@@ -386,7 +599,7 @@ func (source *discoverySource) IdentityAt(canonicalPath string) (string, bool, e
 	if err != nil {
 		return "", true, err
 	}
-	if (source.version == "0.2.0" || source.version == "0.3.0" || source.version == "0.4.0") && strings.HasPrefix(filepath.ToSlash(canonicalPath), "pkg/") {
+	if isVersionedContract(source.version) && strings.HasPrefix(filepath.ToSlash(canonicalPath), "pkg/") {
 		// PackageScope identity is derived from the closed placement arm, while
 		// origin remains independent and must still name the declaration source.
 		for github, declaration := range source.v020Declarations {
@@ -471,9 +684,21 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 	case localV040AgentInstructionsURI:
 		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
 		return value, "0.4.0", err
+	case localV050SubjectURI:
+		value, err := evaluate.LocalContract(uri, localSubjectContract)
+		return value, "0.5.0", err
+	case localV050PackageScopeURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		return value, "0.5.0", err
+	case localV050RepositoryURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryDeclarationContract)
+		return value, "0.5.0", err
+	case localV050AgentInstructionsURI:
+		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
+		return value, "0.5.0", err
 	default:
 		version := ""
-		for _, candidate := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0"} {
+		for _, candidate := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0"} {
 			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate + "/workbench@" + candidate + "#/" + filename
 			if uri == exact {
 				version = candidate
@@ -491,9 +716,20 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 }
 
 func observePackages(root string, resources []Resource, contractVersion string) ([]workspace.Package, error) {
+	resourceRoots := make(map[string]string, len(resources))
+	for _, resource := range resources {
+		resourceRoots[resource.Identity] = filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))
+	}
+	return observePackagesAt(resources, contractVersion, resourceRoots)
+}
+
+func observePackagesAt(resources []Resource, contractVersion string, resourceRoots map[string]string) ([]workspace.Package, error) {
 	result := make([]workspace.Package, 0)
 	for _, resource := range resources {
-		resourceRoot := filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))
+		resourceRoot, exists := resourceRoots[resource.Identity]
+		if !exists {
+			return nil, fmt.Errorf("source root for %q is absent", resource.Identity)
+		}
 		names := make([]string, 0, len(resource.Packages))
 		for name := range resource.Packages {
 			names = append(names, name)
@@ -504,10 +740,11 @@ func observePackages(root string, resources []Resource, contractVersion string) 
 			if err != nil {
 				return nil, fmt.Errorf("locate package %q in %q: %w", name, resource.Identity, err)
 			}
-			relative, err := filepath.Rel(root, packageRoot)
+			relativeInResource, err := filepath.Rel(resourceRoot, packageRoot)
 			if err != nil {
 				return nil, err
 			}
+			relative := filepath.Join(filepath.FromSlash(resource.CanonicalPath), relativeInResource)
 			imports, err := sourceImports(filepath.Join(packageRoot, "src"))
 			if err != nil {
 				return nil, fmt.Errorf("observe package %q imports: %w", name, err)
@@ -524,7 +761,7 @@ func observePackages(root string, resources []Resource, contractVersion string) 
 }
 
 func locatePackage(resourceRoot string, resource Resource, name, contractVersion string, allowRoot bool) (string, error) {
-	if (contractVersion == "0.3.0" || contractVersion == "0.4.0") && resource.Shape.Kind == contract.PackageScopeShape {
+	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0") && resource.Shape.Kind == contract.PackageScopeShape {
 		return locatePackageScopePackage(resourceRoot, resource.Shape.Scope, name)
 	}
 	return locateLegacyPackage(resourceRoot, name, allowRoot)
@@ -681,6 +918,146 @@ func sourceImports(root string) ([]string, error) {
 	return result, nil
 }
 
+type catalogObservation struct {
+	identity string
+	root     string
+	digest   string
+}
+
+func loadSkillCatalog(resources []Resource, resourceRoots map[string]string) (skills.Catalog, []catalogObservation, error) {
+	sources := make([]skills.Source, 0, len(resources))
+	observations := make([]catalogObservation, 0, len(resources))
+	for _, resource := range resources {
+		resourceRoot, exists := resourceRoots[resource.Identity]
+		if !exists {
+			return skills.Catalog{}, nil, fmt.Errorf("skill source root for %q is absent", resource.Identity)
+		}
+		catalogRoot := filepath.Join(resourceRoot, "skills")
+		digest, exists, err := observeCatalogTree(catalogRoot)
+		if err != nil {
+			return skills.Catalog{}, nil, fmt.Errorf("observe %q skill catalog: %w", resource.GitHub, err)
+		}
+		observations = append(observations, catalogObservation{identity: resource.Identity, root: catalogRoot, digest: digest})
+		if exists {
+			sources = append(sources, skills.Source{Name: resource.GitHub, Root: catalogRoot})
+		}
+	}
+	catalog, err := skills.Load(sources)
+	if err != nil {
+		return skills.Catalog{}, nil, fmt.Errorf("load participating skill catalogs: %w", err)
+	}
+	return catalog, observations, nil
+}
+
+func observeCatalogTree(root string) (string, bool, error) {
+	info, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", false, fmt.Errorf("catalog root is not a real directory")
+	}
+	hash := sha256.New()
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("catalog contains symlink %q", path)
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			fmt.Fprintf(hash, "d\x00%s\x00", filepath.ToSlash(relative))
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("catalog contains non-regular file %q", path)
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(hash, "f\x00%s\x00%d\x00", filepath.ToSlash(relative), len(contents))
+		_, _ = hash.Write(contents)
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return fmt.Sprintf("sha256:%x", hash.Sum(nil)), true, nil
+}
+
+func reobserveCatalogs(observations []catalogObservation) error {
+	for _, observation := range observations {
+		digest, _, err := observeCatalogTree(observation.root)
+		if err != nil {
+			return fmt.Errorf("reobserve %q skill catalog: %w", observation.identity, err)
+		}
+		if digest != observation.digest {
+			return fmt.Errorf("skill catalog for %q changed after preflight", observation.identity)
+		}
+	}
+	return nil
+}
+
+func verifyCanonicalCatalogs(resources []Resource, root string, observations []catalogObservation) error {
+	byIdentity := make(map[string]catalogObservation, len(observations))
+	for _, observation := range observations {
+		byIdentity[observation.identity] = observation
+	}
+	for _, resource := range resources {
+		expected := byIdentity[resource.Identity]
+		canonicalRoot := filepath.Join(root, filepath.FromSlash(resource.CanonicalPath), "skills")
+		digest, _, err := observeCatalogTree(canonicalRoot)
+		if err != nil {
+			return fmt.Errorf("observe reconciled %q skill catalog: %w", resource.Identity, err)
+		}
+		if digest != expected.digest {
+			return fmt.Errorf("reconciled skill catalog for %q differs from its validated source revision", resource.Identity)
+		}
+	}
+	return nil
+}
+
+func skillCatalogError(issues []skills.Diagnostic) error {
+	lines := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		lines = append(lines, issue.Location()+": "+issue.Message)
+	}
+	return fmt.Errorf("skill catalog contains %d blocking issue(s):\n%s", len(lines), strings.Join(lines, "\n"))
+}
+
+func rejectRetiredV010SkillSources(resources []Resource, roots map[string]string) error {
+	for _, resource := range resources {
+		legacyRoot := filepath.Join(roots[resource.Identity], ".agents", "skills")
+		entries, err := os.ReadDir(legacyRoot)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect retired 0.1 skill source at %q: %w", resource.GitHub, err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			relative := filepath.ToSlash(filepath.Join(".agents", "skills", entry.Name(), "SKILL.md"))
+			if info, err := os.Lstat(filepath.Join(legacyRoot, entry.Name(), "SKILL.md")); err == nil && info.Mode().IsRegular() {
+				return fmt.Errorf("%s:%s: Workbench 0.1 skill-source layout is retired; recreate this Git-owned skill under skills/%s/SKILL.md", resource.GitHub, relative, entry.Name())
+			} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("inspect retired 0.1 skill source %s:%s: %w", resource.GitHub, relative, err)
+			}
+		}
+	}
+	return nil
+}
+
 type skillProjectionEntry struct {
 	destination string
 	prefix      string
@@ -689,27 +1066,27 @@ type skillProjectionEntry struct {
 }
 
 type skillProjectionPlan struct {
-	legacy  bool
 	entries []skillProjectionEntry
 }
 
-func planSkills(root string, resources []Resource, contractVersion string, previous managedCheckoutReceipt) (skillProjectionPlan, error) {
-	sources := make([]skills.Source, 0, len(resources))
+func planSkills(root string, resources []Resource, previous managedCheckoutReceipt) (skillProjectionPlan, error) {
+	resourceRoots := make(map[string]string, len(resources))
 	for _, resource := range resources {
-		sources = append(sources, skills.Source{Root: filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))})
+		resourceRoots[resource.Identity] = filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))
 	}
-	var inventory skills.Inventory
-	var err error
-	if contractVersion == "0.1.0" {
-		inventory, err = skills.DiscoverLegacy(sources)
-	} else {
-		inventory, err = skills.Discover(sources)
-	}
+	catalog, _, err := loadSkillCatalog(resources, resourceRoots)
 	if err != nil {
-		return skillProjectionPlan{}, fmt.Errorf("discover assembled skills: %w", err)
+		return skillProjectionPlan{}, err
 	}
+	if report := catalog.Report(); len(report.Issues) != 0 {
+		return skillProjectionPlan{}, skillCatalogError(report.Issues)
+	}
+	return planSkillsWithCatalog(root, resources, previous, catalog, nil)
+}
+
+func planSkillsWithCatalog(root string, resources []Resource, previous managedCheckoutReceipt, catalog skills.Catalog, sourceRoots map[string]string) (skillProjectionPlan, error) {
 	workbenchSelection := contract.SkillSelection{}
-	plan := skillProjectionPlan{legacy: contractVersion == "0.1.0", entries: make([]skillProjectionEntry, 0, len(resources)+1)}
+	plan := skillProjectionPlan{entries: make([]skillProjectionEntry, 0, len(resources)+1)}
 	for _, consumer := range resources {
 		editing := contract.SkillSelection{}
 		for _, policy := range consumer.Includes {
@@ -720,104 +1097,82 @@ func planSkills(root string, resources []Resource, contractVersion string, previ
 				workbenchSelection = mergeSelection(workbenchSelection, *policy.Workbench)
 			}
 		}
-		selected, err := skills.Select(inventory, editing)
+		selected, err := skills.Select(catalog, editing)
 		if err != nil {
 			return skillProjectionPlan{}, fmt.Errorf("select editing skills for %q: %w", consumer.Identity, err)
+		}
+		if sourceRoot := sourceRoots[consumer.Identity]; sourceRoot != "" {
+			if _, err := skills.PlanWithTracking(sourceRoot, selected, trackedSkillPathObserver(sourceRoot)); err != nil {
+				return skillProjectionPlan{}, fmt.Errorf("preflight editing skill portability for %q: %w", consumer.Identity, err)
+			}
 		}
 		entry := skillProjectionEntry{
 			destination: filepath.Join(root, filepath.FromSlash(consumer.CanonicalPath)),
 			prefix:      consumer.CanonicalPath,
 			selected:    selected,
 		}
-		if !plan.legacy {
-			tracks, observerErr := trackedSkillPathObserver(entry.destination)
-			if observerErr != nil {
-				return skillProjectionPlan{}, fmt.Errorf("observe tracked editing skill paths for %q: %w", consumer.Identity, observerErr)
-			}
-			entry.projection, err = skills.PlanWithTracking(entry.destination, selected, tracks)
-			if err != nil {
-				return skillProjectionPlan{}, fmt.Errorf("plan editing skills for %q: %w", consumer.Identity, err)
-			}
+		tracks := trackedSkillPathObserver(entry.destination)
+		entry.projection, err = skills.PlanWithTracking(entry.destination, selected, tracks)
+		if err != nil {
+			return skillProjectionPlan{}, fmt.Errorf("plan editing skills for %q: %w", consumer.Identity, err)
 		}
 		plan.entries = append(plan.entries, entry)
 	}
-	if !plan.legacy {
-		current := make(map[string]struct{}, len(resources))
-		for _, resource := range resources {
-			current[resource.Identity] = struct{}{}
-		}
-		for _, retired := range previous.Resources {
-			if _, exists := current[retired.Identity]; exists {
-				continue
-			}
-			destination := filepath.Join(root, filepath.FromSlash(retired.CanonicalPath))
-			info, statErr := os.Lstat(destination)
-			if errors.Is(statErr, os.ErrNotExist) {
-				continue
-			}
-			if statErr != nil {
-				return skillProjectionPlan{}, fmt.Errorf("observe retired skill projection destination %q: %w", retired.Identity, statErr)
-			}
-			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-				return skillProjectionPlan{}, fmt.Errorf("retired skill projection destination %q is not a real directory", retired.Identity)
-			}
-			if err := validateRetiredSkillDestination(destination, retired); err != nil {
-				return skillProjectionPlan{}, err
-			}
-			tracks, observerErr := trackedSkillPathObserver(destination)
-			if observerErr != nil {
-				return skillProjectionPlan{}, fmt.Errorf("observe tracked retired skill paths for %q: %w", retired.Identity, observerErr)
-			}
-			projection, planErr := skills.PlanWithTracking(destination, nil, tracks)
-			if planErr != nil {
-				return skillProjectionPlan{}, fmt.Errorf("plan retired editing skill cleanup for %q: %w", retired.Identity, planErr)
-			}
-			plan.entries = append(plan.entries, skillProjectionEntry{
-				destination: destination,
-				prefix:      retired.CanonicalPath,
-				projection:  projection,
-			})
-		}
+	current := make(map[string]struct{}, len(resources))
+	for _, resource := range resources {
+		current[resource.Identity] = struct{}{}
 	}
-	selected, err := skills.Select(inventory, workbenchSelection)
+	for _, retired := range previous.Resources {
+		if _, exists := current[retired.Identity]; exists {
+			continue
+		}
+		destination := filepath.Join(root, filepath.FromSlash(retired.CanonicalPath))
+		info, statErr := os.Lstat(destination)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return skillProjectionPlan{}, fmt.Errorf("observe retired skill projection destination %q: %w", retired.Identity, statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return skillProjectionPlan{}, fmt.Errorf("retired skill projection destination %q is not a real directory", retired.Identity)
+		}
+		if err := validateRetiredSkillDestination(destination, retired); err != nil {
+			return skillProjectionPlan{}, err
+		}
+		tracks := trackedSkillPathObserver(destination)
+		projection, planErr := skills.PlanWithTracking(destination, nil, tracks)
+		if planErr != nil {
+			return skillProjectionPlan{}, fmt.Errorf("plan retired editing skill cleanup for %q: %w", retired.Identity, planErr)
+		}
+		plan.entries = append(plan.entries, skillProjectionEntry{
+			destination: destination,
+			prefix:      retired.CanonicalPath,
+			projection:  projection,
+		})
+	}
+	selected, err := skills.Select(catalog, workbenchSelection)
 	if err != nil {
 		return skillProjectionPlan{}, fmt.Errorf("select workbench skills: %w", err)
 	}
 	entry := skillProjectionEntry{destination: root, selected: selected}
-	if !plan.legacy {
-		tracks, observerErr := trackedSkillPathObserver(root)
-		if observerErr != nil {
-			return skillProjectionPlan{}, fmt.Errorf("observe tracked workbench skill paths: %w", observerErr)
-		}
-		entry.projection, err = skills.PlanWithTracking(root, selected, tracks)
-		if err != nil {
-			return skillProjectionPlan{}, fmt.Errorf("plan workbench skills: %w", err)
-		}
+	tracks := trackedSkillPathObserver(root)
+	entry.projection, err = skills.PlanWithTracking(root, selected, tracks)
+	if err != nil {
+		return skillProjectionPlan{}, fmt.Errorf("plan workbench skills: %w", err)
 	}
 	plan.entries = append(plan.entries, entry)
 	return plan, nil
 }
 
 func (plan skillProjectionPlan) Apply() ([]string, error) {
-	changedByEntry := make([][]string, len(plan.entries))
-	if plan.legacy {
-		for index, entry := range plan.entries {
-			paths, err := skills.ApplyLegacy(entry.destination, entry.selected)
-			if err != nil {
-				return nil, fmt.Errorf("apply legacy skill projection at %q: %w", entry.destination, err)
-			}
-			changedByEntry[index] = paths
-		}
-	} else {
-		projections := make([]skills.Projection, 0, len(plan.entries))
-		for _, entry := range plan.entries {
-			projections = append(projections, entry.projection)
-		}
-		var err error
-		changedByEntry, err = skills.ApplyPlans(projections)
-		if err != nil {
-			return nil, fmt.Errorf("apply skill projections: %w", err)
-		}
+	projections := make([]skills.Projection, 0, len(plan.entries))
+	for _, entry := range plan.entries {
+		projections = append(projections, entry.projection)
+	}
+	changedByEntry, err := skills.ApplyPlans(projections)
+	if err != nil {
+		return nil, fmt.Errorf("apply skill projections: %w", err)
 	}
 	changed := make([]string, 0)
 	for index, paths := range changedByEntry {
@@ -828,15 +1183,15 @@ func (plan skillProjectionPlan) Apply() ([]string, error) {
 	return changed, nil
 }
 
-func trackedSkillPathObserver(root string) (skills.TrackedPathObserver, error) {
-	_, err := os.Stat(filepath.Join(root, ".git"))
-	if errors.Is(err, os.ErrNotExist) {
-		return func(string) (bool, error) { return false, nil }, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("observe Git boundary at %q: %w", root, err)
-	}
+func trackedSkillPathObserver(root string) skills.TrackedPathObserver {
 	return func(relativePath string) (bool, error) {
+		_, err := os.Stat(filepath.Join(root, ".git"))
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("observe Git boundary at %q: %w", root, err)
+		}
 		command := exec.Command("git", "ls-files", "-z", "--", filepath.ToSlash(relativePath))
 		command.Dir = root
 		output, err := command.CombinedOutput()
@@ -844,7 +1199,7 @@ func trackedSkillPathObserver(root string) (skills.TrackedPathObserver, error) {
 			return false, fmt.Errorf("observe tracked path %q: %w: %s", relativePath, err, strings.TrimSpace(string(output)))
 		}
 		return len(output) != 0, nil
-	}, nil
+	}
 }
 
 func validateRetiredSkillDestination(destination string, retired receiptResource) error {

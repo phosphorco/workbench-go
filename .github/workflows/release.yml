@@ -1,12 +1,12 @@
-name: Release 0.4.0
+name: Release 0.5.0
 
 on:
   push:
-    tags: ["0.4.0"]
+    tags: ["0.5.0"]
   workflow_dispatch:
 
 env:
-  WORKBENCH_VERSION: 0.4.0
+  WORKBENCH_VERSION: 0.5.0
 
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
         with:
           version: 2026.8.12
           cache: false
-      - name: Verify the exact candidate and 0.1-0.3 compatibility
+      - name: Verify candidate, non-skill compatibility, and historical skill refusals
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -118,7 +118,7 @@ jobs:
           set -euo pipefail
           test "$(go version -m candidate/workbench | awk 'NR == 1 { sub(/^go/, "", $2); print $2 }')" = "$(jq -r '.buildDependencies.go.version' release/runtime-lock.json)"
           go version -m candidate/workbench | awk '$1 == "dep" { print $2 " " $3 }' | sort > candidate/linked-modules.txt
-          jq -r '.buildDependencies | to_entries[] | select(.key != "go") | if .key == "pkl-go" then "github.com/apple/pkl-go v" + .value.version elif .key == "msgpack" then "github.com/vmihailenco/msgpack/v5 v" + .value.version else "github.com/vmihailenco/tagparser/v2 v" + .value.version end' \
+          jq -r '.buildDependencies | to_entries[] | select(.key != "go") | if .key == "pkl-go" then "github.com/apple/pkl-go v" + .value.version elif .key == "msgpack" then "github.com/vmihailenco/msgpack/v5 v" + .value.version elif .key == "tagparser" then "github.com/vmihailenco/tagparser/v2 v" + .value.version elif .key == "yaml" then "gopkg.in/yaml.v3 v" + .value.version else error("unknown linked module " + .key) end' \
             release/runtime-lock.json | sort > candidate/inventoried-modules.txt
           diff -u candidate/inventoried-modules.txt candidate/linked-modules.txt
       - name: Package deterministic archive
@@ -144,16 +144,29 @@ jobs:
             --pkl-go-license candidate/licenses/pkl-go/LICENSE.txt \
             --pkl-go-notice candidate/licenses/pkl-go/NOTICE.txt \
             --msgpack-license candidate/licenses/msgpack/LICENSE \
-            --tagparser-license candidate/licenses/tagparser/LICENSE
+            --tagparser-license candidate/licenses/tagparser/LICENSE \
+            --yaml-license candidate/licenses/yaml/LICENSE
       - name: Prove native archive behavior
         run: |
           set -euo pipefail
           archive=$(find candidate/out -name '*.tar.gz' -type f)
           mkdir candidate/installed
           tar -xzf "$archive" --strip-components=1 -C candidate/installed
-          test "$(candidate/installed/bin/workbench version)" = "workbench 0.4.0 (${{ github.sha }})"
+          test "$(candidate/installed/bin/workbench version)" = "workbench 0.5.0 (${{ github.sha }})"
           candidate/installed/libexec/workbench/pkl --version | grep -F '0.32.1'
           test "$(candidate/installed/libexec/workbench/bun --version)" = '1.3.14'
+          mkdir -p candidate/catalog/.agents/skills/release-smoke
+          cat > candidate/catalog/.agents/skills/release-smoke/SKILL.md <<'EOF'
+          ---
+          name: release-smoke
+          description: Verify the released Workbench can parse a self-contained skill catalog.
+          metadata:
+            domain: general
+          ---
+
+          # Release smoke
+          EOF
+          (cd candidate/catalog && ../installed/bin/workbench skills check)
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: candidate/out/workbench-*.tar.gz
@@ -181,12 +194,12 @@ jobs:
           test "$(sed -n 's/^  version = "\([^"]*\)"$/\1/p' PklProject)" = "$WORKBENCH_VERSION"
           mkdir contracts
           mise exec -- pkl project package --skip-publish-check --output-path contracts .
-          for artifact in contracts/workbench@0.4.0 contracts/workbench@0.4.0.zip; do
+          for artifact in contracts/workbench@0.5.0 contracts/workbench@0.5.0.zip; do
             shasum -a 256 "$artifact" | awk '{print $1}' > "$artifact.sha256"
           done
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: contracts/workbench@0.4.0.zip
+          subject-path: contracts/workbench@0.5.0.zip
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: workbench-contracts

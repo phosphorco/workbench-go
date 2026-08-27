@@ -110,13 +110,14 @@ func (lock RuntimeLock) validate() error {
 		return fmt.Errorf("runtime lock contains undeclared runtimes")
 	}
 	expectedDependencies := map[string]string{
-		"go": "1.26.6", "msgpack": "5.4.1", "pkl-go": "0.14.0", "tagparser": "2.0.0",
+		"go": "1.26.6", "msgpack": "5.4.1", "pkl-go": "0.14.0", "tagparser": "2.0.0", "yaml": "3.0.1",
 	}
 	expectedLicensePaths := map[string][]string{
 		"go":        {"go/LICENSE", "go/PATENTS"},
 		"msgpack":   {"msgpack/LICENSE"},
 		"pkl-go":    {"pkl-go/LICENSE.txt", "pkl-go/NOTICE.txt"},
 		"tagparser": {"tagparser/LICENSE"},
+		"yaml":      {"yaml/LICENSE"},
 	}
 	if len(lock.BuildDependencies) != len(expectedDependencies) {
 		return fmt.Errorf("runtime lock build dependency inventory is not closed")

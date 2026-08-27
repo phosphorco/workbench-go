@@ -14,6 +14,7 @@ import (
 
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/evaluate"
+	"github.com/phosphorco/workbench-go/internal/skills"
 )
 
 func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
@@ -39,6 +40,7 @@ func TestSchemaForSourceDiscriminatesReleasedAndCurrentPackageScopeContracts(t *
 		{uri: localV020PackageScopeURI, version: "0.2.0"},
 		{uri: localV030PackageScopeURI, version: "0.3.0"},
 		{uri: localV040PackageScopeURI, version: "0.4.0"},
+		{uri: localV050PackageScopeURI, version: "0.5.0"},
 	} {
 		source := []byte(fmt.Sprintf("amends %q\n", test.uri))
 		if _, version, err := schemaForSource(source, "PackageScopeRepository.pkl"); err != nil {
@@ -57,23 +59,28 @@ func TestSchemaForSourceDiscriminatesReleasedAndCurrentPackageScopeContracts(t *
 	} else if version != "0.4.0" {
 		t.Fatalf("released 0.4 package selected %q", version)
 	}
+	if _, version, err := schemaForSource([]byte(`amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/PackageScopeRepository.pkl"`), "PackageScopeRepository.pkl"); err != nil {
+		t.Fatal(err)
+	} else if version != "0.5.0" {
+		t.Fatalf("released 0.5 package selected %q", version)
+	}
 	if _, _, err := schemaForSource([]byte(`amends "package://example.invalid/releases/download/0.4.0/workbench@0.4.0#/PackageScopeRepository.pkl"`), "PackageScopeRepository.pkl"); err == nil {
 		t.Fatal("foreign package URI was accepted by release-shaped substring")
 	}
-	if _, version, err := schemaForSource([]byte(`amends "workbench-contract:/0.4.0/WorkbenchSubject.pkl"`), "WorkbenchSubject.pkl"); err != nil {
+	if _, version, err := schemaForSource([]byte(`amends "workbench-contract:/0.5.0/WorkbenchSubject.pkl"`), "WorkbenchSubject.pkl"); err != nil {
 		t.Fatal(err)
-	} else if version != "0.4.0" {
+	} else if version != "0.5.0" {
 		t.Fatalf("local current Subject selected %q", version)
 	}
 }
 
-func TestObservePackagesV030AndV040UseOneNestedLawForSingletonAndMultiplePackages(t *testing.T) {
+func TestObservePackagesV030AndLaterUseOneNestedLawForSingletonAndMultiplePackages(t *testing.T) {
 	root := t.TempDir()
 	resourceRoot := filepath.Join(root, "pkg", "@workbench-entry")
 	write(t, filepath.Join(resourceRoot, "app", "src", "index.ts"), "export const app = true\n")
 	write(t, filepath.Join(resourceRoot, "tool", "src", "index.ts"), "export const tool = true\n")
 
-	for _, version := range []string{"0.3.0", "0.4.0"} {
+	for _, version := range []string{"0.3.0", "0.4.0", "0.5.0"} {
 		resource := Resource{
 			Identity:      "@workbench-entry",
 			CanonicalPath: "pkg/@workbench-entry",
@@ -444,12 +451,13 @@ func TestRunWithV020RoutesClosedShapesAndConvergesOrientation(t *testing.T) {
 		t.Fatal(err)
 	}
 	createRemote(t, root, remotes, "workbench-fixture-library", fmt.Sprintf("amends %q\n", localV020RepositoryURI), map[string]string{
-		".gitignore":                   ".agents/skills/\n",
-		"skills/library-edit/SKILL.md": "---\ndomain: engineering\n---\n\nCompose [`$entry-export`](../entry-export/SKILL.md).\n",
+		".gitignore":                      ".agents/skills/\n",
+		"skills/library-edit/SKILL.md":    "---\nname: library-edit\ndescription: Library editing skill.\nmetadata:\n  domain: engineering\n---\n\nCompose [`$library-support`](../library-support/SKILL.md).\n",
+		"skills/library-support/SKILL.md": "---\nname: library-support\ndescription: Library support skill.\nmetadata:\n  domain: general\n---\n",
 	})
 	createRemote(t, root, remotes, "workbench-fixture-entry", fmt.Sprintf("amends %q\n\nscope = \"@workbench-entry\"\nincludes { [\"phosphorco/workbench-fixture-library\"] { skills { editing { names = Set(\"library-edit\") }; workbench { names = Set(\"library-edit\") } } } }\n", localV020PackageScopeURI), map[string]string{
 		".gitignore":                   ".agents/skills/\n",
-		"skills/entry-export/SKILL.md": "---\ndomain: general\n---\n\nEntry-owned source skill.\n",
+		"skills/entry-export/SKILL.md": "---\nname: entry-export\ndescription: Entry export skill.\nmetadata:\n  domain: general\n---\n\nEntry-owned source skill.\n",
 	})
 	workbench := filepath.Join(root, "workbench")
 	if err := os.MkdirAll(workbench, 0o755); err != nil {
@@ -502,9 +510,9 @@ func TestRunWithV020RoutesClosedShapesAndConvergesOrientation(t *testing.T) {
 	}
 	for _, path := range []string{
 		"pkg/@workbench-entry/.agents/skills/library-edit/SKILL.md",
-		"pkg/@workbench-entry/.agents/skills/entry-export/SKILL.md",
+		"pkg/@workbench-entry/.agents/skills/library-support/SKILL.md",
 		".agents/skills/library-edit/SKILL.md",
-		".agents/skills/entry-export/SKILL.md",
+		".agents/skills/library-support/SKILL.md",
 	} {
 		if _, err := os.Stat(filepath.Join(workbench, filepath.FromSlash(path))); err != nil {
 			t.Fatalf("projected selected skill %s: %v", path, err)
@@ -559,7 +567,7 @@ func TestRunWithV020RefusesLateForeignSkillCollisionBeforeGeneratedMutation(t *t
 	}
 	createRemote(t, root, remotes, "workbench-fixture-entry", fmt.Sprintf("amends %q\n\nscope = \"@workbench-entry\"\nincludes { [\"phosphorco/workbench-fixture-library\"] {} }\n", localV020PackageScopeURI), map[string]string{
 		".gitignore":                   ".agents/skills/\n",
-		"skills/entry-export/SKILL.md": "---\ndomain: engineering\n---\n\nEntry source.\n",
+		"skills/entry-export/SKILL.md": "---\nname: entry-export\ndescription: Entry export skill.\nmetadata:\n  domain: engineering\n---\n\nEntry source.\n",
 	})
 	createRemote(t, root, remotes, "workbench-fixture-library", fmt.Sprintf("amends %q\n\nincludes { [\"phosphorco/workbench-fixture-entry\"] { skills { editing { names = Set(\"entry-export\") } } } }\n", localV020RepositoryURI), map[string]string{
 		".gitignore": ".agents/skills/\n",
@@ -580,8 +588,6 @@ func TestRunWithV020RefusesLateForeignSkillCollisionBeforeGeneratedMutation(t *t
 	}{
 		{"workbench-fixture-entry", "pkg/@workbench-entry"},
 		{"workbench-fixture-library", "repos/workbench-fixture-library"},
-		{"workbench-fixture-entry", ".workbench/discovery/phosphorco--workbench-fixture-entry"},
-		{"workbench-fixture-library", ".workbench/discovery/phosphorco--workbench-fixture-library"},
 	} {
 		target := filepath.Join(workbench, filepath.FromSlash(checkout.path))
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -623,6 +629,179 @@ func TestRunWithV020RefusesLateForeignSkillCollisionBeforeGeneratedMutation(t *t
 	}
 }
 
+func TestRunRefusesLaterInvalidCatalogBeforeAnyCanonicalMutation(t *testing.T) {
+	root := t.TempDir()
+	remotes := filepath.Join(root, "remotes")
+	if err := os.MkdirAll(remotes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	createRemote(t, root, remotes, "entry", fmt.Sprintf("amends %q\n\nscope = \"@entry\"\nincludes { [\"phosphorco/library\"] {} }\n", localV020PackageScopeURI), map[string]string{
+		"skills/entry-skill/SKILL.md": "---\nname: entry-skill\ndescription: Entry.\nmetadata:\n  domain: general\n---\n",
+	})
+	createRemote(t, root, remotes, "library", fmt.Sprintf("amends %q\n", localV020RepositoryURI), map[string]string{
+		"skills/broken/SKILL.md": "---\nname: broken\ndescription: Broken.\nmetadata:\n  domain: engineering\n---\n\nRead [missing](references/missing.md).\n",
+	})
+	workbench := filepath.Join(root, "workbench")
+	if err := os.MkdirAll(workbench, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(workbench, "workbench-subject.pkl"), fmt.Sprintf("amends %q\n\nworkLine { branch = \"workbench/catalog-preflight\"; baseBranch = \"main\" }\nentrypoints { \"https://github.com/phosphorco/entry\" }\n", localV020SubjectURI))
+	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+filepath.ToSlash(remotes)+"/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/phosphorco/")
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := readVisibleTree(t, workbench)
+	_, err = RunWith(context.Background(), workbench, NewToolchain(evaluator, "/must/not/run/bun"))
+	if err == nil {
+		t.Fatal("invalid later catalog was accepted")
+	}
+	for _, fact := range []string{"phosphorco/library:broken/SKILL.md", "missing link target references/missing.md"} {
+		if !strings.Contains(err.Error(), fact) {
+			t.Fatalf("catalog refusal %q omits %q", err, fact)
+		}
+	}
+	if after := readVisibleTree(t, workbench); !reflect.DeepEqual(after, before) {
+		t.Fatalf("invalid catalog mutated Workbench root: before=%#v after=%#v", before, after)
+	}
+	for _, target := range []string{"pkg/@entry", "repos/library", ".workbench"} {
+		if _, statErr := os.Lstat(filepath.Join(workbench, filepath.FromSlash(target))); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("invalid catalog created target %q: %v", target, statErr)
+		}
+	}
+}
+
+func TestRunCarriesCatalogWarningsWithoutBlockingSetup(t *testing.T) {
+	root := t.TempDir()
+	remotes := filepath.Join(root, "remotes")
+	if err := os.MkdirAll(remotes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	createRemote(t, root, remotes, "entry", fmt.Sprintf("amends %q\n\nscope = \"@entry\"\nincludes { [\"phosphorco/library\"] { skills { workbench { names = Set(\"warning-skill\") } } } }\n", localV020PackageScopeURI), map[string]string{
+		"skills/alpha-warning/SKILL.md": "---\nname: alpha-warning\ndescription: \"\"\nmetadata:\n  domain: general\n---\n",
+	})
+	createRemote(t, root, remotes, "library", fmt.Sprintf("amends %q\n", localV020RepositoryURI), map[string]string{
+		"skills/warning-skill/SKILL.md": "---\nname: warning-skill\ndescription: \"\"\nmetadata:\n  domain: general\n---\n",
+	})
+	workbench := filepath.Join(root, "workbench")
+	if err := os.MkdirAll(workbench, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(workbench, "workbench-subject.pkl"), fmt.Sprintf("amends %q\n\nworkLine { branch = \"workbench/warnings\"; baseBranch = \"main\" }\nentrypoints { \"https://github.com/phosphorco/entry\" }\n", localV020SubjectURI))
+	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+filepath.ToSlash(remotes)+"/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/phosphorco/")
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skip("bun unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := RunWith(context.Background(), workbench, NewToolchain(evaluator, bun))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []skills.Diagnostic{
+		{Source: "phosphorco/entry", Path: "alpha-warning/SKILL.md", Message: "frontmatter description is missing or empty"},
+		{Source: "phosphorco/library", Path: "warning-skill/SKILL.md", Message: "frontmatter description is missing or empty"},
+	}
+	if !reflect.DeepEqual(result.SkillWarnings, want) {
+		t.Fatalf("setup warnings = %#v, want %#v", result.SkillWarnings, want)
+	}
+}
+
+func TestRunUsesDirtyExistingSubjectSkillSourceWithoutRemoteSubstitution(t *testing.T) {
+	root := t.TempDir()
+	remotes := filepath.Join(root, "remotes")
+	if err := os.MkdirAll(remotes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	createRemote(t, root, remotes, "entry", fmt.Sprintf("amends %q\n\nscope = \"@entry\"\nincludes { [\"phosphorco/library\"] { skills { workbench { names = Set(\"local-skill\") } } } }\n", localV020PackageScopeURI), nil)
+	createRemote(t, root, remotes, "library", fmt.Sprintf("amends %q\n", localV020RepositoryURI), map[string]string{
+		"skills/local-skill/SKILL.md": "---\nname: local-skill\ndescription: Local skill.\nmetadata:\n  domain: general\n---\n\nRemote bytes.\n",
+	})
+	workbench := filepath.Join(root, "workbench")
+	if err := os.MkdirAll(workbench, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(workbench, "workbench-subject.pkl"), fmt.Sprintf("amends %q\n\nworkLine { branch = \"workbench/local-skill\"; baseBranch = \"main\" }\nentrypoints { \"https://github.com/phosphorco/entry\" }\n", localV020SubjectURI))
+	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+filepath.ToSlash(remotes)+"/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/phosphorco/")
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skip("bun unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolchain := NewToolchain(evaluator, bun)
+	if _, err := RunWith(context.Background(), workbench, toolchain); err != nil {
+		t.Fatal(err)
+	}
+	library := filepath.Join(workbench, "repos", "library")
+	source := filepath.Join(library, "skills", "local-skill", "SKILL.md")
+	committedBytes := "---\nname: local-skill\ndescription: Local skill.\nmetadata:\n  domain: general\n---\n\nLocal-only Subject commit.\n"
+	write(t, source, committedBytes)
+	git(t, library, "add", "skills/local-skill/SKILL.md")
+	git(t, library, "-c", "user.email=setup@example.invalid", "-c", "user.name=Setup Test", "commit", "-m", "local Subject skill")
+	localHead := git(t, library, "rev-parse", "HEAD")
+	git(t, library, "checkout", "main")
+	if err := os.Remove(filepath.Join(workbench, ".workbench", "managed-checkouts.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RunWith(context.Background(), workbench, toolchain); err != nil {
+		t.Fatal(err)
+	}
+	if branch := git(t, library, "branch", "--show-current"); branch != "workbench/local-skill" {
+		t.Fatalf("selected branch = %q", branch)
+	}
+	if head := git(t, library, "rev-parse", "HEAD"); head != localHead {
+		t.Fatalf("selected local Subject HEAD = %q, want %q", head, localHead)
+	}
+	if projected := string(mustRead(t, filepath.Join(workbench, ".agents", "skills", "local-skill", "SKILL.md"))); projected != committedBytes {
+		t.Fatalf("projected local-only commit = %q", projected)
+	}
+
+	localBytes := "---\nname: local-skill\ndescription: Local skill.\nmetadata:\n  domain: general\n---\n\nDirty local Subject bytes.\n"
+	write(t, source, localBytes)
+	statusBefore := git(t, library, "status", "--porcelain=v1", "--untracked-files=all")
+	headBefore := git(t, library, "rev-parse", "HEAD")
+	if _, err := RunWith(context.Background(), workbench, toolchain); err != nil {
+		t.Fatal(err)
+	}
+	projected := mustRead(t, filepath.Join(workbench, ".agents", "skills", "local-skill", "SKILL.md"))
+	if string(projected) != localBytes {
+		t.Fatalf("projected bytes = %q, want dirty local Subject bytes", projected)
+	}
+	if statusAfter := git(t, library, "status", "--porcelain=v1", "--untracked-files=all"); statusAfter != statusBefore {
+		t.Fatalf("dirty source status changed: before %q after %q", statusBefore, statusAfter)
+	}
+	if headAfter := git(t, library, "rev-parse", "HEAD"); headAfter != headBefore {
+		t.Fatalf("dirty source HEAD changed: before %q after %q", headBefore, headAfter)
+	}
+}
+
 func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(t *testing.T) {
 	root := t.TempDir()
 	entry := filepath.Join(root, "pkg", "@workbench-entry")
@@ -640,9 +819,10 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 		git(t, repository.path, "remote", "add", "origin", "https://github.com/"+repository.github)
 		write(t, filepath.Join(repository.path, ".gitignore"), ".agents/skills/\n")
 	}
-	entrySource := "---\ndomain: general\n---\n\nEntry-owned source skill.\n"
+	entrySource := "---\nname: entry-export\ndescription: Entry export skill.\nmetadata:\n  domain: general\n---\n\nEntry-owned source skill.\n"
 	write(t, filepath.Join(entry, "skills", "entry-export", "SKILL.md"), entrySource)
-	write(t, filepath.Join(library, "skills", "library-edit", "SKILL.md"), "---\ndomain: engineering\n---\n\nCompose [`$entry-export`](../entry-export/SKILL.md).\n")
+	write(t, filepath.Join(library, "skills", "library-edit", "SKILL.md"), "---\nname: library-edit\ndescription: Library editing skill.\nmetadata:\n  domain: engineering\n---\n\nCompose [`$library-support`](../library-support/SKILL.md).\n")
+	write(t, filepath.Join(library, "skills", "library-support", "SKILL.md"), "---\nname: library-support\ndescription: Library support skill.\nmetadata:\n  domain: general\n---\n")
 	for _, repository := range []string{entry, library} {
 		git(t, repository, "add", ".")
 		git(t, repository, "commit", "-m", "author source skills")
@@ -661,7 +841,7 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library", Includes: []contract.SkillPolicy{{Editing: &entryExportSelection}}},
 	}
 
-	plan, err := planSkills(root, resources, "0.2.0", managedCheckoutReceipt{Version: 1})
+	plan, err := planSkills(root, resources, managedCheckoutReceipt{Version: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,10 +850,10 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 	}
 	for _, path := range []string{
 		"pkg/@workbench-entry/.agents/skills/library-edit/SKILL.md",
-		"pkg/@workbench-entry/.agents/skills/entry-export/SKILL.md",
+		"pkg/@workbench-entry/.agents/skills/library-support/SKILL.md",
 		"repos/workbench-fixture-library/.agents/skills/entry-export/SKILL.md",
 		".agents/skills/library-edit/SKILL.md",
-		".agents/skills/entry-export/SKILL.md",
+		".agents/skills/library-support/SKILL.md",
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path))); err != nil {
 			t.Fatalf("selected composition closure %s: %v", path, err)
@@ -688,7 +868,7 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 		{Identity: "@workbench-entry", GitHub: "phosphorco/workbench-fixture-entry", Shape: contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: "@workbench-entry"}, CanonicalPath: "pkg/@workbench-entry"},
 		{Identity: "phosphorco/workbench-fixture-library", GitHub: "phosphorco/workbench-fixture-library", Shape: contract.ResourceShape{Kind: contract.RepositoryShape}, CanonicalPath: "repos/workbench-fixture-library"},
 	}}
-	plan, err = planSkills(root, remaining, "0.2.0", previous)
+	plan, err = planSkills(root, remaining, previous)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,10 +877,10 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 	}
 	for _, path := range []string{
 		"pkg/@workbench-entry/.agents/skills/library-edit",
-		"pkg/@workbench-entry/.agents/skills/entry-export",
+		"pkg/@workbench-entry/.agents/skills/library-support",
 		"repos/workbench-fixture-library/.agents/skills/entry-export",
 		".agents/skills/library-edit",
-		".agents/skills/entry-export",
+		".agents/skills/library-support",
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("stale Workbench-owned projection %s remains: %v", path, err)
@@ -712,7 +892,7 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 	if got := string(mustRead(t, retiredContextSibling)); got != "library context-owned sibling\n" {
 		t.Fatalf("retired member context-owned sibling changed: %q", got)
 	}
-	if got := string(mustRead(t, filepath.Join(library, "skills", "library-edit", "SKILL.md"))); !strings.Contains(got, "entry-export") {
+	if got := string(mustRead(t, filepath.Join(library, "skills", "library-edit", "SKILL.md"))); !strings.Contains(got, "library-support") {
 		t.Fatalf("retired member Git-owned source changed: %q", got)
 	}
 	if info, err := os.Stat(library); err != nil || !info.IsDir() {
@@ -727,13 +907,13 @@ func TestProjectSkillsV020RefusesSymlinkedRetiredCheckoutWithoutMutation(t *test
 	root := t.TempDir()
 	entry := filepath.Join(root, "pkg", "@workbench-entry")
 	library := filepath.Join(root, "repos", "workbench-fixture-library")
-	write(t, filepath.Join(entry, "skills", "entry-export", "SKILL.md"), "---\ndomain: engineering\n---\n\nEntry source.\n")
+	write(t, filepath.Join(entry, "skills", "entry-export", "SKILL.md"), "---\nname: entry-export\ndescription: Entry export skill.\nmetadata:\n  domain: engineering\n---\n\nEntry source.\n")
 	selection := contract.SkillSelection{Names: []string{"entry-export"}}
 	resources := []Resource{
 		{Identity: "@workbench-entry", CanonicalPath: "pkg/@workbench-entry"},
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library", Includes: []contract.SkillPolicy{{Editing: &selection}}},
 	}
-	plan, err := planSkills(root, resources, "0.2.0", managedCheckoutReceipt{Version: 1})
+	plan, err := planSkills(root, resources, managedCheckoutReceipt{Version: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,7 +936,7 @@ func TestProjectSkillsV020RefusesSymlinkedRetiredCheckoutWithoutMutation(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := planSkills(root, resources[:1], "0.2.0", previous); err == nil || !strings.Contains(err.Error(), "not a real directory") {
+	if _, err := planSkills(root, resources[:1], previous); err == nil || !strings.Contains(err.Error(), "not a real directory") {
 		t.Fatalf("symlinked retired checkout error = %v", err)
 	}
 	afterExternal := readTree(t, external)
@@ -773,7 +953,7 @@ func TestProjectSkillsV020RefusesRetiredCheckoutWithWrongOriginWithoutMutation(t
 	root := t.TempDir()
 	entry := filepath.Join(root, "pkg", "@workbench-entry")
 	library := filepath.Join(root, "repos", "workbench-fixture-library")
-	write(t, filepath.Join(entry, "skills", "entry-export", "SKILL.md"), "---\ndomain: engineering\n---\n\nEntry source.\n")
+	write(t, filepath.Join(entry, "skills", "entry-export", "SKILL.md"), "---\nname: entry-export\ndescription: Entry export skill.\nmetadata:\n  domain: engineering\n---\n\nEntry source.\n")
 	if err := os.MkdirAll(library, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -789,7 +969,7 @@ func TestProjectSkillsV020RefusesRetiredCheckoutWithWrongOriginWithoutMutation(t
 		{Identity: "@workbench-entry", CanonicalPath: "pkg/@workbench-entry"},
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library", Includes: []contract.SkillPolicy{{Editing: &selection}}},
 	}
-	plan, err := planSkills(root, resources, "0.2.0", managedCheckoutReceipt{Version: 1})
+	plan, err := planSkills(root, resources, managedCheckoutReceipt{Version: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,7 +982,7 @@ func TestProjectSkillsV020RefusesRetiredCheckoutWithWrongOriginWithoutMutation(t
 	}}}
 	beforeTree := readTree(t, root)
 	beforeGit := exactGitSnapshot(t, library)
-	if _, err := planSkills(root, resources[:1], "0.2.0", previous); err == nil || !strings.Contains(err.Error(), "has origin") {
+	if _, err := planSkills(root, resources[:1], previous); err == nil || !strings.Contains(err.Error(), "has origin") {
 		t.Fatalf("wrong-origin retired checkout error = %v", err)
 	}
 	afterGit := exactGitSnapshot(t, library)
@@ -816,7 +996,7 @@ func TestProjectSkillsV020RefusesForeignSelectedNameWithoutMutation(t *testing.T
 	root := t.TempDir()
 	entry := filepath.Join(root, "pkg", "@workbench-entry")
 	library := filepath.Join(root, "repos", "workbench-fixture-library")
-	write(t, filepath.Join(entry, "skills", "entry-export", "SKILL.md"), "---\ndomain: engineering\n---\n\nEntry source.\n")
+	write(t, filepath.Join(entry, "skills", "entry-export", "SKILL.md"), "---\nname: entry-export\ndescription: Entry export skill.\nmetadata:\n  domain: engineering\n---\n\nEntry source.\n")
 	write(t, filepath.Join(library, ".agents", "skills", "entry-export", "SKILL.md"), "foreign bytes\n")
 	selection := contract.SkillSelection{Names: []string{"entry-export"}}
 	resources := []Resource{
@@ -824,7 +1004,7 @@ func TestProjectSkillsV020RefusesForeignSelectedNameWithoutMutation(t *testing.T
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library", Includes: []contract.SkillPolicy{{Editing: &selection}}},
 	}
 	before := readTree(t, root)
-	if _, err := planSkills(root, resources, "0.2.0", managedCheckoutReceipt{Version: 1}); err == nil || !strings.Contains(err.Error(), "foreign projection") {
+	if _, err := planSkills(root, resources, managedCheckoutReceipt{Version: 1}); err == nil || !strings.Contains(err.Error(), "foreign projection") {
 		t.Fatalf("foreign selected-name error = %v", err)
 	}
 	after := readTree(t, root)
@@ -846,7 +1026,7 @@ func TestProjectSkillsV020RefusesTrackedForgedOwnershipWithoutMutation(t *testin
 		git(t, repository, "config", "user.name", "Setup Test")
 		write(t, filepath.Join(repository, ".gitignore"), ".agents/skills/\n")
 	}
-	write(t, filepath.Join(library, "skills", "library-edit", "SKILL.md"), "---\ndomain: engineering\n---\n\nLibrary source.\n")
+	write(t, filepath.Join(library, "skills", "library-edit", "SKILL.md"), "---\nname: library-edit\ndescription: Library editing skill.\nmetadata:\n  domain: engineering\n---\n\nLibrary source.\n")
 	for _, repository := range []string{entry, library} {
 		git(t, repository, "add", ".")
 		git(t, repository, "commit", "-m", "declare resource skill source")
@@ -856,7 +1036,7 @@ func TestProjectSkillsV020RefusesTrackedForgedOwnershipWithoutMutation(t *testin
 		{Identity: "@workbench-entry", CanonicalPath: "pkg/@workbench-entry", Includes: []contract.SkillPolicy{{Editing: &selection}}},
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library"},
 	}
-	plan, err := planSkills(root, selectedResources, "0.2.0", managedCheckoutReceipt{Version: 1})
+	plan, err := planSkills(root, selectedResources, managedCheckoutReceipt{Version: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -872,13 +1052,42 @@ func TestProjectSkillsV020RefusesTrackedForgedOwnershipWithoutMutation(t *testin
 		{Identity: "@workbench-entry", CanonicalPath: "pkg/@workbench-entry"},
 		{Identity: "phosphorco/workbench-fixture-library", CanonicalPath: "repos/workbench-fixture-library"},
 	}
-	if _, err := planSkills(root, deselectedResources, "0.2.0", managedCheckoutReceipt{Version: 1}); err == nil || !strings.Contains(err.Error(), "tracked") {
+	if _, err := planSkills(root, deselectedResources, managedCheckoutReceipt{Version: 1}); err == nil || !strings.Contains(err.Error(), "tracked") {
 		t.Fatalf("tracked forged ownership error = %v", err)
 	}
 	afterGit := exactGitSnapshot(t, entry)
 	afterTree := readTree(t, root)
 	if !reflect.DeepEqual(beforeGit, afterGit) || !reflect.DeepEqual(beforeTree, afterTree) {
 		t.Fatalf("tracked forged ownership refusal mutated state:\nGit before=%#v\nGit after=%#v", beforeGit, afterGit)
+	}
+}
+
+func TestRetiredV010SkillSourceRefusesWithRecreationGuidance(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, ".agents", "skills", "retired", "SKILL.md"), "legacy source\n")
+	resources := []Resource{{Identity: "@entry", GitHub: "phosphorco/entry", CanonicalPath: "pkg/@entry"}}
+	err := rejectRetiredV010SkillSources(resources, map[string]string{"@entry": root})
+	if err == nil {
+		t.Fatal("retired 0.1 source was consumed")
+	}
+	for _, fact := range []string{"phosphorco/entry:.agents/skills/retired/SKILL.md", "recreate", "skills/retired/SKILL.md"} {
+		if !strings.Contains(err.Error(), fact) {
+			t.Fatalf("legacy refusal %q omits %q", err, fact)
+		}
+	}
+}
+
+func TestCatalogReobservationRefusesStaleBytes(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "skills", "stable", "SKILL.md"), "before\n")
+	digest, _, err := observeCatalogTree(filepath.Join(root, "skills"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := catalogObservation{identity: "phosphorco/resource", root: filepath.Join(root, "skills"), digest: digest}
+	write(t, filepath.Join(root, "skills", "stable", "SKILL.md"), "after\n")
+	if err := reobserveCatalogs([]catalogObservation{observation}); err == nil || !strings.Contains(err.Error(), "changed after preflight") {
+		t.Fatalf("stale catalog refusal = %v", err)
 	}
 }
 

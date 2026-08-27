@@ -31,7 +31,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	root := t.TempDir()
 	inputs := distributionV1Inputs(t, root)
 	platform := distribution.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
-	assetName, err := distribution.AssetName("0.4.0", platform)
+	assetName, err := distribution.AssetName("0.5.0", platform)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,20 +61,20 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	server.Config.Handler = http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		assets := []map[string]any{}
 		for _, name := range []string{
-			"workbench-0.4.0-linux-arm64.tar.gz", "workbench-0.4.0-linux-x64.tar.gz",
-			"workbench-0.4.0-macos-arm64.tar.gz", "workbench-0.4.0-macos-x64.tar.gz",
+			"workbench-0.5.0-linux-arm64.tar.gz", "workbench-0.5.0-linux-x64.tar.gz",
+			"workbench-0.5.0-macos-arm64.tar.gz", "workbench-0.5.0-macos-x64.tar.gz",
 		} {
 			assets = append(assets,
 				map[string]any{"name": name, "browser_download_url": server.URL + "/assets/" + name, "url": server.URL + "/api/assets/" + name},
 				map[string]any{"name": name + ".sha256", "browser_download_url": server.URL + "/assets/" + name + ".sha256", "url": server.URL + "/api/assets/" + name + ".sha256"},
 			)
 		}
-		release := map[string]any{"tag_name": "0.4.0", "created_at": "2026-08-25T00:00:00Z", "draft": false, "prerelease": false, "assets": assets}
+		release := map[string]any{"tag_name": "0.5.0", "created_at": "2026-08-25T00:00:00Z", "draft": false, "prerelease": false, "assets": assets}
 		switch request.URL.Path {
 		case "/repos/phosphorco/workbench-go/releases":
 			response.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(response).Encode([]any{release})
-		case "/repos/phosphorco/workbench-go/releases/tags/0.4.0":
+		case "/repos/phosphorco/workbench-go/releases/tags/0.5.0":
 			response.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(response).Encode(release)
 		case "/assets/" + assetName, "/api/assets/" + assetName:
@@ -89,7 +89,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	t.Cleanup(server.Close)
 
 	data := filepath.Join(root, "mise-data")
-	identity := fmt.Sprintf("github:phosphorco/workbench-go[api_url=%s,github_attestations=false]@0.4.0", server.URL)
+	identity := fmt.Sprintf("github:phosphorco/workbench-go[api_url=%s,github_attestations=false]@0.5.0", server.URL)
 	command := exec.Command(mise, "install", identity)
 	command.Dir = root
 	command.Env = append(os.Environ(),
@@ -100,7 +100,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("Mise local-candidate install: %v\n%s", err, output)
 	}
-	installed := filepath.Join(data, "installs", "github-phosphorco-workbench-go", "0.4.0")
+	installed := filepath.Join(data, "installs", "github-phosphorco-workbench-go", "0.5.0")
 	for _, path := range []string{"bin/workbench", "libexec/workbench/pkl", "libexec/workbench/bun"} {
 		if _, err := os.Stat(filepath.Join(installed, filepath.FromSlash(path))); err != nil {
 			t.Fatalf("Mise installation lacks %s: %v", path, err)
@@ -108,10 +108,68 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	}
 
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release-acceptance.yml"))
-	for _, marker := range []string{"mise install github:phosphorco/workbench-go@0.4.0", "workbench setup", "GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\""} {
+	for _, marker := range []string{"mise install github:phosphorco/workbench-go@0.5.0", "workbench skills check", "GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\""} {
 		if !strings.Contains(workflow, marker) {
 			t.Errorf("final public acceptance workflow lacks marker %q", marker)
 		}
+	}
+	for _, forbidden := range []string{"workbench setup", "0.4.0/workbench@0.4.0", "workbench/proof-0.4.0"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Errorf("release acceptance silently treats invalid historical skill bytes as a setup success through %q", forbidden)
+		}
+	}
+}
+
+func TestReleaseWorkflowBuildsCompleteCandidateBeforeTagOnlyPublication(t *testing.T) {
+	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release.yml"))
+	for _, marker := range []string{
+		`tags: ["0.5.0"]`,
+		"workflow_dispatch:",
+		"if: github.event_name == 'push' && github.ref_type == 'tag'",
+		"needs: [binaries, contracts]",
+		"subject-path: candidate/out/workbench-*.tar.gz",
+		"subject-path: contracts/workbench@0.5.0.zip",
+		"gh release create",
+	} {
+		if !strings.Contains(workflow, marker) {
+			t.Errorf("release workflow lacks marker %q", marker)
+		}
+	}
+	if got := strings.Count(workflow, "if: github.event_name == 'push' && github.ref_type == 'tag'"); got != 2 {
+		t.Errorf("tag-only publication gates = %d, want release and public acceptance", got)
+	}
+	if got := strings.Count(workflow, "- runner:"); got != 4 {
+		t.Errorf("native binary matrix entries = %d, want four", got)
+	}
+	if got := strings.Count(workflow, "uses: actions/attest@"); got != 2 {
+		t.Errorf("attestation steps = %d, want one four-platform step plus one contract step", got)
+	}
+
+	platforms := []distribution.Platform{
+		{OS: "darwin", Arch: "arm64"},
+		{OS: "darwin", Arch: "amd64"},
+		{OS: "linux", Arch: "arm64"},
+		{OS: "linux", Arch: "amd64"},
+	}
+	assets := map[string]struct{}{
+		"workbench@0.5.0":            {},
+		"workbench@0.5.0.sha256":     {},
+		"workbench@0.5.0.zip":        {},
+		"workbench@0.5.0.zip.sha256": {},
+	}
+	for _, platform := range platforms {
+		name, err := distribution.AssetName("0.5.0", platform)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assets[name] = struct{}{}
+		assets[name+".sha256"] = struct{}{}
+	}
+	if len(assets) != 12 {
+		t.Fatalf("release asset set = %d, want 12", len(assets))
+	}
+	if attestations := len(platforms) + 1; attestations != 5 {
+		t.Fatalf("release attestation subjects = %d, want 5", attestations)
 	}
 }
 
@@ -128,7 +186,7 @@ func distributionV1Inputs(t *testing.T, root string) distribution.ArchiveInputs 
 		return path
 	}
 	return distribution.ArchiveInputs{
-		Version: "0.4.0", Revision: snapshotPruneV1Commit,
+		Version: "0.5.0", Revision: snapshotPruneV1Commit,
 		WorkbenchBinary: file("workbench", "#!/bin/sh\necho workbench\n", true),
 		PklBinary:       file("pkl", "#!/bin/sh\necho pkl\n", true), BunBinary: file("bun", "#!/bin/sh\necho bun\n", true),
 		RuntimeLock: file("runtime-lock.json", "{}\n", false), WorkbenchLicense: file("workbench-license", "license\n", false),
@@ -137,5 +195,6 @@ func distributionV1Inputs(t *testing.T, root string) distribution.ArchiveInputs 
 		GoLicense: file("go-license", "license\n", false), GoPatents: file("go-patents", "patents\n", false),
 		PklGoLicense: file("pkl-go-license", "license\n", false), PklGoNotice: file("pkl-go-notice", "notice\n", false),
 		MsgpackLicense: file("msgpack-license", "license\n", false), TagparserLicense: file("tagparser-license", "license\n", false),
+		YAMLLicense: file("yaml-license", "license\n", false),
 	}
 }

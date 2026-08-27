@@ -22,15 +22,17 @@ from the public GitHub backend identity:
 
 The archive licenses first-party Workbench code under Apache-2.0 and carries
 the independently governed upstream license, notice, patent, and provenance
-inventory for Go, Pkl, Bun, pkl-go, msgpack, and tagparser. Bundling those
+inventory for Go, Pkl, Bun, pkl-go, msgpack, tagparser, and yaml.v3. Bundling those
 components does not relicense them as Workbench code.
+The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
+terms together and is included unchanged in every platform archive.
 
-The commands below describe the `0.4.0` release candidate. They become a public
+The commands below describe the `0.5.0` release candidate. They become a public
 installation path only after the matching tag, archives, contracts, checksums,
 attestations, and immutable GitHub release have been published.
 
 ```sh
-mise use -g github:phosphorco/workbench-go@0.4.0
+mise use -g github:phosphorco/workbench-go@0.5.0
 workbench version
 ```
 
@@ -102,10 +104,10 @@ Workbench-owned generated files inside a resource repository must likewise be ex
 `workbench-subject.pkl` is the local request for what should exist:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.4.0/workbench@0.4.0#/WorkbenchSubject.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/WorkbenchSubject.pkl"
 
 workLine {
-  branch = "workbench/proof-0.4.0"
+  branch = "cole/example-work"
   baseBranch = "main"
 }
 
@@ -148,7 +150,7 @@ For example:
 
 ```text
 entrypoint: phosphorco/workbench-fixture-entry
-branch:     workbench/proof-0.4.0
+branch:     cole/example-work
 base:       main
 ```
 
@@ -170,11 +172,11 @@ snapshot never changes the Subject’s branch policy and never resets or rewrite
 an existing checkout; a conflicting checkout stops reproduction in recoverable
 state.
 
-Workbench 0.4 records `WorkbenchSnapshot.pkl` at
-`.workbench/workbench-snapshot.pkl` by default. A 0.4 binary always writes that
+Workbench 0.5 records `WorkbenchSnapshot.pkl` at
+`.workbench/workbench-snapshot.pkl` by default. A 0.5 binary always writes that
 current contract, even when the Subject amends an older released contract.
 Explicit reproduction can still read the exact snapshot contracts released by
-Workbench 0.2.0 and 0.3.0 through version-scoped compatibility adapters; it
+Workbench 0.2.0, 0.3.0, and 0.4.0 through version-scoped compatibility adapters; it
 does not rename or delete a user-authored snapshot.
 
 ### There is no second branch lock
@@ -197,7 +199,7 @@ A filesystem lock, watcher, or permission layer is outside this design.
 Each participating resource contains a root `workbench.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.4.0/workbench@0.4.0#/PackageScopeRepository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/PackageScopeRepository.pkl"
 
 scope = "@workbench-entry"
 
@@ -276,7 +278,7 @@ A Repository-shaped `workbench.pkl` amends the released `Repository.pkl`
 contract and does not author a name, scope, or generic identity:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.4.0/workbench@0.4.0#/Repository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/Repository.pkl"
 
 includes {}
 packages {}
@@ -287,7 +289,7 @@ name supplies the `repos/<name>` placement. Repository package placement remains
 the distinct, versioned law of that shape.
 
 A PackageScope resource is different: its checkout is a namespace container,
-not a package root. Every `packages` key in the `0.4.0` contract is exactly
+not a package root. Every `packages` key in the `0.5.0` contract is exactly
 `<scope>/<leaf>`, and the leaf derives the only canonical child location:
 
 ```pkl
@@ -522,14 +524,54 @@ Resource repositories that receive editing projections ignore
 
 Because skill sources are assembled on the Subject branch, agents receive the skill definitions associated with the same collaboration line as the source they are editing.
 
+### One Skill Catalog owns checking, selection, and projection
+
+Workbench parses skill sources into one Skill Catalog. The Catalog is the only
+owner of skill metadata, Markdown links, composition edges, diagnostics,
+selection, and projection facts; setup does not carry a second, weaker
+interpretation.
+
+To check the context-owned catalog in the current directory without changing
+any file, run:
+
+```sh
+workbench skills check
+```
+
+The command intentionally has no path flag. It checks `.agents/skills` in the
+current directory and reports the derived skill and composition-edge counts.
+Each skill is one flat `.agents/skills/<name>/SKILL.md` directory. YAML
+frontmatter must name the folder and declare one of the three domains.
+Workbench validates local Markdown targets, explicit composition labels,
+skill-name references, and optional description-marker metadata. Blocking
+diagnostics identify the source-relative file and line and produce a nonzero
+exit. Warnings remain visible in the successful report without making an
+otherwise valid catalog fail.
+
+`workbench setup` applies the same Catalog to every participating resource's
+Git-owned `skills/` tree before canonical checkout reconciliation or
+generated-path mutation. Scratch acquisition is read-only with respect to the
+Workbench and binds validation to the exact revision later reconciled.
+Only a valid batch may proceed to selection and projection. This makes the
+explicit check and setup preflight two consumers of the same parsed facts,
+not two linters that can disagree.
+
+Projection copies selected skill subtrees byte-for-byte into
+`.agents/skills/`; it does not rewrite authored paths. A composition link to a
+peer skill remains portable because the explicit dependency is projected as a
+sibling. A relative link that resolves only through repository files outside
+the projected skill closure is refused before the first projection write.
+Resource authors should keep projected references inside the selected skill
+subtrees and their explicit composition dependencies.
+
 ## `AGENTS.pkl` turns current Workbench state into agent orientation
 
-Workbench `0.4.0` retains the constrained `AgentInstructions.pkl` contract.
+Workbench `0.5.0` retains the constrained `AgentInstructions.pkl` contract.
 
 The context template tracks `AGENTS.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.4.0/workbench@0.4.0#/AgentInstructions.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/AgentInstructions.pkl"
 
 prose = """
 # Agent instructions
@@ -571,7 +613,7 @@ Workbench must make it difficult for agents to lose work, commit unrelated edits
 `commit-plan.pkl` describes one **Workbench Change Set**:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.4.0/workbench@0.4.0#/WorkbenchCommitPlan.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/WorkbenchCommitPlan.pkl"
 
 changeId = "fixture-cross-repository"
 summary = "Exercise a cross-repository fixture change"
@@ -760,6 +802,16 @@ nested `<leaf>/src` law rather than silently reinterpreting a `0.1.0` or `0.2.0`
 contract. A compatibility run must therefore continue to assemble the permanent
 `workbench/proof-0.1.0` anchors and the immutable `0.2.0` public path while the
 new candidate proves nested PackageScope behavior independently.
+
+The immutable `0.4.0` line introduced the current Workbench vocabulary and
+the separation between Git-owned `skills/` sources and Workbench-owned
+`.agents/skills/` projections. Workbench 0.5 preserves the 0.4 contracts and
+public fixture branch while adding the first-class Skill Catalog check and
+setup preflight. Those immutable fixture bytes predate the current catalog
+frontmatter law, so 0.5 retains an explicit source-anchored refusal oracle
+rather than rewriting or blessing them. Contract, snapshot, and declaration
+compatibility remain independently covered; current positive setup proof uses
+current resource declarations.
 
 Adopting BasinDB and `phosphorco/community-packages` is a separate future
 promise. Their Workbench declarations, repository split, migration, and history

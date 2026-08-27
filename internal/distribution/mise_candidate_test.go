@@ -17,7 +17,7 @@ import (
 
 func TestMiseGitHubBackendAutodetectsCandidateArchive(t *testing.T) {
 	if goruntime.GOOS != "linux" && goruntime.GOOS != "darwin" {
-		t.Skip("Workbench 0.4.0 does not distribute this operating system")
+		t.Skip("Workbench 0.5.0 does not distribute this operating system")
 	}
 	mise, err := exec.LookPath("mise")
 	if err != nil {
@@ -26,7 +26,7 @@ func TestMiseGitHubBackendAutodetectsCandidateArchive(t *testing.T) {
 	root := t.TempDir()
 	inputs := archiveInputs(t)
 	platform := Platform{OS: goruntime.GOOS, Arch: goruntime.GOARCH}
-	assetName, err := AssetName("0.4.0", platform)
+	assetName, err := AssetName("0.5.0", platform)
 	if err != nil {
 		t.Fatalf("AssetName(): %v", err)
 	}
@@ -44,13 +44,13 @@ func TestMiseGitHubBackendAutodetectsCandidateArchive(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		baseURL := "http://" + request.Host
 		assets := []map[string]any{
-			{"name": "workbench@0.4.0.zip", "browser_download_url": baseURL + "/assets/contracts", "url": baseURL + "/api/assets/contracts"},
+			{"name": "workbench@0.5.0.zip", "browser_download_url": baseURL + "/assets/contracts", "url": baseURL + "/api/assets/contracts"},
 		}
 		for _, name := range []string{
-			"workbench-0.4.0-linux-arm64.tar.gz",
-			"workbench-0.4.0-linux-x64.tar.gz",
-			"workbench-0.4.0-macos-arm64.tar.gz",
-			"workbench-0.4.0-macos-x64.tar.gz",
+			"workbench-0.5.0-linux-arm64.tar.gz",
+			"workbench-0.5.0-linux-x64.tar.gz",
+			"workbench-0.5.0-macos-arm64.tar.gz",
+			"workbench-0.5.0-macos-x64.tar.gz",
 		} {
 			assets = append(assets,
 				map[string]any{"name": name, "browser_download_url": baseURL + "/assets/" + name, "url": baseURL + "/api/assets/" + name},
@@ -58,7 +58,7 @@ func TestMiseGitHubBackendAutodetectsCandidateArchive(t *testing.T) {
 			)
 		}
 		release := map[string]any{
-			"tag_name":   "0.4.0",
+			"tag_name":   "0.5.0",
 			"created_at": "2026-08-24T00:00:00Z",
 			"draft":      false, "prerelease": false,
 			"assets": assets,
@@ -69,7 +69,7 @@ func TestMiseGitHubBackendAutodetectsCandidateArchive(t *testing.T) {
 			if err := json.NewEncoder(response).Encode([]any{release}); err != nil {
 				t.Errorf("encode fake GitHub releases: %v", err)
 			}
-		case "/repos/phosphorco/workbench-go/releases/tags/0.4.0":
+		case "/repos/phosphorco/workbench-go/releases/tags/0.5.0":
 			response.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(response).Encode(release); err != nil {
 				t.Errorf("encode fake GitHub release: %v", err)
@@ -85,7 +85,7 @@ func TestMiseGitHubBackendAutodetectsCandidateArchive(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	data := filepath.Join(root, "mise-data")
-	tool := fmt.Sprintf("github:phosphorco/workbench-go[api_url=%s,github_attestations=false]@0.4.0", server.URL)
+	tool := fmt.Sprintf("github:phosphorco/workbench-go[api_url=%s,github_attestations=false]@0.5.0", server.URL)
 	command := exec.Command(mise, "install", tool)
 	command.Dir = root
 	command.Env = append(os.Environ(),
@@ -99,7 +99,7 @@ func TestMiseGitHubBackendAutodetectsCandidateArchive(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("Mise candidate install: %v\n%s", err, output)
 	}
-	installRoot := filepath.Join(data, "installs", "github-phosphorco-workbench-go", "0.4.0")
+	installRoot := filepath.Join(data, "installs", "github-phosphorco-workbench-go", "0.5.0")
 	if _, err := os.Stat(filepath.Join(installRoot, "bin", "workbench")); err != nil {
 		t.Fatalf("Mise did not expose bin/workbench from %q: %v", assetName, err)
 	}

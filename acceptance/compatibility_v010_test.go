@@ -3,7 +3,9 @@ package acceptance_test
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -13,7 +15,7 @@ type v010CompatibilityManifest struct {
 	Repositories  map[string]string `json:"repositories"`
 }
 
-func TestWorkbenchV010PublicPathRemainsReproducible(t *testing.T) {
+func TestWorkbenchV010LegacySkillSourceFailsWithRecreationGuidance(t *testing.T) {
 	encoded, err := os.ReadFile(filepath.Join("testdata", "v010", "compatibility.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +24,7 @@ func TestWorkbenchV010PublicPathRemainsReproducible(t *testing.T) {
 	if err := json.Unmarshal(encoded, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Release != "0.1.0" || manifest.SubjectBranch != proofBranch {
+	if manifest.Release != "0.1.0" || manifest.SubjectBranch != "workbench/proof-0.1.0" {
 		t.Fatalf("0.1 compatibility manifest = %#v", manifest)
 	}
 
@@ -39,23 +41,46 @@ func TestWorkbenchV010PublicPathRemainsReproducible(t *testing.T) {
 	}
 	environment := publicEnvironment(t, moduleRoot, testRoot, anonymousHome)
 	binary := buildPublicCLI(t, moduleRoot)
-	workbench := newPublicWorkbenchForBranch(t, testRoot, "v010-compatibility", manifest.SubjectBranch, environment)
-	runSetup(t, binary, workbench, environment)
-
-	checkouts := map[string]string{
-		"phosphorco/workbench-fixture-entry":   filepath.Join(workbench, "pkg", "@workbench-entry"),
-		"phosphorco/workbench-fixture-library": filepath.Join(workbench, "pkg", "@workbench-library"),
+	beforeRefs := make(map[string]string, len(manifest.Repositories))
+	for identity, revision := range manifest.Repositories {
+		if revision == "" {
+			t.Fatalf("compatibility manifest omits revision for %q", identity)
+		}
+		remote := "https://github.com/" + identity
+		beforeRefs[identity] = remoteBranchRevision(t, environment, remote, manifest.SubjectBranch)
+		if beforeRefs[identity] != revision {
+			t.Fatalf("0.1 proof ref for %q = %q, want immutable manifest revision %q", identity, beforeRefs[identity], revision)
+		}
 	}
-	for identity, checkout := range checkouts {
-		want := manifest.Repositories[identity]
-		if want == "" {
-			t.Fatalf("compatibility manifest omits %q", identity)
+	contractURI := releasePackageURI + "#/WorkbenchSubject.pkl"
+	workbench := newPublicWorkbenchForContractAndBranch(t, testRoot, "v010-compatibility", contractURI, manifest.SubjectBranch, environment)
+	command := exec.Command(binary, "setup")
+	command.Dir = workbench
+	command.Env = environment
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("Workbench 0.5 consumed the retired 0.1 skill source:\n%s", output)
+	}
+	for _, fact := range []string{
+		"phosphorco/workbench-fixture-library:.agents/skills/workbench-fixture-engineering/SKILL.md",
+		"recreate this Git-owned skill under skills/workbench-fixture-engineering/SKILL.md",
+	} {
+		if !strings.Contains(string(output), fact) {
+			t.Fatalf("0.1 recreation refusal omits %q:\n%s", fact, output)
 		}
-		if got := publicGit(t, environment, checkout, "rev-parse", "HEAD"); got != want {
-			t.Fatalf("0.1 checkout %q revision = %q, want preserved %q", identity, got, want)
+	}
+	if status := publicGit(t, environment, workbench, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+		t.Fatalf("0.1 recreation refusal changed the outer context: %q", status)
+	}
+	for _, target := range []string{"pkg", "repos", ".workbench", "package.json", "tsconfig.json", "bun.lock", "node_modules"} {
+		if _, statErr := os.Lstat(filepath.Join(workbench, target)); !os.IsNotExist(statErr) {
+			t.Fatalf("0.1 recreation refusal created %q: %v", target, statErr)
 		}
-		if got := publicGit(t, environment, checkout, "branch", "--show-current"); got != manifest.SubjectBranch {
-			t.Fatalf("0.1 checkout %q branch = %q, want %q", identity, got, manifest.SubjectBranch)
+	}
+	for identity, before := range beforeRefs {
+		remote := "https://github.com/" + identity
+		if after := remoteBranchRevision(t, environment, remote, manifest.SubjectBranch); after != before {
+			t.Fatalf("0.1 refusal changed %q proof ref from %q to %q", identity, before, after)
 		}
 	}
 }

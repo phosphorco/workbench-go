@@ -15,10 +15,10 @@ func TestRuntimeLockPinsClosedPlatformAndLicenseInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRuntimeLock(): %v", err)
 	}
-	if lock.WorkbenchVersion != "0.4.0" {
-		t.Fatalf("WorkbenchVersion = %q, want 0.4.0", lock.WorkbenchVersion)
+	if lock.WorkbenchVersion != "0.5.0" {
+		t.Fatalf("WorkbenchVersion = %q, want 0.5.0", lock.WorkbenchVersion)
 	}
-	wantDependencies := map[string]string{"go": "1.26.6", "msgpack": "5.4.1", "pkl-go": "0.14.0", "tagparser": "2.0.0"}
+	wantDependencies := map[string]string{"go": "1.26.6", "msgpack": "5.4.1", "pkl-go": "0.14.0", "tagparser": "2.0.0", "yaml": "3.0.1"}
 	if len(lock.BuildDependencies) != len(wantDependencies) {
 		t.Fatalf("build dependencies = %#v, want closed inventory %#v", lock.BuildDependencies, wantDependencies)
 	}
@@ -27,17 +27,24 @@ func TestRuntimeLockPinsClosedPlatformAndLicenseInventory(t *testing.T) {
 			t.Errorf("build dependency %s version = %q, want %q", name, got, version)
 		}
 	}
+	yaml := lock.BuildDependencies["yaml"]
+	if yaml.SourceRevision != "f6f7691b1fdeb513f56608cd2c32c51f8194bf51" {
+		t.Errorf("yaml source revision = %q, want pinned upstream tag revision", yaml.SourceRevision)
+	}
+	if len(yaml.Licenses) != 1 || yaml.Licenses[0].URL != "https://raw.githubusercontent.com/go-yaml/yaml/f6f7691b1fdeb513f56608cd2c32c51f8194bf51/LICENSE" || yaml.Licenses[0].ArchivePath != "yaml/LICENSE" || yaml.Licenses[0].SHA256 != "d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b" {
+		t.Errorf("yaml license inventory = %#v, want the pinned upstream license", yaml.Licenses)
+	}
 }
 
 func TestAssetNameUsesMiseNativePlatformTokens(t *testing.T) {
 	tests := map[string]Platform{
-		"workbench-0.4.0-macos-arm64.tar.gz": {OS: "darwin", Arch: "arm64"},
-		"workbench-0.4.0-macos-x64.tar.gz":   {OS: "darwin", Arch: "amd64"},
-		"workbench-0.4.0-linux-arm64.tar.gz": {OS: "linux", Arch: "arm64"},
-		"workbench-0.4.0-linux-x64.tar.gz":   {OS: "linux", Arch: "amd64"},
+		"workbench-0.5.0-macos-arm64.tar.gz": {OS: "darwin", Arch: "arm64"},
+		"workbench-0.5.0-macos-x64.tar.gz":   {OS: "darwin", Arch: "amd64"},
+		"workbench-0.5.0-linux-arm64.tar.gz": {OS: "linux", Arch: "arm64"},
+		"workbench-0.5.0-linux-x64.tar.gz":   {OS: "linux", Arch: "amd64"},
 	}
 	for want, platform := range tests {
-		got, err := AssetName("0.4.0", platform)
+		got, err := AssetName("0.5.0", platform)
 		if err != nil {
 			t.Fatalf("AssetName(%#v): %v", platform, err)
 		}
@@ -64,36 +71,38 @@ func TestWriteArchiveIsByteDeterministicAndHasClosedLayout(t *testing.T) {
 	}
 
 	want := []string{
-		"workbench-0.4.0/",
-		"workbench-0.4.0/bin/",
-		"workbench-0.4.0/bin/workbench",
-		"workbench-0.4.0/libexec/",
-		"workbench-0.4.0/libexec/workbench/",
-		"workbench-0.4.0/libexec/workbench/bun",
-		"workbench-0.4.0/libexec/workbench/pkl",
-		"workbench-0.4.0/share/",
-		"workbench-0.4.0/share/licenses/",
-		"workbench-0.4.0/share/licenses/bun/",
-		"workbench-0.4.0/share/licenses/bun/LICENSE.md",
-		"workbench-0.4.0/share/licenses/go/",
-		"workbench-0.4.0/share/licenses/go/LICENSE",
-		"workbench-0.4.0/share/licenses/go/PATENTS",
-		"workbench-0.4.0/share/licenses/msgpack/",
-		"workbench-0.4.0/share/licenses/msgpack/LICENSE",
-		"workbench-0.4.0/share/licenses/pkl-go/",
-		"workbench-0.4.0/share/licenses/pkl-go/LICENSE.txt",
-		"workbench-0.4.0/share/licenses/pkl-go/NOTICE.txt",
-		"workbench-0.4.0/share/licenses/pkl/",
-		"workbench-0.4.0/share/licenses/pkl/LICENSE.txt",
-		"workbench-0.4.0/share/licenses/pkl/NOTICE.txt",
-		"workbench-0.4.0/share/licenses/pkl/THIRD-PARTY-NOTICES.txt",
-		"workbench-0.4.0/share/licenses/tagparser/",
-		"workbench-0.4.0/share/licenses/tagparser/LICENSE",
-		"workbench-0.4.0/share/licenses/workbench/",
-		"workbench-0.4.0/share/licenses/workbench/LICENSE",
-		"workbench-0.4.0/share/workbench/",
-		"workbench-0.4.0/share/workbench/build.json",
-		"workbench-0.4.0/share/workbench/runtime-lock.json",
+		"workbench-0.5.0/",
+		"workbench-0.5.0/bin/",
+		"workbench-0.5.0/bin/workbench",
+		"workbench-0.5.0/libexec/",
+		"workbench-0.5.0/libexec/workbench/",
+		"workbench-0.5.0/libexec/workbench/bun",
+		"workbench-0.5.0/libexec/workbench/pkl",
+		"workbench-0.5.0/share/",
+		"workbench-0.5.0/share/licenses/",
+		"workbench-0.5.0/share/licenses/bun/",
+		"workbench-0.5.0/share/licenses/bun/LICENSE.md",
+		"workbench-0.5.0/share/licenses/go/",
+		"workbench-0.5.0/share/licenses/go/LICENSE",
+		"workbench-0.5.0/share/licenses/go/PATENTS",
+		"workbench-0.5.0/share/licenses/msgpack/",
+		"workbench-0.5.0/share/licenses/msgpack/LICENSE",
+		"workbench-0.5.0/share/licenses/pkl-go/",
+		"workbench-0.5.0/share/licenses/pkl-go/LICENSE.txt",
+		"workbench-0.5.0/share/licenses/pkl-go/NOTICE.txt",
+		"workbench-0.5.0/share/licenses/pkl/",
+		"workbench-0.5.0/share/licenses/pkl/LICENSE.txt",
+		"workbench-0.5.0/share/licenses/pkl/NOTICE.txt",
+		"workbench-0.5.0/share/licenses/pkl/THIRD-PARTY-NOTICES.txt",
+		"workbench-0.5.0/share/licenses/tagparser/",
+		"workbench-0.5.0/share/licenses/tagparser/LICENSE",
+		"workbench-0.5.0/share/licenses/workbench/",
+		"workbench-0.5.0/share/licenses/workbench/LICENSE",
+		"workbench-0.5.0/share/licenses/yaml/",
+		"workbench-0.5.0/share/licenses/yaml/LICENSE",
+		"workbench-0.5.0/share/workbench/",
+		"workbench-0.5.0/share/workbench/build.json",
+		"workbench-0.5.0/share/workbench/runtime-lock.json",
 	}
 	if got := archivePaths(t, first); !reflect.DeepEqual(got, want) {
 		t.Fatalf("archive paths = %#v, want %#v", got, want)
@@ -108,6 +117,14 @@ func TestWriteArchiveRefusesMissingWorkbenchLicense(t *testing.T) {
 	}
 }
 
+func TestWriteArchiveRefusesMissingYAMLLicense(t *testing.T) {
+	inputs := archiveInputs(t)
+	inputs.YAMLLicense = ""
+	if err := WriteArchive(filepath.Join(t.TempDir(), "candidate.tar.gz"), inputs); err == nil {
+		t.Fatal("WriteArchive succeeded without yaml.v3 license")
+	}
+}
+
 func archiveInputs(t *testing.T) ArchiveInputs {
 	t.Helper()
 	root := t.TempDir()
@@ -119,7 +136,7 @@ func archiveInputs(t *testing.T) ArchiveInputs {
 		return path
 	}
 	return ArchiveInputs{
-		Version:             "0.4.0",
+		Version:             "0.5.0",
 		Revision:            "0123456789abcdef0123456789abcdef01234567",
 		WorkbenchBinary:     write("workbench", "workbench", 0o755),
 		PklBinary:           write("pkl", "pkl", 0o755),
@@ -136,6 +153,7 @@ func archiveInputs(t *testing.T) ArchiveInputs {
 		PklGoNotice:         write("pkl-go-notice", "notice\n", 0o644),
 		MsgpackLicense:      write("msgpack-license", "license\n", 0o644),
 		TagparserLicense:    write("tagparser-license", "license\n", 0o644),
+		YAMLLicense:         write("yaml-license", "license\n", 0o644),
 	}
 }
 
