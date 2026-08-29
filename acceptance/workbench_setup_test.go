@@ -16,7 +16,7 @@ func TestWorkbenchLocalMeaningfulSlice(t *testing.T) {
 	}
 
 	schemaURI := func(name string) string {
-		return "workbench-contract:/0.5.0/" + name
+		return "workbench-contract:/0.6.0/" + name
 	}
 
 	fixtureRoot := t.TempDir()
@@ -29,10 +29,15 @@ func TestWorkbenchLocalMeaningfulSlice(t *testing.T) {
 
 scope = "@phosphorco"
 packages {
-  ["@phosphorco/math"] {}
+  ["@phosphorco/math"] {
+    exports {
+      ["."] = "./src/index.ts"
+    }
+  }
 }
 `, schemaURI("PackageScopeRepository.pkl")), map[string]string{
-		"math/src/math.ts": "export const answer = 42\n",
+		".gitignore":        "math/package.json\nmath/tsconfig.json\nmath/dist/\n.agents/skills/\n",
+		"math/src/index.ts": "export const answer = 42\n",
 		"skills/domain-skill/SKILL.md": `---
 name: domain-skill
 description: Exercise one engineering-domain resource skill and its explicit composition edge.
@@ -67,11 +72,24 @@ includes {
 }
 
 packages {
-  ["@basindb/client"] {}
+  ["@basindb/client"] {
+    dependencies {
+      ["kleur"] = "4.1.5"
+    }
+    devDependencies {
+      ["typescript"] = "5.9.3"
+    }
+  }
 }
 `, schemaURI("PackageScopeRepository.pkl")), map[string]string{
+		".gitignore": "client/package.json\nclient/tsconfig.json\nclient/dist/\n.agents/skills/\n",
 		"client/src/index.ts": `import { answer } from "@phosphorco/math"
 export const basinAnswer = answer
+`,
+		"client/test/index.test.js": `import { expect, test } from "bun:test"
+import { basinAnswer } from "../src/index.ts"
+
+test("assembled package", () => expect(basinAnswer).toBe(42))
 `,
 	})
 
@@ -146,6 +164,13 @@ entrypoints {
 	if !strings.Contains(basinManifest, `"@phosphorco/math": "workspace:*"`) {
 		t.Fatalf("BasinDB manifest lacks derived workspace adjacency:\n%s", basinManifest)
 	}
+	rootManifest := readFile(t, filepath.Join(workbench, "package.json"))
+	if !strings.Contains(rootManifest, `"typescript": "5.9.3"`) {
+		t.Fatalf("root manifest lacks derived TypeScript tool authority:\n%s", rootManifest)
+	}
+	if !strings.Contains(rootManifest, `"kleur": "4.1.5"`) {
+		t.Fatalf("root manifest lacks reassembled external dependency:\n%s", rootManifest)
+	}
 	for _, skill := range []string{"domain-skill", "composition-dependency"} {
 		if _, err := os.Stat(filepath.Join(workbench, ".agents/skills", skill, "SKILL.md")); err != nil {
 			t.Fatalf("projected skill %q: %v", skill, err)
@@ -159,19 +184,33 @@ entrypoints {
 	if linkedPackage != wantPackage {
 		t.Fatalf("linked package = %q, want %q", linkedPackage, wantPackage)
 	}
+	spawnedScript := filepath.Join(workbench, "repos/.alchemy-local/generated/deploy.ts")
+	writeFile(t, spawnedScript, `import kleur from "kleur"
+console.log(kleur.green("spawned-root-resolution"))
+`)
+	spawned := exec.Command("bun", spawnedScript)
+	spawned.Dir = workbench
+	spawned.Env = setup.Env
+	spawnedOutput, err := spawned.CombinedOutput()
+	if err != nil || !strings.Contains(string(spawnedOutput), "spawned-root-resolution") {
+		t.Fatalf("spawned root script external resolution: %v\n%s", err, spawnedOutput)
+	}
 
 	sourceChange := filepath.Join(workbench, "pkg/@basindb/pre-existing-source-change.ts")
 	writeFile(t, sourceChange, "export const preserved = true\n")
 	before := git(t, filepath.Join(workbench, "pkg/@basindb"), "status", "--porcelain=v1", "--untracked-files=all")
-	second := exec.Command(binary, "setup")
+	second := exec.Command(binary, "check")
 	second.Dir = workbench
 	second.Env = setup.Env
 	secondOutput, err := second.CombinedOutput()
 	if err != nil {
-		t.Fatalf("second workbench setup: %v\n%s", err, secondOutput)
+		t.Fatalf("one-command checkout-to-test workflow: %v\n%s", err, secondOutput)
 	}
 	if !strings.Contains(string(secondOutput), "0 generated paths changed") {
-		t.Fatalf("second setup did not report convergence:\n%s", secondOutput)
+		t.Fatalf("check setup phase did not report convergence:\n%s", secondOutput)
+	}
+	if !strings.Contains(string(secondOutput), "Code health passed: typecheck and test.") {
+		t.Fatalf("check did not report code-health success:\n%s", secondOutput)
 	}
 	after := git(t, filepath.Join(workbench, "pkg/@basindb"), "status", "--porcelain=v1", "--untracked-files=all")
 	if before != after || !strings.Contains(after, "pre-existing-source-change.ts") {

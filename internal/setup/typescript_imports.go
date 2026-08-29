@@ -7,6 +7,8 @@ type observedTypeScriptImport struct {
 	specifier string
 	line      int
 	kind      string
+	spanStart int
+	spanEnd   int
 }
 
 type typeScriptTokenKind uint8
@@ -18,9 +20,11 @@ const (
 )
 
 type typeScriptToken struct {
-	kind typeScriptTokenKind
-	text string
-	line int
+	kind  typeScriptTokenKind
+	text  string
+	line  int
+	start int
+	end   int
 }
 
 func observeTypeScriptImports(source []byte) []observedTypeScriptImport {
@@ -44,18 +48,42 @@ func observeTypeScriptImports(source []byte) []observedTypeScriptImport {
 				imports = append(imports, specifier)
 				continue
 			}
-			if specifier, exists := fromSpecifier(tokens, index+1); exists {
+			if specifier, exists := importFromSpecifier(tokens, index+1); exists {
 				specifier.kind = "import-statement"
 				imports = append(imports, specifier)
 			}
 		case "export":
-			if specifier, exists := fromSpecifier(tokens, index+1); exists {
+			if specifier, exists := exportFromSpecifier(tokens, index+1); exists {
 				specifier.kind = "import-statement"
 				imports = append(imports, specifier)
 			}
 		}
 	}
 	return imports
+}
+
+func exportFromSpecifier(tokens []typeScriptToken, index int) (observedTypeScriptImport, bool) {
+	if index < len(tokens) && tokens[index].kind == typeScriptIdentifier && tokens[index].text == "type" {
+		index++
+	}
+	if index >= len(tokens) || tokens[index].kind != typeScriptPunctuation {
+		return observedTypeScriptImport{}, false
+	}
+	switch tokens[index].text {
+	case "{":
+		index = afterBalancedBraces(tokens, index)
+		if index < 0 {
+			return observedTypeScriptImport{}, false
+		}
+	case "*":
+		index++
+		if index < len(tokens) && tokens[index].kind == typeScriptIdentifier && tokens[index].text == "as" {
+			index += 2
+		}
+	default:
+		return observedTypeScriptImport{}, false
+	}
+	return followingStringSpecifier(tokens, index)
 }
 
 func immediateImportSpecifier(tokens []typeScriptToken, index int) (observedTypeScriptImport, bool) {
@@ -89,37 +117,75 @@ func importEqualsSpecifier(tokens []typeScriptToken, index int) (observedTypeScr
 	return importFromToken(tokens[index+4])
 }
 
-func fromSpecifier(tokens []typeScriptToken, index int) (observedTypeScriptImport, bool) {
-	depth := 0
-	for ; index < len(tokens); index++ {
-		token := tokens[index]
-		if token.kind == typeScriptPunctuation {
-			switch token.text {
-			case "(", "[", "{":
-				depth++
-			case ")", "]", "}":
-				if depth > 0 {
-					depth--
-				}
-			case ";":
-				if depth == 0 {
-					return observedTypeScriptImport{}, false
-				}
-			}
+func importFromSpecifier(tokens []typeScriptToken, index int) (observedTypeScriptImport, bool) {
+	if index < len(tokens) && tokens[index].kind == typeScriptIdentifier && tokens[index].text == "type" {
+		index++
+	}
+	if index >= len(tokens) {
+		return observedTypeScriptImport{}, false
+	}
+	if tokens[index].kind == typeScriptIdentifier {
+		index++
+		if index < len(tokens) && tokens[index].kind == typeScriptIdentifier && tokens[index].text == "from" {
+			return followingStringSpecifier(tokens, index)
+		}
+		if index >= len(tokens) || tokens[index].kind != typeScriptPunctuation || tokens[index].text != "," {
+			return observedTypeScriptImport{}, false
+		}
+		index++
+	}
+	if index >= len(tokens) || tokens[index].kind != typeScriptPunctuation {
+		return observedTypeScriptImport{}, false
+	}
+	switch tokens[index].text {
+	case "{":
+		index = afterBalancedBraces(tokens, index)
+		if index < 0 {
+			return observedTypeScriptImport{}, false
+		}
+	case "*":
+		index++
+		if index+1 >= len(tokens) || tokens[index].kind != typeScriptIdentifier || tokens[index].text != "as" || tokens[index+1].kind != typeScriptIdentifier {
+			return observedTypeScriptImport{}, false
+		}
+		index += 2
+	default:
+		return observedTypeScriptImport{}, false
+	}
+	return followingStringSpecifier(tokens, index)
+}
+
+func followingStringSpecifier(tokens []typeScriptToken, index int) (observedTypeScriptImport, bool) {
+	if index+1 >= len(tokens) || tokens[index].kind != typeScriptIdentifier || tokens[index].text != "from" || tokens[index+1].kind != typeScriptString {
+		return observedTypeScriptImport{}, false
+	}
+	return importFromToken(tokens[index+1])
+}
+
+func afterBalancedBraces(tokens []typeScriptToken, index int) int {
+	depth := 1
+	for index++; index < len(tokens); index++ {
+		if tokens[index].kind != typeScriptPunctuation {
 			continue
 		}
-		if depth == 0 && token.kind == typeScriptIdentifier && token.text == "from" && index+1 < len(tokens) && tokens[index+1].kind == typeScriptString {
-			return importFromToken(tokens[index+1])
+		switch tokens[index].text {
+		case "{":
+			depth++
+		case "}":
+			depth--
+			if depth == 0 {
+				return index + 1
+			}
 		}
 	}
-	return observedTypeScriptImport{}, false
+	return -1
 }
 
 func importFromToken(token typeScriptToken) (observedTypeScriptImport, bool) {
 	if token.text == "" {
 		return observedTypeScriptImport{}, false
 	}
-	return observedTypeScriptImport{specifier: token.text, line: token.line}, true
+	return observedTypeScriptImport{specifier: token.text, line: token.line, spanStart: token.start, spanEnd: token.end}, true
 }
 
 func lexTypeScript(source []byte) []typeScriptToken {
@@ -219,15 +285,21 @@ func lexTypeScript(source []byte) []typeScriptToken {
 			quote := source[index]
 			startLine := line
 			index++
+			contentStart := index
+			contentEnd := -1
 			value := make([]byte, 0)
 			for index < len(source) {
 				if source[index] == '\\' && index+1 < len(source) {
+					if source[index+1] == '\n' {
+						line++
+					}
 					index++
 					value = append(value, source[index])
 					index++
 					continue
 				}
 				if source[index] == quote {
+					contentEnd = index
 					index++
 					break
 				}
@@ -237,7 +309,10 @@ func lexTypeScript(source []byte) []typeScriptToken {
 				value = append(value, source[index])
 				index++
 			}
-			tokens = append(tokens, typeScriptToken{kind: typeScriptString, text: string(value), line: startLine})
+			if contentEnd < 0 {
+				contentEnd = index
+			}
+			tokens = append(tokens, typeScriptToken{kind: typeScriptString, text: string(value), line: startLine, start: contentStart, end: contentEnd})
 		case '`':
 			templateDepths = append(templateDepths, 0)
 			index++

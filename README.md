@@ -452,6 +452,7 @@ packages {
     }
     devDependencies {
       ["@phosphor/test"] = "workspace:*"
+      ["typescript"] = "5.9.3"
     }
     imports {
       ["#src/*"] = "./src/*"
@@ -473,18 +474,31 @@ exactly one of `dependencies`, `devDependencies`,
 `requiredButNotReferenced`, `peerDependencies`, or
 `optionalDependencies`.
 
+The current contract also reassembles exact external package authority at the
+generated root so repository-wide generated scripts resolve the same tools and
+libraries as participating packages. Workbench unions non-workspace values from
+every dependency class into private root `devDependencies` and refuses
+non-exact or cross-package-conflicting versions with their package and class
+provenance. Workspace edges remain workspace-only. At least one participating
+package must declare the exact external `typescript` version in
+`devDependencies`. Generated package projects use `module = "Preserve"`,
+Bundler resolution, declaration-only output, TypeScript-extension imports, and
+skipped library checks while retaining strict composite builds and
+source-rooted output.
+
 Before changing a canonical checkout, generated file, or installation,
 Workbench batches TypeScript source through the exact Bun toolchain's parser for
-import truth, then intersects those results with a Go lexical pass that attaches
-source lines and distinguishes TypeScript `import = require` from ordinary
+import truth. A Go lexical pass identifies quoted spans and prefixes every
+candidate's raw string content with a unique sentinel in the temporary
+parser input; only a sentinel Bun reports with the same import kind becomes
+source evidence. Bun's cooked sentinel suffix supplies the exact specifier,
+while the Go span supplies its exact line. This preserves repeated imports of
+one path and distinguishes TypeScript `import = require` from ordinary
 `require()` calls. Static imports, export-from clauses, and string-literal
 dynamic imports are evidence; comments, documentation, regex literals,
 template text, and ordinary strings are not. Dynamic imports inside `${...}`
 template expressions remain ordinary code and are observed. A parser failure
-refuses setup before mutation. If Bun confirms an import but does not provide a
-span and the provenance pass finds multiple same-kind, same-path candidate
-lines, Workbench refuses the ambiguity rather than report a guessed location.
-Every closure gap
+refuses setup before mutation. Every closure gap
 reports the importer, exact specifier, source file and line, plus whether to add
 the owning Repository, declare an external dependency class, or add a matching
 package `imports`/`exports` entry. Distinct source imports remain distinct

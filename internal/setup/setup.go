@@ -219,7 +219,10 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, err
 	}
-	projection, err := workspace.Build(packages)
+	projection, err := workspace.BuildWithOptions(packages, workspace.BuildOptions{
+		ReassembleRootDependencies: version == "0.6.0",
+		ProductionTypeScript:       version == "0.6.0",
+	})
 	if err != nil {
 		return Result{}, fmt.Errorf("build workspace projection: %w", err)
 	}

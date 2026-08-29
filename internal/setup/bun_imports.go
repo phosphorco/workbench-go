@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"strings"
 
 	"github.com/phosphorco/workbench-go/internal/workspace"
 )
@@ -15,7 +16,9 @@ const bunScanImportsProgram = `
 const files = await Bun.stdin.json();
 const results = files.map((file) => {
   try {
-    return { imports: new Bun.Transpiler({ loader: file.loader }).scanImports(file.source) };
+    const transpiler = new Bun.Transpiler({ loader: file.loader });
+    transpiler.scanImports(file.source);
+    return { imports: transpiler.scanImports(file.probeSource) };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
@@ -31,8 +34,9 @@ type typeScriptSourceFile struct {
 }
 
 type bunScanInput struct {
-	Source string `json:"source"`
-	Loader string `json:"loader"`
+	Source      string `json:"source"`
+	ProbeSource string `json:"probeSource"`
+	Loader      string `json:"loader"`
 }
 
 type bunScannedImport struct {
@@ -45,26 +49,26 @@ type bunScanResult struct {
 	Error   string             `json:"error"`
 }
 
-// ImportProvenanceError refuses a parser-confirmed import when the lexical
-// provenance pass found more same-kind, same-path candidates than Bun reported.
-// Without parser spans, choosing any one candidate would risk a false source
-// location in a closure diagnostic.
-type ImportProvenanceError struct {
-	Source         string
-	Kind           string
-	Path           string
-	ParserCount    int
-	CandidateLines []int
+type importProbe struct {
+	candidate observedTypeScriptImport
+	sentinel  string
 }
 
-func (failure *ImportProvenanceError) Error() string {
-	return fmt.Sprintf("attach source provenance to Bun imports in %s: %s %q occurs %d time(s) in parser truth but has lexical candidates on lines %v; remove the ambiguous import-like text", failure.Source, failure.Kind, failure.Path, failure.ParserCount, failure.CandidateLines)
+type probedTypeScriptFile struct {
+	file   typeScriptSourceFile
+	probes []importProbe
 }
 
 func parserBackedTypeScriptImports(ctx context.Context, bun string, files []typeScriptSourceFile) ([]workspace.Import, error) {
 	inputs := make([]bunScanInput, 0, len(files))
-	for _, file := range files {
-		inputs = append(inputs, bunScanInput{Source: string(file.source), Loader: file.loader})
+	probedFiles := make([]probedTypeScriptFile, 0, len(files))
+	for fileIndex, file := range files {
+		mutated, probes, err := probeTypeScriptImports(file, fileIndex)
+		if err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, bunScanInput{Source: string(file.source), ProbeSource: string(mutated), Loader: file.loader})
+		probedFiles = append(probedFiles, probedTypeScriptFile{file: file, probes: probes})
 	}
 	encoded, err := json.Marshal(inputs)
 	if err != nil {
@@ -88,56 +92,72 @@ func parserBackedTypeScriptImports(ctx context.Context, bun string, files []type
 	}
 
 	observed := make([]workspace.Import, 0)
-	for index, file := range files {
+	for index, probed := range probedFiles {
+		file := probed.file
 		if results[index].Error != "" {
 			return nil, fmt.Errorf("parse TypeScript imports in %s with Bun: %s", file.path, results[index].Error)
 		}
-		available := make(map[string]int)
-		for _, imported := range results[index].Imports {
-			available[importKey(imported.Kind, imported.Path)]++
-		}
-		candidates := observeTypeScriptImports(file.source)
-		candidateLines := make(map[string][]int)
-		candidateByKey := make(map[string]observedTypeScriptImport)
-		for _, candidate := range candidates {
-			key := importKey(candidate.kind, candidate.specifier)
-			candidateLines[key] = append(candidateLines[key], candidate.line)
-			candidateByKey[key] = candidate
-		}
-		for key, lines := range candidateLines {
-			if available[key] > 0 && len(lines) > available[key] {
-				candidate := candidateByKey[key]
-				return nil, &ImportProvenanceError{
-					Source: file.path, Kind: candidate.kind, Path: candidate.specifier,
-					ParserCount: available[key], CandidateLines: append([]int(nil), lines...),
-				}
-			}
-		}
-		for _, candidate := range candidates {
-			key := importKey(candidate.kind, candidate.specifier)
-			if available[key] == 0 {
-				continue
-			}
-			available[key]--
-			observed = append(observed, workspace.Import{
-				Specifier: candidate.specifier, Source: file.path, Line: candidate.line, Development: file.development,
-			})
-		}
+		confirmed := make(map[string]string, len(probed.probes))
 		unmatched := make([]string, 0)
 		for _, imported := range results[index].Imports {
-			if imported.Kind == "require-call" || available[importKey(imported.Kind, imported.Path)] == 0 {
+			probe, cooked, exists := matchingImportProbe(probed.probes, imported.Path)
+			if exists {
+				if imported.Kind != probe.candidate.kind {
+					return nil, fmt.Errorf("attach source provenance to Bun imports in %s: sentinel %q has parser kind %q, want %q", file.path, imported.Path, imported.Kind, probe.candidate.kind)
+				}
+				confirmed[probe.sentinel] = cooked
 				continue
 			}
-			key := importKey(imported.Kind, imported.Path)
-			unmatched = append(unmatched, key)
-			available[key]--
+			if imported.Kind != "require-call" {
+				unmatched = append(unmatched, importKey(imported.Kind, imported.Path))
+			}
 		}
 		if len(unmatched) != 0 {
 			sort.Strings(unmatched)
 			return nil, fmt.Errorf("attach source provenance to Bun imports in %s: unmatched parser import(s) %v", file.path, unmatched)
 		}
+		for _, probe := range probed.probes {
+			cooked, exists := confirmed[probe.sentinel]
+			if !exists {
+				continue
+			}
+			candidate := probe.candidate
+			observed = append(observed, workspace.Import{
+				Specifier: cooked, Source: file.path, Line: candidate.line, Development: file.development,
+			})
+		}
 	}
 	return observed, nil
+}
+
+func probeTypeScriptImports(file typeScriptSourceFile, fileIndex int) ([]byte, []importProbe, error) {
+	candidates := observeTypeScriptImports(file.source)
+	probes := make([]importProbe, 0, len(candidates))
+	var mutated bytes.Buffer
+	cursor := 0
+	for candidateIndex, candidate := range candidates {
+		if candidate.spanStart < cursor || candidate.spanEnd < candidate.spanStart || candidate.spanEnd > len(file.source) {
+			return nil, nil, fmt.Errorf("attach source provenance to Bun imports in %s: overlapping or invalid lexical span [%d,%d)", file.path, candidate.spanStart, candidate.spanEnd)
+		}
+		sentinel := fmt.Sprintf("workbench-import-probe-f%06d-c%06d-", fileIndex, candidateIndex)
+		candidate.line = 1 + bytes.Count(file.source[:candidate.spanStart], []byte{'\n'})
+		mutated.Write(file.source[cursor:candidate.spanStart])
+		mutated.WriteString(sentinel)
+		mutated.Write(file.source[candidate.spanStart:candidate.spanEnd])
+		cursor = candidate.spanEnd
+		probes = append(probes, importProbe{candidate: candidate, sentinel: sentinel})
+	}
+	mutated.Write(file.source[cursor:])
+	return mutated.Bytes(), probes, nil
+}
+
+func matchingImportProbe(probes []importProbe, parserPath string) (importProbe, string, bool) {
+	for _, probe := range probes {
+		if strings.HasPrefix(parserPath, probe.sentinel) {
+			return probe, strings.TrimPrefix(parserPath, probe.sentinel), true
+		}
+	}
+	return importProbe{}, "", false
 }
 
 func importKey(kind, path string) string {

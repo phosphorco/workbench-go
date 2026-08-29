@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -83,6 +84,53 @@ type Projection struct {
 	Files map[string][]byte
 }
 
+type BuildOptions struct {
+	ReassembleRootDependencies bool
+	ProductionTypeScript       bool
+}
+
+type TypeScriptAuthority struct {
+	Package string
+	Version string
+}
+
+type TypeScriptAuthorityError struct {
+	Reason      string
+	Authorities []TypeScriptAuthority
+}
+
+type RootDependencyAuthority struct {
+	Package string
+	Class   string
+	Name    string
+	Version string
+}
+
+type RootDependencyAuthorityError struct {
+	Dependency  string
+	Reason      string
+	Authorities []RootDependencyAuthority
+}
+
+func (failure *RootDependencyAuthorityError) Error() string {
+	details := make([]string, 0, len(failure.Authorities))
+	for _, authority := range failure.Authorities {
+		details = append(details, fmt.Sprintf("%s %s declares %q", authority.Package, authority.Class, authority.Version))
+	}
+	return fmt.Sprintf("root external dependency %q has %s authority (%s); remedy: declare the same exact external version across participating package dependency classes", failure.Dependency, failure.Reason, strings.Join(details, ", "))
+}
+
+func (failure *TypeScriptAuthorityError) Error() string {
+	if len(failure.Authorities) == 0 {
+		return "root TypeScript tool has no version authority; remedy: declare one exact external typescript version in a participating package's devDependencies"
+	}
+	details := make([]string, 0, len(failure.Authorities))
+	for _, authority := range failure.Authorities {
+		details = append(details, fmt.Sprintf("%s declares %q", authority.Package, authority.Version))
+	}
+	return fmt.Sprintf("root TypeScript tool has %s authority (%s); remedy: declare the same exact external typescript version in participating package devDependencies", failure.Reason, strings.Join(details, ", "))
+}
+
 type packageJSON struct {
 	Name                 string            `json:"name"`
 	Private              bool              `json:"private"`
@@ -105,10 +153,11 @@ type packageRootExport struct {
 }
 
 type rootPackageJSON struct {
-	Name       string            `json:"name"`
-	Private    bool              `json:"private"`
-	Workspaces []string          `json:"workspaces"`
-	Scripts    map[string]string `json:"scripts"`
+	Name            string            `json:"name"`
+	Private         bool              `json:"private"`
+	Workspaces      []string          `json:"workspaces"`
+	Scripts         map[string]string `json:"scripts"`
+	DevDependencies map[string]string `json:"devDependencies,omitempty"`
 }
 
 type tsReference struct {
@@ -127,6 +176,10 @@ type packageTSConfig struct {
 }
 
 func Build(packages []Package) (Projection, error) {
+	return BuildWithOptions(packages, BuildOptions{ReassembleRootDependencies: true, ProductionTypeScript: true})
+}
+
+func BuildWithOptions(packages []Package, options BuildOptions) (Projection, error) {
 	ordered := append([]Package(nil), packages...)
 	sort.Slice(ordered, func(left, right int) bool { return ordered[left].Directory < ordered[right].Directory })
 	byName := make(map[string]Package, len(ordered))
@@ -148,6 +201,14 @@ func Build(packages []Package) (Projection, error) {
 	if diagnostics := closureDiagnostics(ordered, byName); len(diagnostics) != 0 {
 		return Projection{}, &ClosureError{Diagnostics: diagnostics}
 	}
+	rootDevDependencies := map[string]string(nil)
+	if options.ReassembleRootDependencies {
+		var err error
+		rootDevDependencies, err = rootExternalDependencies(ordered)
+		if err != nil {
+			return Projection{}, err
+		}
+	}
 
 	files := make(map[string][]byte, 2+len(ordered)*2)
 	workspaces := make([]string, 0, len(ordered))
@@ -155,7 +216,7 @@ func Build(packages []Package) (Projection, error) {
 	for _, pkg := range ordered {
 		workspaces = append(workspaces, filepath.ToSlash(pkg.Directory))
 		rootReferences = append(rootReferences, tsReference{Path: "./" + filepath.ToSlash(pkg.Directory)})
-		manifest, tsconfig, err := renderPackage(pkg, byName)
+		manifest, tsconfig, err := renderPackage(pkg, byName, options.ProductionTypeScript)
 		if err != nil {
 			return Projection{}, err
 		}
@@ -169,6 +230,7 @@ func Build(packages []Package) (Projection, error) {
 			"test":      "bun test --path-ignore-patterns='**/dist/**'",
 			"typecheck": "tsc --build tsconfig.json --pretty false",
 		},
+		DevDependencies: rootDevDependencies,
 	})
 	if err != nil {
 		return Projection{}, err
@@ -180,7 +242,75 @@ func Build(packages []Package) (Projection, error) {
 	return Projection{Files: files}, nil
 }
 
-func renderPackage(pkg Package, byName map[string]Package) ([]byte, []byte, error) {
+var exactPackageVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+
+func rootTypeScriptVersion(packages []Package) (string, error) {
+	authorities := make([]TypeScriptAuthority, 0)
+	for _, pkg := range packages {
+		if version, exists := pkg.Policy.DevDependencies["typescript"]; exists {
+			authorities = append(authorities, TypeScriptAuthority{Package: pkg.Name, Version: version})
+		}
+	}
+	if len(authorities) == 0 {
+		return "", &TypeScriptAuthorityError{Reason: "missing"}
+	}
+	version := authorities[0].Version
+	for _, authority := range authorities {
+		if !exactPackageVersion.MatchString(authority.Version) {
+			return "", &TypeScriptAuthorityError{Reason: "non-exact or non-external", Authorities: authorities}
+		}
+		if authority.Version != version {
+			return "", &TypeScriptAuthorityError{Reason: "conflicting", Authorities: authorities}
+		}
+	}
+	return version, nil
+}
+
+func rootExternalDependencies(packages []Package) (map[string]string, error) {
+	if _, err := rootTypeScriptVersion(packages); err != nil {
+		return nil, err
+	}
+	authorities := make(map[string][]RootDependencyAuthority)
+	for _, pkg := range packages {
+		for _, class := range dependencyClasses(pkg.Policy) {
+			for _, name := range sortedMapKeys(class.values) {
+				version := class.values[name]
+				if isWorkspaceProtocol(version) {
+					continue
+				}
+				authorities[name] = append(authorities[name], RootDependencyAuthority{
+					Package: pkg.Name, Class: class.name, Name: name, Version: version,
+				})
+			}
+		}
+	}
+	root := make(map[string]string, len(authorities))
+	for _, name := range sortedMapKeysOfAuthorities(authorities) {
+		declarations := authorities[name]
+		version := declarations[0].Version
+		for _, declaration := range declarations {
+			if !exactPackageVersion.MatchString(declaration.Version) {
+				return nil, &RootDependencyAuthorityError{Dependency: name, Reason: "non-exact", Authorities: declarations}
+			}
+			if declaration.Version != version {
+				return nil, &RootDependencyAuthorityError{Dependency: name, Reason: "conflicting", Authorities: declarations}
+			}
+		}
+		root[name] = version
+	}
+	return root, nil
+}
+
+func sortedMapKeysOfAuthorities(values map[string][]RootDependencyAuthority) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func renderPackage(pkg Package, byName map[string]Package, productionTypeScript bool) ([]byte, []byte, error) {
 	dependencies := copyMap(pkg.Policy.Dependencies)
 	devDependencies := copyMap(pkg.Policy.DevDependencies)
 	peerDependencies := copyMap(pkg.Policy.PeerDependencies)
@@ -252,20 +382,28 @@ func renderPackage(pkg Package, byName map[string]Package) ([]byte, []byte, erro
 		}
 		references = append(references, tsReference{Path: filepath.ToSlash(relative)})
 	}
+	compilerOptions := map[string]any{
+		"composite":        true,
+		"declaration":      true,
+		"module":           "NodeNext",
+		"moduleResolution": "NodeNext",
+		"outDir":           "dist",
+		"rootDir":          "src",
+		"strict":           true,
+		"target":           "ES2022",
+		"tsBuildInfoFile":  "dist/tsconfig.tsbuildinfo",
+	}
+	if productionTypeScript {
+		compilerOptions["allowImportingTsExtensions"] = true
+		compilerOptions["emitDeclarationOnly"] = true
+		compilerOptions["module"] = "Preserve"
+		compilerOptions["moduleResolution"] = "Bundler"
+		compilerOptions["skipLibCheck"] = true
+	}
 	tsconfig, err := encode(packageTSConfig{
-		CompilerOptions: map[string]any{
-			"composite":        true,
-			"declaration":      true,
-			"module":           "NodeNext",
-			"moduleResolution": "NodeNext",
-			"outDir":           "dist",
-			"rootDir":          "src",
-			"strict":           true,
-			"target":           "ES2022",
-			"tsBuildInfoFile":  "dist/tsconfig.tsbuildinfo",
-		},
-		Include:    []string{"src/**/*.ts", "src/**/*.tsx"},
-		References: references,
+		CompilerOptions: compilerOptions,
+		Include:         []string{"src/**/*.ts", "src/**/*.tsx"},
+		References:      references,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("render %s tsconfig.json: %w", pkg.Name, err)

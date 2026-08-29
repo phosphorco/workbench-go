@@ -14,7 +14,7 @@ import (
 )
 
 func TestBuildDerivesCrossRepositoryWorkspaceAndTypeScriptReferences(t *testing.T) {
-	projection, err := Build([]Package{
+	projection, err := Build(withTypeScript([]Package{
 		{
 			Name: "@phosphorco/community", Directory: "pkg/@phosphorco/community",
 			Policy: contract.PackagePolicy{Exports: map[string]string{"./tracing": "./src/tracing.ts"}},
@@ -27,10 +27,10 @@ func TestBuildDerivesCrossRepositoryWorkspaceAndTypeScriptReferences(t *testing.
 				{Specifier: "node:fs", Source: "pkg/@basindb/core/src/index.ts", Line: 2},
 			},
 			Policy: contract.PackagePolicy{
-				PeerDependencies: map[string]string{"effect": "^4.0.0"},
+				PeerDependencies: map[string]string{"effect": "4.0.0"},
 			},
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestBuildDerivesCrossRepositoryWorkspaceAndTypeScriptReferences(t *testing.
 	if manifest.Dependencies["@phosphorco/community"] != "workspace:*" {
 		t.Fatalf("dependencies = %#v", manifest.Dependencies)
 	}
-	if manifest.PeerDependencies["effect"] != "^4.0.0" {
+	if manifest.PeerDependencies["effect"] != "4.0.0" {
 		t.Fatalf("peer dependencies = %#v", manifest.PeerDependencies)
 	}
 
@@ -67,7 +67,7 @@ func TestBuildDerivesCrossRepositoryWorkspaceAndTypeScriptReferences(t *testing.
 }
 
 func TestBuildProjectsTypedPackageMetadata(t *testing.T) {
-	projection, err := Build([]Package{{
+	projection, err := Build(withTypeScript([]Package{{
 		Name: "@infra/local-process-alchemy", Directory: "repos/services/packages/local-process-alchemy",
 		Imports: []Import{
 			{Specifier: "#src/internal/local-process.ts", Source: "repos/services/packages/local-process-alchemy/src/LocalProcess.ts", Line: 20},
@@ -76,11 +76,11 @@ func TestBuildProjectsTypedPackageMetadata(t *testing.T) {
 		},
 		Policy: contract.PackagePolicy{
 			Dependencies:    map[string]string{"alchemy": "2.0.0-beta.52"},
-			DevDependencies: map[string]string{"@phosphor/test": "^0.1.0"},
+			DevDependencies: map[string]string{"@phosphor/test": "0.1.0"},
 			Imports:         map[string]string{"#src/*": "./src/*"},
 			Exports:         map[string]string{"./LocalProcess": "./src/LocalProcess.ts"},
 		},
-	}})
+	}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +96,169 @@ func TestBuildProjectsTypedPackageMetadata(t *testing.T) {
 	if !reflect.DeepEqual(manifest.Exports, wantExports) {
 		t.Fatalf("exports = %#v, want %#v", manifest.Exports, wantExports)
 	}
-	if manifest.Dependencies["alchemy"] != "2.0.0-beta.52" || manifest.DevDependencies["@phosphor/test"] != "^0.1.0" {
+	if manifest.Dependencies["alchemy"] != "2.0.0-beta.52" || manifest.DevDependencies["@phosphor/test"] != "0.1.0" {
 		t.Fatalf("dependency classes = dependencies %#v devDependencies %#v", manifest.Dependencies, manifest.DevDependencies)
+	}
+}
+
+func TestBuildProjectsRootTypeScriptAuthorityAndProductionCompilerContract(t *testing.T) {
+	projection, err := Build([]Package{{
+		Name: "@entry/app", Directory: "pkg/@entry/app",
+		Policy: contract.PackagePolicy{DevDependencies: map[string]string{"typescript": "5.9.3"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var root rootPackageJSON
+	if err := json.Unmarshal(projection.Files["package.json"], &root); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(root.DevDependencies, map[string]string{"typescript": "5.9.3"}) {
+		t.Fatalf("root devDependencies = %#v", root.DevDependencies)
+	}
+
+	var tsconfig packageTSConfig
+	if err := json.Unmarshal(projection.Files["pkg/@entry/app/tsconfig.json"], &tsconfig); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"allowImportingTsExtensions": true,
+		"composite":                  true,
+		"declaration":                true,
+		"emitDeclarationOnly":        true,
+		"module":                     "Preserve",
+		"moduleResolution":           "Bundler",
+		"outDir":                     "dist",
+		"rootDir":                    "src",
+		"skipLibCheck":               true,
+		"strict":                     true,
+		"target":                     "ES2022",
+		"tsBuildInfoFile":            "dist/tsconfig.tsbuildinfo",
+	}
+	if !reflect.DeepEqual(tsconfig.CompilerOptions, want) {
+		t.Fatalf("compilerOptions = %#v, want %#v", tsconfig.CompilerOptions, want)
+	}
+}
+
+func TestBuildReassemblesExactExternalDependenciesAtRoot(t *testing.T) {
+	projection, err := Build([]Package{
+		{
+			Name: "@entry/app", Directory: "pkg/@entry/app",
+			Policy: contract.PackagePolicy{
+				Dependencies:             map[string]string{"alchemy": "2.0.0-beta.52", "@library/shared": "workspace:*"},
+				DevDependencies:          map[string]string{"typescript": "5.9.3"},
+				RequiredButNotReferenced: map[string]string{"@types/bun": "1.2.23"},
+				PeerDependencies:         map[string]string{"effect": "4.0.0-beta.93"},
+				OptionalDependencies:     map[string]string{"@effect/platform-bun": "4.0.0-beta.93"},
+			},
+		},
+		{
+			Name: "@library/shared", Directory: "pkg/@library/shared",
+			Policy: contract.PackagePolicy{DevDependencies: map[string]string{"effect": "4.0.0-beta.93"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root rootPackageJSON
+	if err := json.Unmarshal(projection.Files["package.json"], &root); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"@effect/platform-bun": "4.0.0-beta.93",
+		"@types/bun":           "1.2.23",
+		"alchemy":              "2.0.0-beta.52",
+		"effect":               "4.0.0-beta.93",
+		"typescript":           "5.9.3",
+	}
+	if !reflect.DeepEqual(root.DevDependencies, want) {
+		t.Fatalf("root external dependencies = %#v, want %#v", root.DevDependencies, want)
+	}
+}
+
+func TestBuildRefusesNonExactAndConflictingRootExternalDependencyAuthority(t *testing.T) {
+	tests := []struct {
+		name       string
+		packages   []Package
+		reason     string
+		provenance []string
+	}{
+		{
+			name: "non-exact",
+			packages: []Package{{
+				Name: "@entry/app", Directory: "pkg/@entry/app",
+				Policy: contract.PackagePolicy{
+					Dependencies:    map[string]string{"effect": "^4.0.0"},
+					DevDependencies: map[string]string{"typescript": "5.9.3"},
+				},
+			}},
+			reason: "non-exact", provenance: []string{"@entry/app", "dependencies", "effect", "^4.0.0"},
+		},
+		{
+			name: "conflicting",
+			packages: []Package{
+				{Name: "@entry/app", Directory: "pkg/@entry/app", Policy: contract.PackagePolicy{Dependencies: map[string]string{"effect": "4.0.0-beta.93"}, DevDependencies: map[string]string{"typescript": "5.9.3"}}},
+				{Name: "@library/shared", Directory: "pkg/@library/shared", Policy: contract.PackagePolicy{PeerDependencies: map[string]string{"effect": "4.0.0-beta.94"}}},
+			},
+			reason: "conflicting", provenance: []string{"@entry/app", "dependencies", "@library/shared", "peerDependencies", "effect"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Build(test.packages)
+			var authority *RootDependencyAuthorityError
+			if !errors.As(err, &authority) || authority.Reason != test.reason {
+				t.Fatalf("root dependency authority = %T %#v: %v", err, authority, err)
+			}
+			for _, fact := range append(test.provenance, "remedy:", "same exact external version") {
+				if !strings.Contains(err.Error(), fact) {
+					t.Fatalf("root dependency refusal = %v; lacks %q", err, fact)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildRefusesMissingNonExactAndConflictingRootTypeScriptAuthority(t *testing.T) {
+	tests := []struct {
+		name     string
+		packages []Package
+		reason   string
+	}{
+		{
+			name:     "missing",
+			packages: []Package{{Name: "@entry/app", Directory: "pkg/@entry/app"}},
+			reason:   "missing",
+		},
+		{
+			name: "non-exact",
+			packages: []Package{{
+				Name: "@entry/app", Directory: "pkg/@entry/app",
+				Policy: contract.PackagePolicy{DevDependencies: map[string]string{"typescript": "^5.9.3"}},
+			}},
+			reason: "non-exact or non-external",
+		},
+		{
+			name: "conflicting",
+			packages: []Package{
+				{Name: "@entry/app", Directory: "pkg/@entry/app", Policy: contract.PackagePolicy{DevDependencies: map[string]string{"typescript": "5.9.3"}}},
+				{Name: "@library/shared", Directory: "pkg/@library/shared", Policy: contract.PackagePolicy{DevDependencies: map[string]string{"typescript": "5.8.3"}}},
+			},
+			reason: "conflicting",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Build(test.packages)
+			var authority *TypeScriptAuthorityError
+			if !errors.As(err, &authority) {
+				t.Fatalf("authority error = %v", err)
+			}
+			if authority.Reason != test.reason || !strings.Contains(err.Error(), "remedy:") || !strings.Contains(err.Error(), "devDependencies") {
+				t.Fatalf("authority refusal = %#v: %v", authority, err)
+			}
+		})
 	}
 }
 
@@ -205,7 +366,7 @@ func TestGeneratedTestScriptExcludesEmittedTests(t *testing.T) {
 	if err != nil {
 		t.Skip("bun unavailable")
 	}
-	projection, err := Build([]Package{{Name: "@entry/app", Directory: "pkg/@entry/app"}})
+	projection, err := Build(withTypeScript([]Package{{Name: "@entry/app", Directory: "pkg/@entry/app"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +414,7 @@ func TestBuildPreservesAuthoredWorkspaceClassAndDerivesOmittedClass(t *testing.T
 		},
 		{Name: "@test/assert", Directory: "pkg/@test/assert"},
 	}
-	projection, err := Build(packages)
+	projection, err := Build(withTypeScript(packages))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,11 +507,11 @@ func TestBuildValidatesExplicitRootExportAndLegacyExternalClass(t *testing.T) {
 	})
 
 	t.Run("required but not referenced remains external", func(t *testing.T) {
-		_, err := Build([]Package{{
+		_, err := Build(withTypeScript([]Package{{
 			Name: "@entry/app", Directory: "pkg/@entry/app",
 			Imports: []Import{{Specifier: "legacy-tool", Source: "pkg/@entry/app/src/index.ts", Line: 1}},
 			Policy:  contract.PackagePolicy{RequiredButNotReferenced: map[string]string{"legacy-tool": "1.0.0"}},
-		}})
+		}}))
 		if err != nil {
 			t.Fatalf("legacy external class was not honored: %v", err)
 		}
@@ -358,7 +519,7 @@ func TestBuildValidatesExplicitRootExportAndLegacyExternalClass(t *testing.T) {
 }
 
 func TestBuildTreatsSelfPackageImportsAsExportChecksNotDependencies(t *testing.T) {
-	projection, err := Build([]Package{{
+	projection, err := Build(withTypeScript([]Package{{
 		Name:      "@service/app",
 		Directory: "pkg/@service/app",
 		Imports: []Import{
@@ -369,7 +530,7 @@ func TestBuildTreatsSelfPackageImportsAsExportChecksNotDependencies(t *testing.T
 			".":         "./src/index.ts",
 			"./testing": "./src/test.ts",
 		}},
-	}})
+	}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,13 +538,13 @@ func TestBuildTreatsSelfPackageImportsAsExportChecksNotDependencies(t *testing.T
 	if err := json.Unmarshal(projection.Files["pkg/@service/app/package.json"], &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Dependencies) != 0 || len(manifest.DevDependencies) != 0 {
+	if len(manifest.Dependencies) != 0 || len(manifest.DevDependencies) != 1 || manifest.DevDependencies["typescript"] != "5.9.3" {
 		t.Fatalf("self imports became dependencies: runtime=%v dev=%v", manifest.Dependencies, manifest.DevDependencies)
 	}
 }
 
 func TestBuildDesignatesPackageRootAtCompositeOutput(t *testing.T) {
-	projection, err := Build([]Package{{Name: "@workbench-library/shared", Directory: "pkg/@workbench-library"}})
+	projection, err := Build(withTypeScript([]Package{{Name: "@workbench-library/shared", Directory: "pkg/@workbench-library"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,14 +570,14 @@ func TestBuildDesignatesPackageRootAtCompositeOutput(t *testing.T) {
 }
 
 func TestBuildKeepsPackageScopeChildrenStableAsCardinalityGrows(t *testing.T) {
-	singleton, err := Build([]Package{{Name: "@workbench-entry/app", Directory: "pkg/@workbench-entry/app"}})
+	singleton, err := Build(withTypeScript([]Package{{Name: "@workbench-entry/app", Directory: "pkg/@workbench-entry/app"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	multiple, err := Build([]Package{
+	multiple, err := Build(withTypeScript([]Package{
 		{Name: "@workbench-entry/app", Directory: "pkg/@workbench-entry/app"},
 		{Name: "@workbench-entry/tool", Directory: "pkg/@workbench-entry/tool"},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +603,7 @@ func TestBuildKeepsPackageScopeChildrenStableAsCardinalityGrows(t *testing.T) {
 }
 
 func TestApplyConvergesAndReplacesWholeOwnedOutputs(t *testing.T) {
-	projection, err := Build([]Package{{Name: "@basindb/core", Directory: "pkg/@basindb/core"}})
+	projection, err := Build(withTypeScript([]Package{{Name: "@basindb/core", Directory: "pkg/@basindb/core"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,4 +647,15 @@ func TestApplyRefusesPathsOutsideOwnedProjection(t *testing.T) {
 	if err == nil {
 		t.Fatal("escaping source path was accepted")
 	}
+}
+
+func withTypeScript(packages []Package) []Package {
+	if len(packages) == 0 {
+		return packages
+	}
+	if packages[0].Policy.DevDependencies == nil {
+		packages[0].Policy.DevDependencies = make(map[string]string)
+	}
+	packages[0].Policy.DevDependencies["typescript"] = "5.9.3"
+	return packages
 }
