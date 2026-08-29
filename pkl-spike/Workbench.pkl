@@ -31,7 +31,7 @@ class ManifestContract {
   contractId: NonEmptyString
   sourceRepository: NonEmptyString
   sourceChannel: NonEmptyString
-  requiredCapabilities: Set<NonEmptyString> = Set()
+  requiredCapabilities: Listing<NonEmptyString> = new {}
 }
 
 class Candidate {
@@ -40,10 +40,10 @@ class Candidate {
 }
 
 class PlatformOutput {
-  os: Set<NonEmptyString>(length > 0)
-  arch: Set<NonEmptyString>(length > 0)
+  os: Listing<NonEmptyString>(length > 0)
+  arch: Listing<NonEmptyString>(length > 0)
   path: RelativePath
-  executable: true = true
+  executable: Boolean = true
 }
 
 class Buildable {
