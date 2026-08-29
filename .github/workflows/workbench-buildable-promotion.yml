@@ -1,0 +1,537 @@
+name: Workbench buildable promotion
+
+on:
+  workflow_call:
+    inputs:
+      buildable:
+        description: Name declared in the caller's root workbench.pkl.
+        required: true
+        type: string
+      workbench-version:
+        description: Immutable SemVer release tag for the Workbench binary; mutable branches and aliases are refused.
+        required: true
+        type: string
+      base-branch:
+        description: Branch whose committed candidate is updated. Callers must invoke this workflow on pushes and promotion-branch pull requests targeting this branch.
+        required: false
+        type: string
+        default: main
+      platform-matrix-json:
+        description: JSON array of platform/runner objects; runner policy stays caller-owned.
+        required: true
+        type: string
+      integration-mode:
+        description: pull-request requires callers to make the promotion-pr-verify job a required check with strict up-to-date pull-request protection; direct-push requires an explicit bypass grant.
+        required: false
+        type: string
+        default: pull-request
+      auto-integrate:
+        description: Enable GitHub auto-merge for the bot PR. Requires this workflow's PR freshness job as a required check under strict up-to-date pull-request protection. The policy switch ships off pending owner approval.
+        required: false
+        type: boolean
+        default: false
+      publish-branch:
+        description: Optional stable bot branch; blank derives github-actions/BUILDABLE-ci-build.
+        required: false
+        type: string
+        default: ""
+      artifact-retention-days:
+        description: Retention for the cross-job candidate archives.
+        required: false
+        type: number
+        default: 14
+    secrets:
+      producer-deploy-key:
+        description: Optional narrowly scoped key consumed by a declared producer build.
+        required: false
+      promotion-token:
+        description: Narrowly scoped App/PAT token required for pull-request integration so the bot PR triggers its mandatory freshness check; direct-push may omit it and use GITHUB_TOKEN.
+        required: false
+
+jobs:
+  build:
+    name: Build ${{ inputs.buildable }} (${{ matrix.platform }})
+    if: github.event_name == 'push' && github.ref_name == inputs.base-branch
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.platform-matrix-json) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned Mise without installing the caller's tool manifest
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: 2026.8.12
+          install: false
+          cache: false
+
+      - name: Build declared platform into the local candidate
+        shell: bash
+        env:
+          BUILDABLE: ${{ inputs.buildable }}
+          PLATFORM: ${{ matrix.platform }}
+          WORKBENCH_VERSION: ${{ inputs.workbench-version }}
+          WORKBENCH_PRODUCER_DEPLOY_KEY: ${{ secrets.producer-deploy-key }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILDABLE" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "invalid buildable name: $BUILDABLE" >&2
+            exit 2
+          fi
+          if [[ ! "$PLATFORM" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "invalid platform name: $PLATFORM" >&2
+            exit 2
+          fi
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'
+          if [[ ! "$WORKBENCH_VERSION" =~ $semver ]]; then
+            echo "workbench-version must be an immutable SemVer release tag: $WORKBENCH_VERSION" >&2
+            exit 2
+          fi
+
+          mise exec "github:phosphorco/workbench-go@${WORKBENCH_VERSION}" -- \
+            workbench buildable build --name "$BUILDABLE" --platform "$PLATFORM"
+          test -d ".local-build/$BUILDABLE"
+          test -f ".local-build/$BUILDABLE/.workbench-buildable-source.json"
+          tar -cf "$RUNNER_TEMP/${BUILDABLE}-${PLATFORM}.tar" ".local-build/$BUILDABLE"
+
+      - name: Upload platform candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workbench-buildable-${{ inputs.buildable }}-${{ matrix.platform }}
+          path: ${{ runner.temp }}/${{ inputs.buildable }}-${{ matrix.platform }}.tar
+          if-no-files-found: error
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+  assemble-and-verify:
+    needs: [build]
+    if: github.event_name == 'push' && github.ref_name == inputs.base-branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install pinned Mise without installing the caller's tool manifest
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: 2026.8.12
+          install: false
+          cache: false
+
+      - name: Download platform candidates
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: workbench-buildable-${{ inputs.buildable }}-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Assemble, seal, and verify the exact candidate
+        shell: bash
+        env:
+          BUILDABLE: ${{ inputs.buildable }}
+          WORKBENCH_VERSION: ${{ inputs.workbench-version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILDABLE" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "invalid buildable name: $BUILDABLE" >&2
+            exit 2
+          fi
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'
+          if [[ ! "$WORKBENCH_VERSION" =~ $semver ]]; then
+            echo "workbench-version must be an immutable SemVer release tag: $WORKBENCH_VERSION" >&2
+            exit 2
+          fi
+
+          shopt -s nullglob
+          archives=(artifacts/*.tar)
+          if (( ${#archives[@]} == 0 )); then
+            echo "no platform candidate archives were downloaded" >&2
+            exit 1
+          fi
+
+          candidate_prefix=".local-build/$BUILDABLE"
+          source_member="$candidate_prefix/.workbench-buildable-source.json"
+          source_records="$RUNNER_TEMP/workbench-buildable-source-records"
+          staging="$RUNNER_TEMP/workbench-buildable-platforms"
+          mkdir -p "$source_records" "$staging"
+
+          # Validate every archive and compare its canonical source bytes before
+          # extracting any platform payload.
+          for index in "${!archives[@]}"; do
+            archive="${archives[$index]}"
+            members="$RUNNER_TEMP/workbench-buildable-members-$index"
+            canonical_members="$RUNNER_TEMP/workbench-buildable-canonical-members-$index"
+            listing="$RUNNER_TEMP/workbench-buildable-listing-$index"
+            tar -tf "$archive" >"$members"
+            tar -tvf "$archive" >"$listing"
+            if [[ ! -s "$members" ]]; then
+              echo "candidate archive is empty: $archive" >&2
+              exit 1
+            fi
+
+            while IFS= read -r member; do
+              case "$member" in
+                "$candidate_prefix"|"$candidate_prefix/"|"$candidate_prefix/"*) ;;
+                *)
+                  echo "candidate archive escapes its declared root: $archive: $member" >&2
+                  exit 1
+                  ;;
+              esac
+              case "/$member/" in
+                */../*|*/./*)
+                  echo "candidate archive contains a non-canonical path: $archive: $member" >&2
+                  exit 1
+                  ;;
+              esac
+              printf '%s\n' "${member%/}" >>"$canonical_members"
+            done <"$members"
+
+            while IFS= read -r entry; do
+              case "${entry:0:1}" in
+                -|d) ;;
+                *)
+                  echo "candidate archive contains a link or special entry: $archive: $entry" >&2
+                  exit 1
+                  ;;
+              esac
+            done <"$listing"
+
+            duplicate_member="$(LC_ALL=C sort "$canonical_members" | uniq -d | head -n 1)"
+            if [[ -n "$duplicate_member" ]]; then
+              echo "candidate archive contains a colliding member: $archive: $duplicate_member" >&2
+              exit 1
+            fi
+            if [[ "$(grep -Fxc "$source_member" "$members")" != 1 ]]; then
+              echo "candidate archive must contain exactly one $source_member: $archive" >&2
+              exit 1
+            fi
+
+            record="$source_records/$index.json"
+            tar -xOf "$archive" "$source_member" >"$record"
+            if [[ ! -s "$record" ]]; then
+              echo "candidate source record is empty: $archive" >&2
+              exit 1
+            fi
+          done
+
+          canonical_record="$source_records/0.json"
+          canonical_digest="$(sha256sum "$canonical_record" | awk '{print $1}')"
+          for index in "${!archives[@]}"; do
+            record="$source_records/$index.json"
+            record_digest="$(sha256sum "$record" | awk '{print $1}')"
+            if [[ "$record_digest" != "$canonical_digest" ]] || ! cmp -s "$canonical_record" "$record"; then
+              echo "platform candidates disagree on canonical source bytes: ${archives[$index]} ($record_digest != $canonical_digest)" >&2
+              exit 1
+            fi
+          done
+
+          # Extract into isolated roots, then assemble regular files while
+          # refusing cross-platform path collisions. Directory joins and the
+          # already-proven-identical source record are the only shared members.
+          if [[ -e "$candidate_prefix" ]]; then
+            echo "assembly checkout already contains a local candidate: $candidate_prefix" >&2
+            exit 1
+          fi
+          for index in "${!archives[@]}"; do
+            archive="${archives[$index]}"
+            platform_staging="$staging/$index"
+            mkdir -p "$platform_staging"
+            tar --no-same-owner -xf "$archive" -C "$platform_staging"
+            staged_candidate="$platform_staging/$candidate_prefix"
+            if [[ ! -d "$staged_candidate" ]]; then
+              echo "candidate archive did not produce its declared root: $archive" >&2
+              exit 1
+            fi
+
+            while IFS= read -r -d '' source; do
+              relative="${source#"$staged_candidate/"}"
+              destination="$candidate_prefix/$relative"
+              if [[ -d "$source" ]]; then
+                if [[ -e "$destination" && ! -d "$destination" ]]; then
+                  echo "platform payload directory collides with a file: $relative" >&2
+                  exit 1
+                fi
+                mkdir -p "$destination"
+              elif [[ -f "$source" ]]; then
+                if [[ "$relative" == .workbench-buildable-source.json && -f "$destination" ]]; then
+                  continue
+                fi
+                if [[ -e "$destination" ]]; then
+                  echo "platform payloads collide at: $relative" >&2
+                  exit 1
+                fi
+                mkdir -p "$(dirname "$destination")"
+                cp -p "$source" "$destination"
+              else
+                echo "platform payload contains a non-regular entry: $relative" >&2
+                exit 1
+              fi
+            done < <(find "$staged_candidate" -mindepth 1 -print0)
+          done
+
+          mise exec "github:phosphorco/workbench-go@${WORKBENCH_VERSION}" -- \
+            workbench buildable seal --name "$BUILDABLE" \
+            --candidate-root ".local-build/$BUILDABLE"
+          mise exec "github:phosphorco/workbench-go@${WORKBENCH_VERSION}" -- \
+            workbench buildable verify --name "$BUILDABLE" \
+            --candidate-root ".local-build/$BUILDABLE" \
+            --run-declared-verification
+          tar -cf "$RUNNER_TEMP/${BUILDABLE}-complete-candidate.tar" ".local-build/$BUILDABLE"
+
+      - name: Upload complete candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workbench-buildable-${{ inputs.buildable }}-complete
+          path: ${{ runner.temp }}/${{ inputs.buildable }}-complete-candidate.tar
+          if-no-files-found: error
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+  promotion-pr-verify:
+    name: Verify promotion PR freshness
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Install pinned Mise without installing the caller's tool manifest
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: 2026.8.12
+          install: false
+          cache: false
+
+      - name: Verify the committed candidate against the current PR tree
+        shell: bash
+        env:
+          BUILDABLE: ${{ inputs.buildable }}
+          BASE_BRANCH: ${{ inputs.base-branch }}
+          PR_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REQUESTED_PUBLISH_BRANCH: ${{ inputs.publish-branch }}
+          REPOSITORY: ${{ github.repository }}
+          WORKBENCH_VERSION: ${{ inputs.workbench-version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILDABLE" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "invalid buildable name: $BUILDABLE" >&2
+            exit 2
+          fi
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'
+          if [[ ! "$WORKBENCH_VERSION" =~ $semver ]]; then
+            echo "workbench-version must be an immutable SemVer release tag: $WORKBENCH_VERSION" >&2
+            exit 2
+          fi
+          if ! git check-ref-format --branch "$BASE_BRANCH" >/dev/null; then
+            echo "invalid base branch: $BASE_BRANCH" >&2
+            exit 2
+          fi
+
+          publish_branch="${REQUESTED_PUBLISH_BRANCH:-github-actions/${BUILDABLE}-ci-build}"
+          if ! git check-ref-format --branch "$publish_branch" >/dev/null; then
+            echo "invalid publish branch: $publish_branch" >&2
+            exit 2
+          fi
+          if [[ "$PR_HEAD_REPOSITORY" != "$REPOSITORY" ]]; then
+            echo "promotion PR head repository is $PR_HEAD_REPOSITORY, expected $REPOSITORY" >&2
+            exit 1
+          fi
+          if [[ "$PR_BASE_BRANCH" != "$BASE_BRANCH" ]]; then
+            echo "promotion PR targets $PR_BASE_BRANCH, expected $BASE_BRANCH" >&2
+            exit 1
+          fi
+          if [[ "$PR_HEAD_BRANCH" != "$publish_branch" ]]; then
+            echo "promotion PR head is $PR_HEAD_BRANCH, expected $publish_branch" >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin \
+            "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+          if ! git merge-base --is-ancestor "origin/$BASE_BRANCH" HEAD; then
+            echo "promotion PR merge tree does not contain the current $BASE_BRANCH head" >&2
+            exit 1
+          fi
+
+          candidate_root=".ci-build/$BUILDABLE"
+          if [[ ! -d "$candidate_root" ]]; then
+            echo "promotion PR is missing committed candidate: $candidate_root" >&2
+            exit 1
+          fi
+          mise exec "github:phosphorco/workbench-go@${WORKBENCH_VERSION}" -- \
+            workbench buildable verify --name "$BUILDABLE" \
+            --candidate-root "$candidate_root"
+
+  promote:
+    needs: [assemble-and-verify]
+    if: github.event_name == 'push' && github.ref_name == inputs.base-branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.base-branch }}
+          fetch-depth: 0
+          token: ${{ secrets.promotion-token || github.token }}
+
+      - name: Install pinned Mise without installing the caller's tool manifest
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: 2026.8.12
+          install: false
+          cache: false
+
+      - name: Download complete tested candidate
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: workbench-buildable-${{ inputs.buildable }}-complete
+          path: artifact
+
+      - name: Promote unchanged candidate and integrate it
+        shell: bash
+        env:
+          BUILDABLE: ${{ inputs.buildable }}
+          BASE_BRANCH: ${{ inputs.base-branch }}
+          BUILD_BASE: ${{ github.sha }}
+          WORKBENCH_VERSION: ${{ inputs.workbench-version }}
+          INTEGRATION_MODE: ${{ inputs.integration-mode }}
+          AUTO_INTEGRATE: ${{ inputs.auto-integrate }}
+          REQUESTED_PUBLISH_BRANCH: ${{ inputs.publish-branch }}
+          GH_TOKEN: ${{ secrets.promotion-token || github.token }}
+          PROMOTION_TOKEN_PROVIDED: ${{ secrets.promotion-token != '' }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILDABLE" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "invalid buildable name: $BUILDABLE" >&2
+            exit 2
+          fi
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'
+          if [[ ! "$WORKBENCH_VERSION" =~ $semver ]]; then
+            echo "workbench-version must be an immutable SemVer release tag: $WORKBENCH_VERSION" >&2
+            exit 2
+          fi
+          if [[ ! "$BUILD_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid build revision: $BUILD_BASE" >&2
+            exit 2
+          fi
+          if [[ "$INTEGRATION_MODE" != pull-request && "$INTEGRATION_MODE" != direct-push ]]; then
+            echo "integration-mode must be pull-request or direct-push" >&2
+            exit 2
+          fi
+          if ! git check-ref-format --branch "$BASE_BRANCH" >/dev/null; then
+            echo "invalid base branch: $BASE_BRANCH" >&2
+            exit 2
+          fi
+          if [[ "$INTEGRATION_MODE" == direct-push && "$AUTO_INTEGRATE" == true ]]; then
+            echo "auto-integrate applies only to pull-request mode" >&2
+            exit 2
+          fi
+          if [[ "$INTEGRATION_MODE" == pull-request && "$PROMOTION_TOKEN_PROVIDED" != true ]]; then
+            echo "pull-request integration requires an explicit promotion-token so the mandatory freshness check is triggered" >&2
+            exit 2
+          fi
+
+          publish_branch="${REQUESTED_PUBLISH_BRANCH:-github-actions/${BUILDABLE}-ci-build}"
+          if ! git check-ref-format --branch "$publish_branch" >/dev/null; then
+            echo "invalid publish branch: $publish_branch" >&2
+            exit 2
+          fi
+          if [[ "$INTEGRATION_MODE" == pull-request && "$publish_branch" == "$BASE_BRANCH" ]]; then
+            echo "publish branch must differ from the base branch in pull-request mode" >&2
+            exit 2
+          fi
+
+          candidate_archive="artifact/${BUILDABLE}-complete-candidate.tar"
+          if [[ ! -f "$candidate_archive" ]]; then
+            echo "complete candidate archive is missing: $candidate_archive" >&2
+            exit 1
+          fi
+          tar -xf "$candidate_archive"
+          git fetch --no-tags origin \
+            "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+
+          mise exec "github:phosphorco/workbench-go@${WORKBENCH_VERSION}" -- \
+            workbench buildable check-fresh --name "$BUILDABLE" \
+            --candidate-root ".local-build/$BUILDABLE" \
+            --built-from "$BUILD_BASE" --against "origin/$BASE_BRANCH"
+
+          git switch -C "$publish_branch" "origin/$BASE_BRANCH"
+          mise exec "github:phosphorco/workbench-go@${WORKBENCH_VERSION}" -- \
+            workbench buildable promote --name "$BUILDABLE" \
+            --candidate-root ".local-build/$BUILDABLE" \
+            --committed-root ".ci-build/$BUILDABLE"
+          git diff --check
+
+          if [[ -z "$(git status --porcelain -- ".ci-build/$BUILDABLE")" ]]; then
+            if [[ "$INTEGRATION_MODE" == pull-request && "$AUTO_INTEGRATE" == false ]]; then
+              existing_pr_url="$(gh pr list --repo "$GITHUB_REPOSITORY" \
+                --head "$publish_branch" --base "$BASE_BRANCH" --state open \
+                --json url --jq '.[0].url // ""')"
+              if [[ -n "$existing_pr_url" ]]; then
+                gh pr merge --disable-auto "$existing_pr_url"
+              fi
+            fi
+            echo "No $BUILDABLE .ci-build changes"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- ".ci-build/$BUILDABLE"
+          git commit -m "chore(ci): update $BUILDABLE .ci-build [skip workbench-buildable-publish]"
+          promotion_commit="$(git rev-parse HEAD)"
+
+          case "$INTEGRATION_MODE" in
+            pull-request)
+              remote_sha="$(git ls-remote --heads origin "refs/heads/$publish_branch" | awk '{print $1}')"
+              if [[ -n "$remote_sha" ]]; then
+                git push --force-with-lease="refs/heads/${publish_branch}:${remote_sha}" \
+                  origin "HEAD:refs/heads/${publish_branch}"
+              else
+                git push origin "HEAD:refs/heads/${publish_branch}"
+              fi
+
+              pr_title="chore(ci): update ${BUILDABLE} .ci-build"
+              pr_body="CI promoted the exact ${BUILDABLE} candidate built and verified from ${BUILD_BASE}."
+              pr_url="$(gh pr list --repo "$GITHUB_REPOSITORY" \
+                --head "$publish_branch" --base "$BASE_BRANCH" --state open \
+                --json url --jq '.[0].url // ""')"
+              existing_pr=false
+              if [[ -n "$pr_url" ]]; then
+                existing_pr=true
+                gh pr edit "$pr_url" --title "$pr_title" --body "$pr_body"
+              else
+                pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" \
+                  --base "$BASE_BRANCH" --head "$publish_branch" \
+                  --title "$pr_title" --body "$pr_body")"
+              fi
+              if [[ "$AUTO_INTEGRATE" == true ]]; then
+                gh pr merge --auto --squash \
+                  --match-head-commit "$promotion_commit" "$pr_url"
+              elif [[ "$existing_pr" == true ]]; then
+                gh pr merge --disable-auto "$pr_url"
+              fi
+              ;;
+            direct-push)
+              # The repository must explicitly grant this workflow actor a
+              # branch-protection/ruleset bypass. This non-force push is a
+              # compare-and-swap: a concurrent base advance makes it fail.
+              git push origin "HEAD:refs/heads/${BASE_BRANCH}"
+              ;;
+          esac
