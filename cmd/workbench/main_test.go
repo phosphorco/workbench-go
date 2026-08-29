@@ -29,6 +29,8 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 		{"explicit snapshot", []string{"snapshot", "record", "exact.pkl"}, call{name: "snapshot record", root: "/workbench", values: []string{"exact.pkl"}}},
 		{"reproduce", []string{"snapshot", "reproduce", "exact.pkl"}, call{name: "snapshot reproduce", root: "/workbench", values: []string{"exact.pkl"}}},
 		{"prune", []string{"prune", "@scope", "owner/repository"}, call{name: "prune", root: "/workbench", values: []string{"@scope", "owner/repository"}}},
+		{"run without arguments", []string{"run", "tsgo", "--"}, call{name: "run", root: "/workbench", values: []string{"tsgo"}}},
+		{"run with arguments", []string{"run", "tsgo", "--", "-b", "."}, call{name: "run", root: "/workbench", values: []string{"tsgo", "-b", "."}}},
 		{"skills check", []string{"skills", "check"}, call{name: "skills check", root: "/workbench"}},
 		{"version", []string{"version"}, call{name: "version"}},
 	}
@@ -58,7 +60,8 @@ func TestInvalidCommandsAcquireNoAuthority(t *testing.T) {
 	invalid := [][]string{
 		nil, {"inspect"}, {"setup", "extra"}, {"commit", "a", "b"},
 		{"snapshot"}, {"snapshot", "record", "a", "b"}, {"snapshot", "reproduce"},
-		{"prune"}, {"prune", ""}, {"skills"}, {"skills", "check", "--root", "/tmp"}, {"skills", "list"}, {"version", "extra"},
+		{"prune"}, {"prune", ""}, {"run"}, {"run", "tsgo"}, {"run", "", "--"}, {"run", "tsgo", "-b", "."},
+		{"skills"}, {"skills", "check", "--root", "/tmp"}, {"skills", "list"}, {"version", "extra"},
 	}
 	for _, arguments := range invalid {
 		var calls []call
@@ -368,6 +371,11 @@ func recordingApplications(calls *[]call) applications {
 		prune: func(_ context.Context, root string, identities []string) (string, error) {
 			*calls = append(*calls, call{name: "prune", root: root, values: append([]string(nil), identities...)})
 			return "", nil
+		},
+		runBuildable: func(_ context.Context, root, name string, arguments []string) error {
+			values := append([]string{name}, arguments...)
+			*calls = append(*calls, call{name: "run", root: root, values: values})
+			return nil
 		},
 		skillsCheck: func(_ context.Context, root string) (skills.Report, error) {
 			*calls = append(*calls, call{name: "skills check", root: root})

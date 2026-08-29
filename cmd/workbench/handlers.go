@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/phosphorco/workbench-go/internal/buildable"
 	"github.com/phosphorco/workbench-go/internal/change"
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/evaluate"
@@ -146,8 +147,9 @@ func applicationsForEnvironment(provider environmentProvider) applications {
 			}
 			return pruneCheckouts(ctx, root, identities, environment)
 		},
-		skillsCheck: checkSkills,
-		version:     version.Current,
+		runBuildable: buildable.Run,
+		skillsCheck:  checkSkills,
+		version:      version.Current,
 	}
 }
 

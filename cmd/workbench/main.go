@@ -19,7 +19,7 @@ import (
 const (
 	defaultCommitPlan = "commit-plan.pkl"
 	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
-	usage             = "usage: workbench setup | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | skills check | version"
+	usage             = "usage: workbench setup | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | skills check | version"
 )
 
 type setupApplication func(context.Context, string) (setup.Result, error)
@@ -27,6 +27,7 @@ type commitApplication func(context.Context, string, string) (string, error)
 type snapshotRecordApplication func(context.Context, string, string) (string, error)
 type snapshotReproduceApplication func(context.Context, string, string) (string, error)
 type pruneApplication func(context.Context, string, []string) (string, error)
+type runBuildableApplication func(context.Context, string, string, []string) error
 type skillsCheckApplication func(context.Context, string) (skills.Report, error)
 type versionApplication func() (version.Info, error)
 
@@ -38,6 +39,7 @@ type applications struct {
 	snapshotRecord    snapshotRecordApplication
 	snapshotReproduce snapshotReproduceApplication
 	prune             pruneApplication
+	runBuildable      runBuildableApplication
 	skillsCheck       skillsCheckApplication
 	version           versionApplication
 }
@@ -50,6 +52,7 @@ const (
 	commandSnapshotRecord
 	commandSnapshotReproduce
 	commandPrune
+	commandRunBuildable
 	commandSkillsCheck
 	commandVersion
 )
@@ -176,6 +179,14 @@ func runWith(ctx context.Context, arguments []string, workingDirectory func() (s
 			return fmt.Errorf("prune: %w", err)
 		}
 		return writeReport(output, report)
+	case commandRunBuildable:
+		if application.runBuildable == nil {
+			return errors.New("run buildable application is absent")
+		}
+		if err := application.runBuildable(ctx, root, command.arguments[0], append([]string(nil), command.arguments[1:]...)); err != nil {
+			return fmt.Errorf("run %s: %w", command.arguments[0], err)
+		}
+		return nil
 	case commandSkillsCheck:
 		if application.skillsCheck == nil {
 			return errors.New("skills check application is absent")
@@ -237,6 +248,11 @@ func parseInvocation(arguments []string) (invocation, error) {
 				}
 			}
 			return invocation{kind: commandPrune, arguments: append([]string(nil), arguments[1:]...)}, nil
+		}
+	case "run":
+		if len(arguments) >= 3 && arguments[1] != "" && arguments[2] == "--" {
+			values := append([]string{arguments[1]}, arguments[3:]...)
+			return invocation{kind: commandRunBuildable, arguments: values}, nil
 		}
 	case "skills":
 		if len(arguments) == 2 && arguments[1] == "check" {
