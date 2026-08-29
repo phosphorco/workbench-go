@@ -29,8 +29,8 @@ class ManifestContract {
   schemaVersion: UInt16(isPositive)
   kind: NonEmptyString
   contractId: NonEmptyString
-  sourceRepository: NonEmptyString
-  sourceChannel: NonEmptyString
+  expectedSource: Mapping<NonEmptyString, NonEmptyString> = new {}
+  requiredSourceFields: Listing<NonEmptyString> = new {}
   requiredCapabilities: Listing<NonEmptyString> = new {}
 }
 

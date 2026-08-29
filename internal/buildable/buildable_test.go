@@ -110,7 +110,8 @@ func writeConfiguration(t *testing.T, repository string) {
 				"buildCommand":   map[string]any{"executable": "mise", "arguments": []string{"run", "hello:build-local"}},
 				"manifest": map[string]any{
 					"schemaVersion": 2, "kind": "hello-artifact-manifest", "contractId": "hello-v2",
-					"sourceRepository": "https://example.test/hello", "sourceChannel": "latest",
+					"expectedSource":       map[string]string{"repository": "https://example.test/hello", "channel": "latest"},
+					"requiredSourceFields": []string{"revision", "version", "nestedRevision"},
 					"requiredCapabilities": []string{"greeting-v1"},
 				},
 				"candidates": []map[string]any{

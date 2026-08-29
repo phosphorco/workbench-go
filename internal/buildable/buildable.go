@@ -64,12 +64,12 @@ type BuildCommand struct {
 }
 
 type ManifestContract struct {
-	SchemaVersion        int      `json:"schemaVersion"`
-	Kind                 string   `json:"kind"`
-	ContractID           string   `json:"contractId"`
-	SourceRepository     string   `json:"sourceRepository"`
-	SourceChannel        string   `json:"sourceChannel"`
-	RequiredCapabilities []string `json:"requiredCapabilities"`
+	SchemaVersion        int               `json:"schemaVersion"`
+	Kind                 string            `json:"kind"`
+	ContractID           string            `json:"contractId"`
+	ExpectedSource       map[string]string `json:"expectedSource"`
+	RequiredSourceFields []string          `json:"requiredSourceFields"`
+	RequiredCapabilities []string          `json:"requiredCapabilities"`
 }
 
 type Candidate struct {
@@ -85,16 +85,10 @@ type Platform struct {
 }
 
 type artifactManifest struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	Kind          string `json:"kind"`
-	ContractID    string `json:"contractId"`
-	Source        struct {
-		Repository     string `json:"repository"`
-		Revision       string `json:"revision"`
-		Channel        string `json:"channel"`
-		Version        string `json:"version"`
-		NestedRevision string `json:"nestedRevision"`
-	} `json:"source"`
+	SchemaVersion  int               `json:"schemaVersion"`
+	Kind           string            `json:"kind"`
+	ContractID     string            `json:"contractId"`
+	Source         map[string]string `json:"source"`
 	ProducerInputs struct {
 		Algorithm string `json:"algorithm"`
 		Digest    string `json:"digest"`
@@ -224,8 +218,16 @@ func (buildable Buildable) validate() error {
 	if strings.TrimSpace(buildable.BuildCommand.Executable) == "" {
 		return errors.New("build command executable is empty")
 	}
-	if buildable.Manifest.SchemaVersion <= 0 || buildable.Manifest.Kind == "" || buildable.Manifest.ContractID == "" || buildable.Manifest.SourceRepository == "" || buildable.Manifest.SourceChannel == "" {
+	if buildable.Manifest.SchemaVersion <= 0 || buildable.Manifest.Kind == "" || buildable.Manifest.ContractID == "" {
 		return errors.New("manifest contract identity is incomplete")
+	}
+	for field, value := range buildable.Manifest.ExpectedSource {
+		if field == "" || value == "" {
+			return errors.New("expected manifest source contains an empty field or value")
+		}
+	}
+	if duplicates(buildable.Manifest.RequiredSourceFields) {
+		return errors.New("required manifest source fields contain duplicates")
 	}
 	if duplicates(buildable.Manifest.RequiredCapabilities) {
 		return errors.New("required manifest capabilities contain duplicates")
@@ -356,8 +358,15 @@ func validateManifest(buildable Buildable, manifest artifactManifest) error {
 	if manifest.SchemaVersion != contract.SchemaVersion || manifest.Kind != contract.Kind || manifest.ContractID != contract.ContractID {
 		return fmt.Errorf("manifest contract identity is %d/%s/%s, want %d/%s/%s", manifest.SchemaVersion, manifest.Kind, manifest.ContractID, contract.SchemaVersion, contract.Kind, contract.ContractID)
 	}
-	if manifest.Source.Repository != contract.SourceRepository || manifest.Source.Channel != contract.SourceChannel || manifest.Source.Revision == "" || manifest.Source.Version == "" || manifest.Source.NestedRevision == "" {
-		return errors.New("manifest source identity is incomplete or non-canonical")
+	for field, expected := range contract.ExpectedSource {
+		if manifest.Source[field] != expected {
+			return fmt.Errorf("manifest source field %q is %q, want %q", field, manifest.Source[field], expected)
+		}
+	}
+	for _, field := range contract.RequiredSourceFields {
+		if manifest.Source[field] == "" {
+			return fmt.Errorf("manifest source field %q is required", field)
+		}
 	}
 	if manifest.ProducerInputs.Algorithm != "sha256" || !sha256Pattern.MatchString(manifest.ProducerInputs.Digest) {
 		return errors.New("producer input digest is not lowercase SHA-256")

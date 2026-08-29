@@ -21,11 +21,14 @@ func Definition() buildable.Buildable {
 		},
 		BuildCommand: buildable.BuildCommand{Executable: "mise", Arguments: []string{"run", "tsgo:build-local"}},
 		Manifest: buildable.ManifestContract{
-			SchemaVersion:    2,
-			Kind:             "tsgo-artifact-manifest",
-			ContractID:       "tsgo-artifacts-v2",
-			SourceRepository: "https://github.com/phosphorco/monorepo-tsgo",
-			SourceChannel:    "latest",
+			SchemaVersion: 2,
+			Kind:          "tsgo-artifact-manifest",
+			ContractID:    "tsgo-artifacts-v2",
+			ExpectedSource: map[string]string{
+				"repository": "https://github.com/phosphorco/monorepo-tsgo",
+				"channel":    "latest",
+			},
+			RequiredSourceFields: []string{"revision", "version", "nestedRevision"},
 		},
 		Candidates: []buildable.Candidate{
 			{
