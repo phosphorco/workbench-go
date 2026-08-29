@@ -30,7 +30,7 @@ import (
 
 const generatedPolicyID = "workbench-0.2-generated-projections-v2"
 
-const currentContractVersion = "0.5.0"
+const currentContractVersion = "0.6.0"
 
 var releasedAmendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
 
@@ -147,10 +147,66 @@ func applicationsForEnvironment(provider environmentProvider) applications {
 			}
 			return pruneCheckouts(ctx, root, identities, environment)
 		},
-		runBuildable: buildable.Run,
-		skillsCheck:  checkSkills,
-		version:      version.Current,
+		runBuildable:   buildable.Run,
+		checkBuildable: buildable.CheckCurrent,
+		buildBuildable: func(ctx context.Context, root, name, platform string) error {
+			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
+			if err != nil {
+				return err
+			}
+			return buildable.BuildDeclared(ctx, root, name, declaration, platform)
+		},
+		sealBuildable: func(ctx context.Context, root, name, candidate string) error {
+			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
+			if err != nil {
+				return err
+			}
+			return buildable.SealDeclared(ctx, root, name, declaration, candidate)
+		},
+		verifyBuildable: func(ctx context.Context, root, name, candidate string, runDeclared bool) error {
+			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
+			if err != nil {
+				return err
+			}
+			return buildable.VerifyDeclared(ctx, root, name, declaration, candidate, runDeclared)
+		},
+		checkFreshBuildable: func(ctx context.Context, root, name, candidate, builtFrom, against string) error {
+			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
+			if err != nil {
+				return err
+			}
+			return buildable.CheckFreshDeclared(ctx, root, name, declaration, candidate, builtFrom, against)
+		},
+		promoteBuildable: func(ctx context.Context, root, name, candidate, committed string) error {
+			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
+			if err != nil {
+				return err
+			}
+			return buildable.PromoteDeclared(ctx, root, name, declaration, candidate, committed)
+		},
+		skillsCheck: checkSkills,
+		version:     version.Current,
 	}
+}
+
+func evaluateLocalBuildable(ctx context.Context, provider environmentProvider, root, name string) (buildable.Buildable, error) {
+	environment, err := provider()
+	if err != nil {
+		return buildable.Buildable{}, err
+	}
+	source, err := os.ReadFile(filepath.Join(root, "workbench.pkl"))
+	if err != nil {
+		return buildable.Buildable{}, fmt.Errorf("read local workbench.pkl: %w", err)
+	}
+	declaration, err := setup.EvaluateCurrentDeclaration(ctx, environment.evaluator, source)
+	if err != nil {
+		return buildable.Buildable{}, fmt.Errorf("evaluate local workbench.pkl: %w", err)
+	}
+	selected, exists := declaration.Buildables[name]
+	if !exists {
+		return buildable.Buildable{}, fmt.Errorf("buildable %q is not declared by the local workbench.pkl", name)
+	}
+	return selected, nil
 }
 
 func runCommit(ctx context.Context, root, planName string, environment commandEnvironment) (string, error) {
@@ -243,6 +299,7 @@ func generatedProjectionPath(path string) bool {
 		return true
 	}
 	return normalized == ".agents/skills" || strings.HasPrefix(normalized, ".agents/skills/") ||
+		normalized == buildable.ProjectionPath ||
 		normalized == "node_modules" || strings.HasPrefix(normalized, "node_modules/")
 }
 
@@ -265,7 +322,7 @@ func releasedContractURI(contractVersion, filename string) string {
 
 func lifecycleContractURI(contractVersion, filename string) (string, error) {
 	switch contractVersion {
-	case "0.2.0", "0.3.0", "0.4.0", currentContractVersion:
+	case "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion:
 		return releasedContractURI(contractVersion, filename), nil
 	case "0.1.0":
 		return "", fmt.Errorf("Workbench 0.1.0 has no released %s contract", filename)
@@ -309,7 +366,7 @@ func releasedCommitPlanContract(source []byte, contractVersion string) (evaluate
 	if _, err := lifecycleContractURI(contractVersion, filename); err != nil {
 		return evaluate.Contract{}, err
 	}
-	return releasedContractForSubjectLine(source, filename, contractVersion, "0.2.0", "0.3.0", "0.4.0", currentContractVersion)
+	return releasedContractForSubjectLine(source, filename, contractVersion, "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion)
 }
 
 type snapshotContractKind uint8
@@ -329,10 +386,12 @@ func releasedSnapshotContractFromSource(source []byte) (evaluate.Contract, snaps
 		schema, err := evaluate.ReleasedContract(current)
 		return schema, currentSnapshotContract, err
 	}
-	previous := releasedContractURI("0.4.0", "WorkbenchSnapshot.pkl")
-	if got == previous {
-		schema, err := evaluate.ReleasedContract(previous)
-		return schema, currentSnapshotContract, err
+	for _, contractVersion := range []string{"0.4.0", "0.5.0"} {
+		previous := releasedContractURI(contractVersion, "WorkbenchSnapshot.pkl")
+		if got == previous {
+			schema, err := evaluate.ReleasedContract(previous)
+			return schema, currentSnapshotContract, err
+		}
 	}
 	for _, contractVersion := range []string{"0.2.0", "0.3.0"} {
 		want, err := v020v030snapshot.ContractURI(contractVersion)
@@ -355,7 +414,7 @@ func evaluateSubject(ctx context.Context, root string, evaluator evaluate.Evalua
 	if err != nil {
 		return contract.Subject{}, fmt.Errorf("read workbench-subject.pkl: %w", err)
 	}
-	schema, err := releasedContractForSubjectLine(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", currentContractVersion)
+	schema, err := releasedContractForSubjectLine(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion)
 	if err != nil {
 		return contract.Subject{}, err
 	}

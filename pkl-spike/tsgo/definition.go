@@ -33,10 +33,12 @@ func Definition() buildable.Buildable {
 		Candidates: []buildable.Candidate{
 			{
 				Root:          ".local-build/tsgo",
+				InputStrategy: "gitWorktree",
 				InvalidRemedy: "Run 'mise run tsgo:build-local' to rebuild it, or remove '.local-build/tsgo' completely.",
 			},
 			{
 				Root:          ".ci-build/tsgo",
+				InputStrategy: "gitHeadTree",
 				InvalidRemedy: "Restore '.ci-build/tsgo' from Git or run the authorized TSGo CI publication workflow.",
 			},
 		},

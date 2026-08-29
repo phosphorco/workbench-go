@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/phosphorco/workbench-go/internal/buildable"
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/setup"
 	"github.com/phosphorco/workbench-go/internal/skills"
@@ -19,7 +21,7 @@ import (
 const (
 	defaultCommitPlan = "commit-plan.pkl"
 	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
-	usage             = "usage: workbench setup | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | skills check | version"
+	usage             = "usage: workbench setup | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable check|build|seal|verify|check-fresh|promote ... | skills check | version"
 )
 
 type setupApplication func(context.Context, string) (setup.Result, error)
@@ -28,20 +30,32 @@ type snapshotRecordApplication func(context.Context, string, string) (string, er
 type snapshotReproduceApplication func(context.Context, string, string) (string, error)
 type pruneApplication func(context.Context, string, []string) (string, error)
 type runBuildableApplication func(context.Context, string, string, []string) error
+type checkBuildableApplication func(context.Context, string, string) (buildable.CheckReport, error)
+type buildBuildableApplication func(context.Context, string, string, string) error
+type sealBuildableApplication func(context.Context, string, string, string) error
+type verifyBuildableApplication func(context.Context, string, string, string, bool) error
+type checkFreshBuildableApplication func(context.Context, string, string, string, string, string) error
+type promoteBuildableApplication func(context.Context, string, string, string, string) error
 type skillsCheckApplication func(context.Context, string) (skills.Report, error)
 type versionApplication func() (version.Info, error)
 
 // applications contains command-scoped capabilities. Parsing succeeds before
 // runWith designates any one capability or observes the working directory.
 type applications struct {
-	setup             setupApplication
-	commit            commitApplication
-	snapshotRecord    snapshotRecordApplication
-	snapshotReproduce snapshotReproduceApplication
-	prune             pruneApplication
-	runBuildable      runBuildableApplication
-	skillsCheck       skillsCheckApplication
-	version           versionApplication
+	setup               setupApplication
+	commit              commitApplication
+	snapshotRecord      snapshotRecordApplication
+	snapshotReproduce   snapshotReproduceApplication
+	prune               pruneApplication
+	runBuildable        runBuildableApplication
+	checkBuildable      checkBuildableApplication
+	buildBuildable      buildBuildableApplication
+	sealBuildable       sealBuildableApplication
+	verifyBuildable     verifyBuildableApplication
+	checkFreshBuildable checkFreshBuildableApplication
+	promoteBuildable    promoteBuildableApplication
+	skillsCheck         skillsCheckApplication
+	version             versionApplication
 }
 
 type commandKind uint8
@@ -53,6 +67,12 @@ const (
 	commandSnapshotReproduce
 	commandPrune
 	commandRunBuildable
+	commandCheckBuildable
+	commandBuildBuildable
+	commandSealBuildable
+	commandVerifyBuildable
+	commandCheckFreshBuildable
+	commandPromoteBuildable
 	commandSkillsCheck
 	commandVersion
 )
@@ -187,6 +207,46 @@ func runWith(ctx context.Context, arguments []string, workingDirectory func() (s
 			return fmt.Errorf("run %s: %w", command.arguments[0], err)
 		}
 		return nil
+	case commandCheckBuildable:
+		if application.checkBuildable == nil {
+			return errors.New("check buildable application is absent")
+		}
+		report, checkErr := application.checkBuildable(ctx, root, command.arguments[0])
+		if checkErr != nil && report.Status == "" {
+			return fmt.Errorf("buildable check %s: %w", command.arguments[0], checkErr)
+		}
+		if err := writeJSONReport(output, report); err != nil {
+			return err
+		}
+		if checkErr != nil {
+			return reportedError{err: checkErr}
+		}
+		return nil
+	case commandBuildBuildable:
+		if application.buildBuildable == nil {
+			return errors.New("build buildable application is absent")
+		}
+		return application.buildBuildable(ctx, root, command.arguments[0], command.arguments[1])
+	case commandSealBuildable:
+		if application.sealBuildable == nil {
+			return errors.New("seal buildable application is absent")
+		}
+		return application.sealBuildable(ctx, root, command.arguments[0], command.arguments[1])
+	case commandVerifyBuildable:
+		if application.verifyBuildable == nil {
+			return errors.New("verify buildable application is absent")
+		}
+		return application.verifyBuildable(ctx, root, command.arguments[0], command.arguments[1], command.arguments[2] == "true")
+	case commandCheckFreshBuildable:
+		if application.checkFreshBuildable == nil {
+			return errors.New("check-fresh buildable application is absent")
+		}
+		return application.checkFreshBuildable(ctx, root, command.arguments[0], command.arguments[1], command.arguments[2], command.arguments[3])
+	case commandPromoteBuildable:
+		if application.promoteBuildable == nil {
+			return errors.New("promote buildable application is absent")
+		}
+		return application.promoteBuildable(ctx, root, command.arguments[0], command.arguments[1], command.arguments[2])
 	case commandSkillsCheck:
 		if application.skillsCheck == nil {
 			return errors.New("skills check application is absent")
@@ -254,6 +314,8 @@ func parseInvocation(arguments []string) (invocation, error) {
 			values := append([]string{arguments[1]}, arguments[3:]...)
 			return invocation{kind: commandRunBuildable, arguments: values}, nil
 		}
+	case "buildable":
+		return parseBuildableInvocation(arguments[1:])
 	case "skills":
 		if len(arguments) == 2 && arguments[1] == "check" {
 			return invocation{kind: commandSkillsCheck}, nil
@@ -264,6 +326,76 @@ func parseInvocation(arguments []string) (invocation, error) {
 		}
 	}
 	return invocation{}, errors.New(usage)
+}
+
+func parseBuildableInvocation(arguments []string) (invocation, error) {
+	if len(arguments) == 0 {
+		return invocation{}, errors.New(usage)
+	}
+	operation := arguments[0]
+	values, switches, err := parseLongOptions(arguments[1:])
+	if err != nil {
+		return invocation{}, errors.New(usage)
+	}
+	name := values["name"]
+	if name == "" {
+		return invocation{}, errors.New(usage)
+	}
+	switch operation {
+	case "check":
+		if len(values) == 1 && len(switches) == 0 {
+			return invocation{kind: commandCheckBuildable, arguments: []string{name}}, nil
+		}
+	case "build":
+		if len(values) == 2 && values["platform"] != "" && len(switches) == 0 {
+			return invocation{kind: commandBuildBuildable, arguments: []string{name, values["platform"]}}, nil
+		}
+	case "seal":
+		if len(values) == 2 && values["candidate-root"] != "" && len(switches) == 0 {
+			return invocation{kind: commandSealBuildable, arguments: []string{name, values["candidate-root"]}}, nil
+		}
+	case "verify":
+		if len(values) == 2 && values["candidate-root"] != "" && len(switches) <= 1 {
+			_, runDeclared := switches["run-declared-verification"]
+			if len(switches) == 0 || runDeclared {
+				return invocation{kind: commandVerifyBuildable, arguments: []string{name, values["candidate-root"], fmt.Sprint(runDeclared)}}, nil
+			}
+		}
+	case "check-fresh":
+		if len(values) == 4 && values["candidate-root"] != "" && values["built-from"] != "" && values["against"] != "" && len(switches) == 0 {
+			return invocation{kind: commandCheckFreshBuildable, arguments: []string{name, values["candidate-root"], values["built-from"], values["against"]}}, nil
+		}
+	case "promote":
+		if len(values) == 3 && values["candidate-root"] != "" && values["committed-root"] != "" && len(switches) == 0 {
+			return invocation{kind: commandPromoteBuildable, arguments: []string{name, values["candidate-root"], values["committed-root"]}}, nil
+		}
+	}
+	return invocation{}, errors.New(usage)
+}
+
+func parseLongOptions(arguments []string) (map[string]string, map[string]struct{}, error) {
+	values := make(map[string]string)
+	switches := make(map[string]struct{})
+	for index := 0; index < len(arguments); index++ {
+		argument := arguments[index]
+		if !strings.HasPrefix(argument, "--") || len(argument) == 2 {
+			return nil, nil, errors.New("option name is invalid")
+		}
+		name := strings.TrimPrefix(argument, "--")
+		if name == "run-declared-verification" {
+			if _, duplicate := switches[name]; duplicate {
+				return nil, nil, errors.New("option is duplicated")
+			}
+			switches[name] = struct{}{}
+			continue
+		}
+		if _, duplicate := values[name]; duplicate || index+1 >= len(arguments) || strings.HasPrefix(arguments[index+1], "--") {
+			return nil, nil, errors.New("option value is absent or duplicated")
+		}
+		values[name] = arguments[index+1]
+		index++
+	}
+	return values, switches, nil
 }
 
 func releasedApplications() applications {
@@ -280,6 +412,15 @@ func writeReport(output io.Writer, report string) error {
 	}
 	if _, err := fmt.Fprintln(output, report); err != nil {
 		return fmt.Errorf("write command report: %w", err)
+	}
+	return nil
+}
+
+func writeJSONReport(output io.Writer, report any) error {
+	encoder := json.NewEncoder(output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(report); err != nil {
+		return fmt.Errorf("write command JSON report: %w", err)
 	}
 	return nil
 }

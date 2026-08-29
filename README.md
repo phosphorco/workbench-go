@@ -481,6 +481,72 @@ The existing `workspaces-sync-go` work contributes two proven ideas:
 
 The final Workbench implementation absorbs repository observation, planning, and granted application into Go. A deterministic patch may remain available as an inspectable representation of the plan, but the internal JSON subprocess boundary need not survive.
 
+## Buildables make repository-owned tools explicit
+
+The `0.6.0` contract candidate adds the same `buildables` mapping to
+`PackageScopeRepository.pkl` and `Repository.pkl`. This is a candidate schema
+identity, not a claim that a `0.6.0` release is available. The immutable
+`0.1.0` through `0.5.0` contracts retain their historical meanings.
+
+A buildable declaration owns the facts Workbench cannot infer: producer input
+paths, the build command, an optional verification command, manifest identity
+and required source capabilities, local and committed candidate roots, and
+platform outputs. The candidate order and input strategies are fixed:
+
+```text
+.local-build/<name>  gitWorktree  # tracked, absent, and untracked input content
+.ci-build/<name>     gitHeadTree  # exact committed producer tree
+```
+
+The two roots are one preference, not fallbacks with different standards. If
+the first present candidate is invalid or stale, Workbench refuses it and
+reports the declaration's remedy. It never silently selects the committed
+candidate. Platform output paths must remain distinct after path cleaning and
+case normalization.
+
+Setup writes the strict `.workbench/buildables.json` registry for the assembled
+repository closure. Each projected declaration is bound to the exact owning
+`workbench.pkl`, its owner-relative checkout path, and the candidate schema
+digest. Duplicate names across the closure are rejected with both owners. Hot
+commands consume only that projection and never evaluate Pkl or mutate a
+candidate:
+
+```sh
+workbench buildable check --name <name>  # machine-readable JSON; does not execute
+workbench run <name> -- <arguments...>   # execs the selected validated output
+```
+
+Lifecycle commands are deliberately cold. They evaluate the caller's current
+root `workbench.pkl` against the bundled `0.6.0` candidate schema, so a fresh
+repository checkout can build before an assembled projection exists:
+
+```sh
+workbench buildable build --name <name> --platform <platform>
+workbench buildable seal --name <name> --candidate-root .local-build/<name>
+workbench buildable verify --name <name> --candidate-root .local-build/<name> \
+  --run-declared-verification
+workbench buildable check-fresh --name <name> \
+  --candidate-root .local-build/<name> --built-from <revision> --against <revision>
+workbench buildable promote --name <name> \
+  --candidate-root .local-build/<name> --committed-root .ci-build/<name>
+```
+
+The producer writes exactly one strict JSON source record named
+`.workbench-buildable-source.json` containing `source` and `capabilities`.
+`build` checks that record and the requested platform output. Matrix builds
+must compare the record bytes across every archive before assembly. `seal`
+then owns the final manifest: it records the producer-input digest and the
+hash, size, executable fact, and path of every declared output. `verify` rechecks those
+facts; `check-fresh` proves the candidate was built from one revision and that
+the promoted-against revision has the same producer inputs; `promote` installs
+a byte-identical verified tree at the committed root.
+
+The declared build receives `WORKBENCH_BUILDABLE_NAME`,
+`WORKBENCH_BUILDABLE_PLATFORM`, and `WORKBENCH_BUILDABLE_CANDIDATE_ROOT`.
+Declared verification receives the name and candidate root. A dirty local
+producer is usable after sealing because `gitWorktree` fingerprints its actual
+input contents, but it cannot pass a committed-revision freshness proof.
+
 ## Skills follow the repository closure
 
 Skills have two independent properties:

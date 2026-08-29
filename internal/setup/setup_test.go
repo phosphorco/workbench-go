@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phosphorco/workbench-go/internal/buildable"
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/evaluate"
 	"github.com/phosphorco/workbench-go/internal/skills"
@@ -23,6 +25,7 @@ func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 	for path, generated := range map[string]string{
 		"../../pkl/WorkbenchSubject.pkl":       localSubjectContract,
 		"../../pkl/PackageScopeRepository.pkl": localRepositoryContract,
+		"../../pkl/Repository.pkl":             localRepositoryDeclarationContract,
 	} {
 		contents, err := os.ReadFile(path)
 		if err != nil {
@@ -34,6 +37,107 @@ func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 	}
 }
 
+func TestBuildableProjectionSchemaDigestMatchesCurrentRepositoryContracts(t *testing.T) {
+	var schemas []byte
+	for _, path := range []string{"../../pkl/PackageScopeRepository.pkl", "../../pkl/Repository.pkl"} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schemas = append(schemas, contents...)
+	}
+	digest := sha256.Sum256(schemas)
+	if got := hex.EncodeToString(digest[:]); got != buildable.ProjectionSchemaDigest {
+		t.Fatalf("buildable projection schema digest = %s, want %s", buildable.ProjectionSchemaDigest, got)
+	}
+}
+
+func TestHistoricalRepositorySchemasRemainBuildableFree(t *testing.T) {
+	for name, schema := range map[string]string{
+		"PackageScopeRepository": localV050RepositoryContract,
+		"Repository":             localV050RepositoryDeclarationContract,
+	} {
+		if strings.Contains(schema, "buildables:") || strings.Contains(schema, "class Buildable") {
+			t.Fatalf("immutable 0.5 %s schema gained buildable semantics", name)
+		}
+	}
+	if !strings.Contains(localRepositoryContract, "buildables:") || !strings.Contains(localRepositoryDeclarationContract, "buildables:") {
+		t.Fatal("0.6 candidate schemas omit buildables")
+	}
+}
+
+func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testing.T) {
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	pkl, err = filepath.Abs(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, uri, prefix string
+	}{
+		{name: "package scope", uri: localV060PackageScopeURI, prefix: `scope = "@fixture"`},
+		{name: "repository", uri: localV060RepositoryURI},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := []byte(fmt.Sprintf("amends %q\n%s\n%s", test.uri, test.prefix, buildablePklFixture))
+			declaration, err := EvaluateCurrentDeclaration(context.Background(), evaluator, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, exists := declaration.Buildables["hello"]
+			if !exists || candidate.Candidates[0].InputStrategy != "gitWorktree" || candidate.Candidates[1].InputStrategy != "gitHeadTree" {
+				t.Fatalf("evaluated buildable = %#v", candidate)
+			}
+		})
+	}
+	oldSource := []byte(fmt.Sprintf("amends %q\n", localV050RepositoryURI))
+	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires exact 0.6.0") {
+		t.Fatalf("0.5 lifecycle declaration error = %v", err)
+	}
+}
+
+const buildablePklFixture = `
+buildables {
+  ["hello"] = new Buildable {
+    inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
+    buildCommand = new BuildCommand { executable = "mise"; arguments { "run"; "hello:build-local" } }
+    manifest = new ManifestContract {
+      schemaVersion = 2
+      kind = "hello-artifact-manifest"
+      contractId = "hello-v2"
+      expectedSource { ["repository"] = "https://example.test/hello" }
+      requiredSourceFields { "revision" }
+    }
+    candidates {
+      new BuildableCandidate {
+        root = ".local-build/hello"
+        inputStrategy = "gitWorktree"
+        invalidRemedy = "Rebuild the local candidate."
+      }
+      new BuildableCandidate {
+        root = ".ci-build/hello"
+        inputStrategy = "gitHeadTree"
+        invalidRemedy = "Restore the committed candidate."
+      }
+    }
+    platforms {
+      ["linux-x86_64"] = new BuildablePlatformOutput {
+        os { "linux" }
+        arch { "amd64" }
+        path = "bin/hello"
+      }
+    }
+  }
+}
+`
+
 func TestSchemaForSourceDiscriminatesReleasedAndCurrentPackageScopeContracts(t *testing.T) {
 	for _, test := range []struct {
 		uri     string
@@ -43,6 +147,7 @@ func TestSchemaForSourceDiscriminatesReleasedAndCurrentPackageScopeContracts(t *
 		{uri: localV030PackageScopeURI, version: "0.3.0"},
 		{uri: localV040PackageScopeURI, version: "0.4.0"},
 		{uri: localV050PackageScopeURI, version: "0.5.0"},
+		{uri: localV060PackageScopeURI, version: "0.6.0"},
 	} {
 		source := []byte(fmt.Sprintf("amends %q\n", test.uri))
 		if _, version, err := schemaForSource(source, "PackageScopeRepository.pkl"); err != nil {
@@ -82,7 +187,7 @@ func TestObservePackagesV030AndLaterUseOneNestedLawForSingletonAndMultiplePackag
 	write(t, filepath.Join(resourceRoot, "app", "src", "index.ts"), "export const app = true\n")
 	write(t, filepath.Join(resourceRoot, "tool", "src", "index.ts"), "export const tool = true\n")
 
-	for _, version := range []string{"0.3.0", "0.4.0", "0.5.0"} {
+	for _, version := range []string{"0.3.0", "0.4.0", "0.5.0", "0.6.0"} {
 		resource := Resource{
 			Identity:      "@workbench-entry",
 			CanonicalPath: "pkg/@workbench-entry",

@@ -2,17 +2,78 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/phosphorco/workbench-go/internal/buildable"
 	"github.com/phosphorco/workbench-go/internal/change"
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/evaluate"
 	"github.com/phosphorco/workbench-go/internal/legacy/v020v030snapshot"
 )
+
+func TestColdBuildableLifecycleEvaluatesLocalDeclarationWithoutProjection(t *testing.T) {
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	pkl, err = filepath.Abs(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	source := `amends "workbench-contract:/0.6.0/Repository.pkl"
+buildables {
+  ["hello"] = new Buildable {
+    inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
+    buildCommand = new BuildCommand { executable = "true" }
+    manifest = new ManifestContract { schemaVersion = 1; kind = "hello-manifest"; contractId = "hello-v1" }
+    candidates {
+      new BuildableCandidate { root = ".local-build/hello"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild it." }
+      new BuildableCandidate { root = ".ci-build/hello"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore it." }
+    }
+    platforms {
+      ["linux-x86_64"] = new BuildablePlatformOutput { os { "linux" }; arch { "amd64" }; path = "bin/hello" }
+    }
+  }
+}
+`
+	writeHandlerFile(t, filepath.Join(root, "workbench.pkl"), []byte(source), 0o644)
+	writeHandlerFile(t, filepath.Join(root, ".local-build/hello/bin/hello"), []byte("#!/bin/sh\n"), 0o755)
+	descriptor, err := json.Marshal(map[string]any{"source": map[string]string{}, "capabilities": []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHandlerFile(t, filepath.Join(root, ".local-build/hello", buildable.SourceDescriptorFilename), descriptor, 0o644)
+	application := applicationsForEnvironment(func() (commandEnvironment, error) {
+		return commandEnvironment{evaluator: evaluator}, nil
+	})
+	if err := application.buildBuildable(context.Background(), root, "hello", "linux-x86_64"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, buildable.ProjectionPath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cold lifecycle acquired a projection: %v", err)
+	}
+}
+
+func writeHandlerFile(t *testing.T, path string, contents []byte, mode os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, contents, mode); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestGeneratedProjectionPolicyRefusesWorkbenchOwnedPathsBeforeRefAdvance(t *testing.T) {
 	t.Parallel()
@@ -25,6 +86,7 @@ func TestGeneratedProjectionPolicyRefusesWorkbenchOwnedPathsBeforeRefAdvance(t *
 		"packages/app/bun.lock",
 		".agents/skills",
 		".agents/skills/editing/SKILL.md",
+		".workbench/buildables.json",
 		"node_modules",
 		"node_modules/@workbench/library/package.json",
 	}
@@ -63,7 +125,7 @@ func TestGeneratedProjectionPolicyRefusesWorkbenchOwnedPathsBeforeRefAdvance(t *
 
 func TestCommitPlanContractsMatchTheExactSubjectRelease(t *testing.T) {
 	t.Parallel()
-	for _, contractVersion := range []string{"0.2.0", "0.3.0", "0.4.0", currentContractVersion} {
+	for _, contractVersion := range []string{"0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion} {
 		contractVersion := contractVersion
 		t.Run(contractVersion, func(t *testing.T) {
 			t.Parallel()
@@ -103,11 +165,13 @@ func TestSnapshotContractSelectionDistinguishesCurrentAndExactLegacyIdentities(t
 			t.Fatalf("%s snapshot kind = %v", contractVersion, kind)
 		}
 	}
-	previousURI := releasedContractURI("0.4.0", "WorkbenchSnapshot.pkl")
-	if _, kind, err := releasedSnapshotContractFromSource([]byte("amends \"" + previousURI + "\"\n")); err != nil {
-		t.Fatalf("0.4.0 snapshot contract: %v", err)
-	} else if kind != currentSnapshotContract {
-		t.Fatalf("0.4.0 snapshot kind = %v", kind)
+	for _, version := range []string{"0.4.0", "0.5.0"} {
+		previousURI := releasedContractURI(version, "WorkbenchSnapshot.pkl")
+		if _, kind, err := releasedSnapshotContractFromSource([]byte("amends \"" + previousURI + "\"\n")); err != nil {
+			t.Fatalf("%s snapshot contract: %v", version, err)
+		} else if kind != currentSnapshotContract {
+			t.Fatalf("%s snapshot kind = %v", version, kind)
+		}
 	}
 	for _, invalid := range []struct {
 		uri  string
@@ -125,9 +189,9 @@ func TestSnapshotContractSelectionDistinguishesCurrentAndExactLegacyIdentities(t
 
 func TestReleasedSubjectContractRetainsAllSupportedSubjectLines(t *testing.T) {
 	t.Parallel()
-	for _, contractVersion := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0", currentContractVersion} {
+	for _, contractVersion := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion} {
 		uri := releasedContractURI(contractVersion, "WorkbenchSubject.pkl")
-		if _, err := releasedContractForSubjectLine([]byte("amends \""+uri+"\"\n"), "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", currentContractVersion); err != nil {
+		if _, err := releasedContractForSubjectLine([]byte("amends \""+uri+"\"\n"), "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion); err != nil {
 			t.Fatalf("%s Subject contract: %v", contractVersion, err)
 		}
 	}

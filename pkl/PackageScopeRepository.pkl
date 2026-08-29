@@ -13,6 +13,19 @@ typealias GitHubRepository =
 typealias SkillDomain = "orchestration" | "engineering" | "general"
 typealias SkillName = String(matches(Regex(#"[a-z0-9][a-z0-9-]*"#)))
 typealias SkillSelection = "all" | SkillRoots
+typealias BuildableName = String(matches(Regex(#"[a-z0-9][a-z0-9._-]*"#)))
+typealias RelativePath =
+  String(
+    length > 0,
+    !startsWith("/"),
+    !contains("\\"),
+    !matches(Regex(#".*[\x00-\x1f\x7f].*"#)),
+    this != ".",
+    this != "..",
+    !startsWith("../"),
+    !contains("/../"),
+    !endsWith("/.."),
+  )
 
 class SkillRoots {
   domains: Set<SkillDomain> = Set()
@@ -34,8 +47,55 @@ class PackagePolicy {
   optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
 }
 
+class GitHeadTreeInputDetection {
+  strategy: "gitHeadTree" = "gitHeadTree"
+  paths: Listing<RelativePath>(length > 0)
+}
+
+class BuildCommand {
+  executable: NonEmptyString
+  arguments: Listing<NonEmptyString> = new {}
+}
+
+class ManifestContract {
+  schemaVersion: UInt16(isPositive)
+  kind: NonEmptyString
+  contractId: NonEmptyString
+  expectedSource: Mapping<NonEmptyString, NonEmptyString> = new {}
+  requiredSourceFields: Listing<NonEmptyString> = new {}
+  requiredCapabilities: Listing<NonEmptyString> = new {}
+}
+
+class BuildableCandidate {
+  root: RelativePath
+  inputStrategy: "gitWorktree" | "gitHeadTree"
+  invalidRemedy: NonEmptyString
+}
+
+class BuildablePlatformOutput {
+  os: Listing<NonEmptyString>(length > 0)
+  arch: Listing<NonEmptyString>(length > 0)
+  path: RelativePath
+  executable: Boolean = true
+}
+
+class Buildable {
+  inputDetection: GitHeadTreeInputDetection
+  buildCommand: BuildCommand
+  /// Optional repository-owned composition proof invoked only by the explicit
+  /// buildable verify command.
+  verificationCommand: BuildCommand? = null
+  manifest: ManifestContract
+  /// Preference is authored order. A present-invalid candidate refuses; it
+  /// never falls through to a later candidate.
+  candidates: Listing<BuildableCandidate>(length > 0)
+  /// Keys are the platform names recorded by the artifact manifest.
+  platforms: Mapping<NonEmptyString, BuildablePlatformOutput>(length > 0)
+}
+
 scope: PackageScope
 includes: Mapping<GitHubRepository, Include> = new {}
 /// A PackageScope is always a container. Every package identity derives one
 /// child directory from its unscoped leaf, regardless of package cardinality.
 packages: Mapping<PackageName, PackagePolicy>(keys.every((name) -> name.startsWith(scope + "/"))) = new {}
+buildables: Mapping<BuildableName, Buildable> = new {}

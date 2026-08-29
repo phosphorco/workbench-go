@@ -11,11 +11,31 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/phosphorco/workbench-go/internal/buildable"
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/orientation"
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/repositoryclosure"
 )
+
+func encodeBuildableProjection(resources []Resource, declarations map[string]contract.Declaration, sourceRoots map[string]string) ([]byte, error) {
+	owners := make([]buildable.ProjectionOwner, 0, len(resources))
+	for _, resource := range resources {
+		root, exists := sourceRoots[resource.Identity]
+		if !exists {
+			return nil, fmt.Errorf("buildable projection source for %q is absent", resource.Identity)
+		}
+		source, err := os.ReadFile(filepath.Join(root, "workbench.pkl"))
+		if err != nil {
+			return nil, fmt.Errorf("read %q workbench.pkl for buildable projection: %w", resource.Identity, err)
+		}
+		owners = append(owners, buildable.ProjectionOwner{
+			Identity: resource.Identity, RepositoryPath: resource.CanonicalPath, Source: source,
+			Buildables: declarations[resource.GitHub].Buildables,
+		})
+	}
+	return buildable.EncodeProjection(owners)
+}
 
 func legacyResources(value repositoryclosure.Closure) []Resource {
 	resources := make([]Resource, 0, len(value.Resources))
@@ -139,7 +159,7 @@ func explicitAgentFacts(subject contract.Subject, resources []Resource) []byte {
 		}
 		fmt.Fprintf(&output, "canonicalPath = %s; branch = %s; health = \"healthy\" }\n", strconv.Quote(resource.CanonicalPath), strconv.Quote(subject.WorkLine.Branch))
 	}
-	output.WriteString("}\ngeneratedPaths { \".agents/skills\"; \".workbench/managed-checkouts.json\"; \"AGENTS.md\"; \"bun.lock\"; \"node_modules\"; \"package.json\"; \"tsconfig.json\" }\n")
+	output.WriteString("}\ngeneratedPaths { \".agents/skills\"; \".workbench/buildables.json\"; \".workbench/managed-checkouts.json\"; \"AGENTS.md\"; \"bun.lock\"; \"node_modules\"; \"package.json\"; \"tsconfig.json\" }\n")
 	output.WriteString("handOwnedPaths { \"AGENTS.pkl\"; \"workbench-subject.pkl\"")
 	for _, resource := range sorted {
 		fmt.Fprintf(&output, "; %s", strconv.Quote(resource.CanonicalPath))

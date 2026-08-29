@@ -26,7 +26,7 @@ The first real setup creates the complete two-repository Workbench.
 
 ```console
 $ workbench setup
-Workbench reconciled 2 repositories; 10 generated paths changed.
+Workbench reconciled 2 repositories; 11 generated paths changed.
 ```
 
 ## Edit the declaration
