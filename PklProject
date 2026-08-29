@@ -19,5 +19,6 @@ package {
     "go.mod"
     "go.sum"
     "mise.toml"
+    "pkl-spike/**"
   }
 }
