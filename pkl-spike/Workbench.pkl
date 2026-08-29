@@ -1,0 +1,60 @@
+module phosphor.workbench.Workbench
+
+typealias NonEmptyString = String(length > 0)
+typealias BuildableName = String(matches(Regex(#"[a-z0-9][a-z0-9._-]*"#)))
+typealias RelativePath =
+  String(
+    length > 0,
+    !startsWith("/"),
+    this != ".",
+    this != "..",
+    !startsWith("../"),
+    !contains("/../"),
+    !endsWith("/.."),
+  )
+
+class GitHeadTreeInputDetection {
+  strategy: "gitHeadTree" = "gitHeadTree"
+  paths: Listing<RelativePath>(length > 0)
+}
+
+typealias InputDetection = GitHeadTreeInputDetection
+
+class BuildCommand {
+  executable: NonEmptyString
+  arguments: Listing<NonEmptyString> = new {}
+}
+
+class ManifestContract {
+  schemaVersion: UInt16(isPositive)
+  kind: NonEmptyString
+  contractId: NonEmptyString
+  sourceRepository: NonEmptyString
+  sourceChannel: NonEmptyString
+  requiredCapabilities: Set<NonEmptyString> = Set()
+}
+
+class Candidate {
+  root: RelativePath
+  invalidRemedy: NonEmptyString
+}
+
+class PlatformOutput {
+  os: Set<NonEmptyString>(length > 0)
+  arch: Set<NonEmptyString>(length > 0)
+  path: RelativePath
+  executable: true = true
+}
+
+class Buildable {
+  inputDetection: InputDetection
+  buildCommand: BuildCommand
+  manifest: ManifestContract
+  /// Preference is authored order. A present-invalid candidate refuses; it
+  /// never falls through to a lower-authority candidate.
+  candidates: Listing<Candidate>(length > 0)
+  /// Keys are the platform names recorded by the artifact manifest.
+  platforms: Mapping<NonEmptyString, PlatformOutput>(length > 0)
+}
+
+buildables: Mapping<BuildableName, Buildable>(length > 0)
