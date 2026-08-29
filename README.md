@@ -366,9 +366,18 @@ exactly proven legacy receipt may be retired. Malformed, ambiguous, foreign, or
 disagreeing state causes a zero-change refusal, leaving a reachable manual
 repair path instead of guessing ownership.
 
-The public workflow remains centered on `setup`. Observation, planning, and comparison are internal machinery, though a future `status` or `setup --check` may expose their evidence.
+The public reconciliation workflow remains centered on `setup`. Observation,
+planning, and comparison are internal machinery.
 
 This gives Workbench Terraform-like desired state without requiring a separate public plan-and-apply lifecycle.
+
+`workbench check` is the one-command checkout-to-test loop. It runs setup first,
+prints the setup result as its own outcome, then invokes the generated root
+`typecheck` and `test` scripts with Workbench's exact Bun runtime. A setup
+failure never becomes a code-health failure, and a typecheck or test failure
+retains its own step and process output. The generated test script excludes
+emitted `dist/**` tests, so typecheck output cannot make one source test execute
+twice.
 
 ## Branch coherence is explicit but non-destructive
 
@@ -431,6 +440,55 @@ Source cannot safely determine every package semantic. Pkl remains responsible f
 The governing rule is:
 
 > Source derives dependency adjacency. Pkl declares the dependency semantics that source cannot prove.
+
+The current `0.6.0` package policy expresses the package metadata needed by the
+assembled TypeScript graph directly:
+
+```pkl
+packages {
+  ["@services/app"] {
+    dependencies {
+      ["effect"] = "4.0.0-beta.93"
+    }
+    devDependencies {
+      ["@phosphor/test"] = "workspace:*"
+    }
+    imports {
+      ["#src/*"] = "./src/*"
+    }
+    exports {
+      ["."] = "./src/index.ts"
+      ["./Paths"] = "./src/Paths.ts"
+    }
+  }
+}
+```
+
+An authored dependency class is preserved. A dependency naming another
+participating package must use `workspace:*`; a registry version for that same
+package is contradictory and is refused. When an observed participating import
+has no authored class, Workbench derives `dependencies` for production source
+and `devDependencies` for test source. External dependencies remain explicit in
+exactly one of `dependencies`, `devDependencies`,
+`requiredButNotReferenced`, `peerDependencies`, or
+`optionalDependencies`.
+
+Before changing a canonical checkout, generated file, or installation,
+Workbench batches TypeScript source through the exact Bun toolchain's parser for
+import truth, then intersects those results with a Go lexical pass that attaches
+source lines and distinguishes TypeScript `import = require` from ordinary
+`require()` calls. Static imports, export-from clauses, and string-literal
+dynamic imports are evidence; comments, documentation, regex literals,
+template text, and ordinary strings are not. Dynamic imports inside `${...}`
+template expressions remain ordinary code and are observed. A parser failure
+refuses setup before mutation. If Bun confirms an import but does not provide a
+span and the provenance pass finds multiple same-kind, same-path candidate
+lines, Workbench refuses the ambiguity rather than report a guessed location.
+Every closure gap
+reports the importer, exact specifier, source file and line, plus whether to add
+the owning Repository, declare an external dependency class, or add a matching
+package `imports`/`exports` entry. Distinct source imports remain distinct
+diagnostics.
 
 ## Workbench owns complete generated outputs
 
@@ -552,7 +610,8 @@ input contents, but it cannot pass a committed-revision freshness proof.
 Skills have two independent properties:
 
 - each skill declares one domain: `orchestration`, `engineering`, or `general`;
-- the consuming resource selects where imported skills should be visible.
+- each consuming resource attenuates which imported skills are visible while
+  editing that repository.
 
 Resource repositories author Git-owned skill sources only under
 `skills/<skill-name>/**`. Workbench discovers the assembled inventory from
@@ -561,7 +620,9 @@ source. This keeps export and import independent: a repository can export one
 skill from `skills/` while receiving a different editing skill under
 `.agents/skills/` without colliding with itself.
 
-`editing` exposes selected skills while changing the consuming resource. `workbench` exposes them at the workbench root.
+`editing` exposes selected skills while changing the consuming resource. The
+Workbench root is different: it reassembles the complete flat registry from
+every participating repository's skill sources.
 
 ```pkl
 skills {
@@ -570,7 +631,6 @@ skills {
     names = Set("mvvm", "view-model-interfaces")
   }
 
-  workbench = "all"
 }
 ```
 
@@ -580,8 +640,9 @@ Resource authors select semantic roots. They do not order traversal or copy tran
 
 For `editing`, Workbench projects the selected roots and their explicit
 composition closure into the consuming resource's
-`.agents/skills/<skill-name>/**`. For `workbench`, it projects that same closure
-at the Workbench root. Each projected skill subtree is a recorded
+`.agents/skills/<skill-name>/**`. At the Workbench root, it projects all
+participating skills into one flat registry, regardless of per-repository
+editing selection. Each projected skill subtree is a recorded
 whole-output-owned artifact. Setup preserves unrelated context-owned sibling
 skills, refuses a selected-name collision it does not own, and removes only a
 stale subtree whose prior Workbench ownership and bytes are still proven.
@@ -605,7 +666,9 @@ workbench skills check
 ```
 
 The command intentionally has no path flag. It checks `.agents/skills` in the
-current directory and reports the derived skill and composition-edge counts.
+current directory and reports the derived skill and composition-edge counts. A
+missing projection is a valid empty catalog and reports zero skills without
+creating it.
 Each skill is one flat `.agents/skills/<name>/SKILL.md` directory. YAML
 frontmatter must name the folder and declare one of the three domains.
 Workbench validates local Markdown targets, explicit composition labels,

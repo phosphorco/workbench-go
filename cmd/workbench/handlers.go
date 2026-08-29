@@ -18,6 +18,7 @@ import (
 
 	"github.com/phosphorco/workbench-go/internal/buildable"
 	"github.com/phosphorco/workbench-go/internal/change"
+	"github.com/phosphorco/workbench-go/internal/checkworkflow"
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/evaluate"
 	"github.com/phosphorco/workbench-go/internal/legacy/v020v030snapshot"
@@ -37,6 +38,7 @@ var releasedAmendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
 type commandEnvironment struct {
 	evaluator evaluate.Evaluator
 	setup     setupApplication
+	bun       string
 }
 
 type environmentProvider func() (commandEnvironment, error)
@@ -59,6 +61,7 @@ func releasedEnvironment() environmentProvider {
 			}
 			environment = commandEnvironment{
 				evaluator: evaluator,
+				bun:       toolchain.BunPath(),
 				setup: func(ctx context.Context, root string) (setup.Result, error) {
 					return setup.RunWith(ctx, root, setup.NewToolchain(evaluator, toolchain.BunPath()))
 				},
@@ -101,6 +104,7 @@ func developmentEnvironment() environmentProvider {
 			}
 			environment = commandEnvironment{
 				evaluator: evaluator,
+				bun:       bunPath,
 				setup: func(ctx context.Context, root string) (setup.Result, error) {
 					return setup.RunWith(ctx, root, setup.NewToolchain(evaluator, bunPath))
 				},
@@ -118,6 +122,13 @@ func applicationsForEnvironment(provider environmentProvider) applications {
 				return setup.Result{}, err
 			}
 			return environment.setup(ctx, root)
+		},
+		check: func(ctx context.Context, root string) (setup.Result, error) {
+			environment, err := provider()
+			if err != nil {
+				return setup.Result{}, err
+			}
+			return checkworkflow.Run(ctx, root, environment.bun, environment.setup)
 		},
 		commit: func(ctx context.Context, root, plan string) (string, error) {
 			environment, err := provider()

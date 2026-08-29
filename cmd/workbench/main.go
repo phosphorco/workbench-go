@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/phosphorco/workbench-go/internal/buildable"
+	"github.com/phosphorco/workbench-go/internal/checkworkflow"
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/setup"
 	"github.com/phosphorco/workbench-go/internal/skills"
@@ -21,10 +22,11 @@ import (
 const (
 	defaultCommitPlan = "commit-plan.pkl"
 	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
-	usage             = "usage: workbench setup | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable check|build|seal|verify|check-fresh|promote ... | skills check | version"
+	usage             = "usage: workbench setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable check|build|seal|verify|check-fresh|promote ... | skills check | version"
 )
 
 type setupApplication func(context.Context, string) (setup.Result, error)
+type checkApplication func(context.Context, string) (setup.Result, error)
 type commitApplication func(context.Context, string, string) (string, error)
 type snapshotRecordApplication func(context.Context, string, string) (string, error)
 type snapshotReproduceApplication func(context.Context, string, string) (string, error)
@@ -43,6 +45,7 @@ type versionApplication func() (version.Info, error)
 // runWith designates any one capability or observes the working directory.
 type applications struct {
 	setup               setupApplication
+	check               checkApplication
 	commit              commitApplication
 	snapshotRecord      snapshotRecordApplication
 	snapshotReproduce   snapshotReproduceApplication
@@ -62,6 +65,7 @@ type commandKind uint8
 
 const (
 	commandSetup commandKind = iota + 1
+	commandCheck
 	commandCommit
 	commandSnapshotRecord
 	commandSnapshotReproduce
@@ -149,20 +153,26 @@ func runWith(ctx context.Context, arguments []string, workingDirectory func() (s
 		if err := writeSkillWarnings(diagnostics, result.SkillWarnings); err != nil {
 			return err
 		}
-		repositories := len(result.Resources)
-		var report strings.Builder
-		fmt.Fprintf(&report, "Workbench reconciled %d %s; %d generated %s changed.", repositories, plural(repositories, "repository", "repositories"), len(result.ChangedPaths), plural(len(result.ChangedPaths), "path", "paths"))
-		orphans := slices.Clone(result.Orphans)
-		slices.SortFunc(orphans, func(left, right orphan.Candidate) int {
-			if order := strings.Compare(left.Identity, right.Identity); order != 0 {
-				return order
-			}
-			return strings.Compare(left.CanonicalPath, right.CanonicalPath)
-		})
-		for _, candidate := range orphans {
-			fmt.Fprintf(&report, "\nOrphaned checkout: %s at %s", candidate.Identity, candidate.CanonicalPath)
+		return writeReport(output, setupReport(result))
+	case commandCheck:
+		if application.check == nil {
+			return errors.New("check application is absent")
 		}
-		return writeReport(output, report.String())
+		result, checkErr := application.check(ctx, root)
+		var healthFailure *checkworkflow.StepFailure
+		if checkErr != nil && !errors.As(checkErr, &healthFailure) {
+			return fmt.Errorf("check: %w", checkErr)
+		}
+		if err := writeSkillWarnings(diagnostics, result.SkillWarnings); err != nil {
+			return err
+		}
+		if err := writeReport(output, setupReport(result)); err != nil {
+			return err
+		}
+		if healthFailure != nil {
+			return fmt.Errorf("check: %w", healthFailure)
+		}
+		return writeReport(output, "Code health passed: typecheck and test.")
 	case commandCommit:
 		if application.commit == nil {
 			return errors.New("commit application is absent")
@@ -274,6 +284,23 @@ func plural(count int, singular, plural string) string {
 	return plural
 }
 
+func setupReport(result setup.Result) string {
+	repositories := len(result.Resources)
+	var report strings.Builder
+	fmt.Fprintf(&report, "Workbench reconciled %d %s; %d generated %s changed.", repositories, plural(repositories, "repository", "repositories"), len(result.ChangedPaths), plural(len(result.ChangedPaths), "path", "paths"))
+	orphans := slices.Clone(result.Orphans)
+	slices.SortFunc(orphans, func(left, right orphan.Candidate) int {
+		if order := strings.Compare(left.Identity, right.Identity); order != 0 {
+			return order
+		}
+		return strings.Compare(left.CanonicalPath, right.CanonicalPath)
+	})
+	for _, candidate := range orphans {
+		fmt.Fprintf(&report, "\nOrphaned checkout: %s at %s", candidate.Identity, candidate.CanonicalPath)
+	}
+	return report.String()
+}
+
 func parseInvocation(arguments []string) (invocation, error) {
 	if len(arguments) == 0 {
 		return invocation{}, errors.New(usage)
@@ -282,6 +309,10 @@ func parseInvocation(arguments []string) (invocation, error) {
 	case "setup":
 		if len(arguments) == 1 {
 			return invocation{kind: commandSetup}, nil
+		}
+	case "check":
+		if len(arguments) == 1 {
+			return invocation{kind: commandCheck}, nil
 		}
 	case "commit":
 		if len(arguments) == 1 {
@@ -426,7 +457,14 @@ func writeJSONReport(output io.Writer, report any) error {
 }
 
 func checkSkills(_ context.Context, root string) (skills.Report, error) {
-	catalog, err := skills.Load([]skills.Source{{Root: filepath.Join(root, ".agents", "skills")}})
+	catalogRoot := filepath.Join(root, ".agents", "skills")
+	sources := []skills.Source{{Root: catalogRoot}}
+	if _, err := os.Stat(catalogRoot); errors.Is(err, os.ErrNotExist) {
+		sources = nil
+	} else if err != nil {
+		return skills.Report{}, err
+	}
+	catalog, err := skills.Load(sources)
 	if err != nil {
 		return skills.Report{}, err
 	}

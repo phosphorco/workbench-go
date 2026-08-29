@@ -15,8 +15,68 @@ import (
 type Package struct {
 	Name      string
 	Directory string
-	Imports   []string
+	Imports   []Import
 	Policy    contract.PackagePolicy
+}
+
+type Import struct {
+	Specifier   string
+	Source      string
+	Line        int
+	Development bool
+}
+
+type ClosureDiagnosticKind string
+
+const (
+	MissingPackage             ClosureDiagnosticKind = "missingPackage"
+	MissingWorkspaceDependency ClosureDiagnosticKind = "missingWorkspaceDependency"
+	MissingImport              ClosureDiagnosticKind = "missingImport"
+	MissingExport              ClosureDiagnosticKind = "missingExport"
+)
+
+type ClosureDiagnostic struct {
+	Kind            ClosureDiagnosticKind
+	Importer        string
+	Specifier       string
+	Source          string
+	Line            int
+	MissingPackage  string
+	DependencyClass string
+	Remedy          string
+}
+
+type ClosureError struct {
+	Diagnostics []ClosureDiagnostic
+}
+
+func (failure *ClosureError) Error() string {
+	lines := make([]string, 0, len(failure.Diagnostics))
+	for _, diagnostic := range failure.Diagnostics {
+		location := diagnostic.Source
+		if diagnostic.Line > 0 {
+			location = fmt.Sprintf("%s:%d", location, diagnostic.Line)
+		}
+		if diagnostic.Kind == MissingWorkspaceDependency {
+			lines = append(lines, fmt.Sprintf("%s: package %q declares %q in %s: %s. Remedy: %s", location, diagnostic.Importer, diagnostic.Specifier, diagnostic.DependencyClass, closureProblem(diagnostic), diagnostic.Remedy))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s: package %q imports %q: %s. Remedy: %s", location, diagnostic.Importer, diagnostic.Specifier, closureProblem(diagnostic), diagnostic.Remedy))
+	}
+	return fmt.Sprintf("workspace closure contains %d gap(s):\n%s", len(lines), strings.Join(lines, "\n"))
+}
+
+func closureProblem(diagnostic ClosureDiagnostic) string {
+	switch diagnostic.Kind {
+	case MissingPackage, MissingWorkspaceDependency:
+		return fmt.Sprintf("package %q is absent from the assembled repository closure", diagnostic.MissingPackage)
+	case MissingImport:
+		return "the importing package has no matching imports declaration"
+	case MissingExport:
+		return fmt.Sprintf("participating package %q has no matching exports declaration", diagnostic.MissingPackage)
+	default:
+		return "the import is not expressible by the assembled package contract"
+	}
 }
 
 type Projection struct {
@@ -27,8 +87,10 @@ type packageJSON struct {
 	Name                 string            `json:"name"`
 	Private              bool              `json:"private"`
 	Type                 string            `json:"type"`
-	Exports              packageExports    `json:"exports"`
+	Exports              any               `json:"exports"`
+	Imports              map[string]string `json:"imports,omitempty"`
 	Dependencies         map[string]string `json:"dependencies,omitempty"`
+	DevDependencies      map[string]string `json:"devDependencies,omitempty"`
 	PeerDependencies     map[string]string `json:"peerDependencies,omitempty"`
 	OptionalDependencies map[string]string `json:"optionalDependencies,omitempty"`
 }
@@ -43,9 +105,10 @@ type packageRootExport struct {
 }
 
 type rootPackageJSON struct {
-	Name       string   `json:"name"`
-	Private    bool     `json:"private"`
-	Workspaces []string `json:"workspaces"`
+	Name       string            `json:"name"`
+	Private    bool              `json:"private"`
+	Workspaces []string          `json:"workspaces"`
+	Scripts    map[string]string `json:"scripts"`
 }
 
 type tsReference struct {
@@ -79,6 +142,12 @@ func Build(packages []Package) (Projection, error) {
 		}
 		byName[pkg.Name] = pkg
 	}
+	if err := validatePackagePolicies(ordered, byName); err != nil {
+		return Projection{}, err
+	}
+	if diagnostics := closureDiagnostics(ordered, byName); len(diagnostics) != 0 {
+		return Projection{}, &ClosureError{Diagnostics: diagnostics}
+	}
 
 	files := make(map[string][]byte, 2+len(ordered)*2)
 	workspaces := make([]string, 0, len(ordered))
@@ -94,7 +163,13 @@ func Build(packages []Package) (Projection, error) {
 		files[filepath.Join(pkg.Directory, "tsconfig.json")] = tsconfig
 	}
 	var err error
-	files["package.json"], err = encode(rootPackageJSON{Name: "workbench", Private: true, Workspaces: workspaces})
+	files["package.json"], err = encode(rootPackageJSON{
+		Name: "workbench", Private: true, Workspaces: workspaces,
+		Scripts: map[string]string{
+			"test":      "bun test --path-ignore-patterns='**/dist/**'",
+			"typecheck": "tsc --build tsconfig.json --pretty false",
+		},
+	})
 	if err != nil {
 		return Projection{}, err
 	}
@@ -106,33 +181,59 @@ func Build(packages []Package) (Projection, error) {
 }
 
 func renderPackage(pkg Package, byName map[string]Package) ([]byte, []byte, error) {
-	dependencies := copyMap(pkg.Policy.RequiredButNotReferenced)
+	dependencies := copyMap(pkg.Policy.Dependencies)
+	devDependencies := copyMap(pkg.Policy.DevDependencies)
+	peerDependencies := copyMap(pkg.Policy.PeerDependencies)
+	optionalDependencies := copyMap(pkg.Policy.OptionalDependencies)
+	for name, version := range pkg.Policy.RequiredButNotReferenced {
+		dependencies[name] = version
+	}
 	internalDependencies := make(map[string]struct{})
-	for _, specifier := range pkg.Imports {
-		name := importedPackageName(specifier)
+	derivedDevelopment := make(map[string]bool)
+	for _, observed := range pkg.Imports {
+		name := importedPackageName(observed.Specifier)
 		if _, exists := byName[name]; !exists || name == pkg.Name {
 			continue
 		}
-		dependencies[name] = "workspace:*"
 		internalDependencies[name] = struct{}{}
+		switch dependencyClass(pkg.Policy, name) {
+		case "dependencies", "requiredButNotReferenced":
+			dependencies[name] = "workspace:*"
+		case "devDependencies":
+			devDependencies[name] = "workspace:*"
+		case "peerDependencies":
+			peerDependencies[name] = "workspace:*"
+		case "optionalDependencies":
+			optionalDependencies[name] = "workspace:*"
+		default:
+			if observed.Development {
+				if _, runtime := dependencies[name]; !runtime {
+					devDependencies[name] = "workspace:*"
+					derivedDevelopment[name] = true
+				}
+			} else {
+				dependencies[name] = "workspace:*"
+				if derivedDevelopment[name] {
+					delete(devDependencies, name)
+					delete(derivedDevelopment, name)
+				}
+			}
+		}
 	}
-	for name := range pkg.Policy.PeerDependencies {
-		delete(dependencies, name)
-	}
-	for name := range pkg.Policy.OptionalDependencies {
-		delete(dependencies, name)
+	exports := any(packageExports{Root: packageRootExport{Types: "./dist/index.d.ts", Default: "./dist/index.js"}})
+	if len(pkg.Policy.Exports) != 0 {
+		exports = copyMap(pkg.Policy.Exports)
 	}
 	manifest, err := encode(packageJSON{
-		Name:    pkg.Name,
-		Private: true,
-		Type:    "module",
-		Exports: packageExports{Root: packageRootExport{
-			Types:   "./dist/index.d.ts",
-			Default: "./dist/index.js",
-		}},
+		Name:                 pkg.Name,
+		Private:              true,
+		Type:                 "module",
+		Exports:              exports,
+		Imports:              nilIfEmpty(copyMap(pkg.Policy.Imports)),
 		Dependencies:         nilIfEmpty(dependencies),
-		PeerDependencies:     nilIfEmpty(copyMap(pkg.Policy.PeerDependencies)),
-		OptionalDependencies: nilIfEmpty(copyMap(pkg.Policy.OptionalDependencies)),
+		DevDependencies:      nilIfEmpty(devDependencies),
+		PeerDependencies:     nilIfEmpty(peerDependencies),
+		OptionalDependencies: nilIfEmpty(optionalDependencies),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("render %s package.json: %w", pkg.Name, err)
@@ -170,6 +271,196 @@ func renderPackage(pkg Package, byName map[string]Package) ([]byte, []byte, erro
 		return nil, nil, fmt.Errorf("render %s tsconfig.json: %w", pkg.Name, err)
 	}
 	return manifest, tsconfig, nil
+}
+
+func validatePackagePolicies(packages []Package, byName map[string]Package) error {
+	for _, pkg := range packages {
+		declaredBy := make(map[string]string)
+		for _, class := range dependencyClasses(pkg.Policy) {
+			names := sortedMapKeys(class.values)
+			for _, name := range names {
+				version := class.values[name]
+				if previous, exists := declaredBy[name]; exists {
+					return fmt.Errorf("package %q dependency %q is declared in both %s and %s; declare each external dependency in exactly one class", pkg.Name, name, previous, class.name)
+				}
+				declaredBy[name] = class.name
+				if strings.HasPrefix(version, "catalog:") {
+					return fmt.Errorf("package %q dependency %q in %s declares %q, but the generated root has no package catalog; declare an exact resolved version in %s", pkg.Name, name, class.name, version, class.name)
+				}
+				if _, participating := byName[name]; participating && version != "workspace:*" {
+					return fmt.Errorf("package %q dependency %q participates in the assembled closure but %s declares version %q; participating dependencies must use workspace:*", pkg.Name, name, class.name, version)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func closureDiagnostics(packages []Package, byName map[string]Package) []ClosureDiagnostic {
+	diagnostics := make([]ClosureDiagnostic, 0)
+	for _, pkg := range packages {
+		observedPackages := make(map[string]struct{})
+		for _, observed := range pkg.Imports {
+			if isBarePackageSpecifier(observed.Specifier) {
+				observedPackages[importedPackageName(observed.Specifier)] = struct{}{}
+			}
+		}
+		for _, class := range dependencyClasses(pkg.Policy) {
+			for _, name := range sortedMapKeys(class.values) {
+				version := class.values[name]
+				if !isWorkspaceProtocol(version) {
+					continue
+				}
+				if _, participating := byName[name]; participating {
+					continue
+				}
+				if _, observed := observedPackages[name]; observed {
+					continue
+				}
+				diagnostics = append(diagnostics, ClosureDiagnostic{
+					Kind: MissingWorkspaceDependency, Importer: pkg.Name, Specifier: name,
+					Source: pkg.Directory, MissingPackage: name, DependencyClass: class.name,
+					Remedy: workspaceClosureRemedy(name, class.name, version),
+				})
+			}
+		}
+		for _, observed := range pkg.Imports {
+			specifier := observed.Specifier
+			switch {
+			case strings.HasPrefix(specifier, "."), strings.HasPrefix(specifier, "/"), strings.Contains(specifier, ":"):
+				continue
+			case strings.HasPrefix(specifier, "#"):
+				if !mappingContains(pkg.Policy.Imports, specifier) {
+					diagnostics = append(diagnostics, ClosureDiagnostic{
+						Kind: MissingImport, Importer: pkg.Name, Specifier: specifier,
+						Source: observed.Source, Line: observed.Line,
+						Remedy: fmt.Sprintf("declare a matching imports entry for %q in package %q", specifier, pkg.Name),
+					})
+				}
+				continue
+			}
+
+			name := importedPackageName(specifier)
+			target, participating := byName[name]
+			if !participating {
+				if externalDependencyDeclared(pkg.Policy, name) {
+					continue
+				}
+				remedy := fmt.Sprintf("add the Repository that declares %q to includes, or declare %q in exactly one external dependency class", name, name)
+				if class, version, workspace := workspaceDependencyDeclaration(pkg.Policy, name); workspace {
+					remedy = workspaceClosureRemedy(name, class, version)
+				}
+				diagnostics = append(diagnostics, ClosureDiagnostic{
+					Kind: MissingPackage, Importer: pkg.Name, Specifier: specifier,
+					Source: observed.Source, Line: observed.Line, MissingPackage: name,
+					Remedy: remedy,
+				})
+				continue
+			}
+
+			export := importedPackageExport(name, specifier)
+			if !exportAvailable(target.Policy.Exports, export) {
+				diagnostics = append(diagnostics, ClosureDiagnostic{
+					Kind: MissingExport, Importer: pkg.Name, Specifier: specifier,
+					Source: observed.Source, Line: observed.Line, MissingPackage: name,
+					Remedy: fmt.Sprintf("declare exports[%q] on participating package %q", export, name),
+				})
+			}
+		}
+	}
+	return diagnostics
+}
+
+func workspaceDependencyDeclaration(policy contract.PackagePolicy, name string) (string, string, bool) {
+	for _, class := range dependencyClasses(policy) {
+		if version, exists := class.values[name]; exists && isWorkspaceProtocol(version) {
+			return class.name, version, true
+		}
+	}
+	return "", "", false
+}
+
+func externalDependencyDeclared(policy contract.PackagePolicy, name string) bool {
+	for _, values := range []map[string]string{policy.Dependencies, policy.DevDependencies, policy.RequiredButNotReferenced, policy.PeerDependencies, policy.OptionalDependencies} {
+		if version, exists := values[name]; exists {
+			return !isWorkspaceProtocol(version)
+		}
+	}
+	return false
+}
+
+func dependencyClass(policy contract.PackagePolicy, name string) string {
+	for _, candidate := range dependencyClasses(policy) {
+		if _, exists := candidate.values[name]; exists {
+			return candidate.name
+		}
+	}
+	return ""
+}
+
+type dependencyClassValues struct {
+	name   string
+	values map[string]string
+}
+
+func dependencyClasses(policy contract.PackagePolicy) []dependencyClassValues {
+	return []dependencyClassValues{
+		{name: "dependencies", values: policy.Dependencies},
+		{name: "devDependencies", values: policy.DevDependencies},
+		{name: "requiredButNotReferenced", values: policy.RequiredButNotReferenced},
+		{name: "peerDependencies", values: policy.PeerDependencies},
+		{name: "optionalDependencies", values: policy.OptionalDependencies},
+	}
+}
+
+func isWorkspaceProtocol(version string) bool {
+	return strings.HasPrefix(version, "workspace:")
+}
+
+func workspaceClosureRemedy(name, class, version string) string {
+	if version == "workspace:*" {
+		return fmt.Sprintf("add the Repository that declares %q to includes; %s version %q requires that package to participate in the assembled closure", name, class, version)
+	}
+	return fmt.Sprintf("replace %s version %q for %q with exact workspace:* and add the Repository that declares %q to includes", class, version, name, name)
+}
+
+func isBarePackageSpecifier(specifier string) bool {
+	return !strings.HasPrefix(specifier, ".") && !strings.HasPrefix(specifier, "/") && !strings.HasPrefix(specifier, "#") && !strings.Contains(specifier, ":")
+}
+
+func exportAvailable(exports map[string]string, requested string) bool {
+	if len(exports) == 0 {
+		return requested == "."
+	}
+	return mappingContains(exports, requested)
+}
+
+func importedPackageExport(name, specifier string) string {
+	if specifier == name {
+		return "."
+	}
+	return "." + strings.TrimPrefix(specifier, name)
+}
+
+func mappingContains(values map[string]string, requested string) bool {
+	if _, exists := values[requested]; exists {
+		return true
+	}
+	for pattern := range values {
+		if strings.HasSuffix(pattern, "*") && strings.HasPrefix(requested, strings.TrimSuffix(pattern, "*")) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func Apply(root string, projection Projection) ([]string, error) {

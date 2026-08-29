@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/phosphorco/workbench-go/internal/buildable"
+	"github.com/phosphorco/workbench-go/internal/checkworkflow"
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/setup"
 	"github.com/phosphorco/workbench-go/internal/skills"
@@ -25,6 +28,7 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 		want      call
 	}{
 		{"setup", []string{"setup"}, call{name: "setup", root: "/workbench"}},
+		{"check", []string{"check"}, call{name: "check", root: "/workbench"}},
 		{"default commit", []string{"commit"}, call{name: "commit", root: "/workbench", values: []string{defaultCommitPlan}}},
 		{"explicit commit", []string{"commit", "delivery.pkl"}, call{name: "commit", root: "/workbench", values: []string{"delivery.pkl"}}},
 		{"default snapshot", []string{"snapshot", "record"}, call{name: "snapshot record", root: "/workbench", values: []string{defaultSnapshot}}},
@@ -66,7 +70,7 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 func TestInvalidCommandsAcquireNoAuthority(t *testing.T) {
 	t.Parallel()
 	invalid := [][]string{
-		nil, {"inspect"}, {"setup", "extra"}, {"commit", "a", "b"},
+		nil, {"inspect"}, {"setup", "extra"}, {"check", "extra"}, {"commit", "a", "b"},
 		{"snapshot"}, {"snapshot", "record", "a", "b"}, {"snapshot", "reproduce"},
 		{"prune"}, {"prune", ""}, {"run"}, {"run", "tsgo"}, {"run", "", "--"}, {"run", "tsgo", "-b", "."},
 		{"buildable"}, {"buildable", "check"}, {"buildable", "check", "--name", "tsgo", "--extra", "value"},
@@ -267,6 +271,50 @@ func TestWorkingDirectoryFailurePrecedesApplication(t *testing.T) {
 	}
 }
 
+func TestCheckReportsSuccessfulSetupBeforeTypedCodeHealthFailure(t *testing.T) {
+	root := t.TempDir()
+	bun := filepath.Join(root, "bun")
+	if err := os.WriteFile(bun, []byte("#!/bin/sh\nprintf 'typecheck diagnostic\\n'\nexit 17\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	application := recordingApplications(new([]call))
+	application.check = func(ctx context.Context, gotRoot string) (setup.Result, error) {
+		return checkworkflow.Run(ctx, gotRoot, bun, func(context.Context, string) (setup.Result, error) {
+			return setup.Result{Resources: make([]setup.Resource, 1), ChangedPaths: []string{"package.json"}}, nil
+		})
+	}
+	var stdout bytes.Buffer
+	err := runWith(context.Background(), []string{"check"}, func() (string, error) {
+		return root, nil
+	}, &stdout, io.Discard, application)
+	var failure *checkworkflow.StepFailure
+	if !errors.As(err, &failure) || failure.Step != checkworkflow.StepTypecheck {
+		t.Fatalf("check error = %T %v, want typecheck StepFailure", err, err)
+	}
+	if !strings.Contains(err.Error(), "check: typecheck failed") || !strings.Contains(err.Error(), "typecheck diagnostic") {
+		t.Fatalf("check error = %q, want stage and command diagnostic", err)
+	}
+	if got, want := stdout.String(), "Workbench reconciled 1 repository; 1 generated path changed.\n"; got != want {
+		t.Fatalf("check stdout = %q, want setup-only success %q", got, want)
+	}
+}
+
+func TestCheckReportsCodeHealthOnlyAfterBothScriptsPass(t *testing.T) {
+	application := recordingApplications(new([]call))
+	application.check = func(context.Context, string) (setup.Result, error) {
+		return setup.Result{}, nil
+	}
+	var stdout bytes.Buffer
+	if err := runWith(context.Background(), []string{"check"}, func() (string, error) {
+		return "/workbench", nil
+	}, &stdout, io.Discard, application); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "Workbench reconciled 0 repositories; 0 generated paths changed.\nCode health passed: typecheck and test.\n"; got != want {
+		t.Fatalf("check stdout = %q, want %q", got, want)
+	}
+}
+
 func TestSkillsCheckRendersWarningsBeforeIssuesAndRepairAction(t *testing.T) {
 	t.Parallel()
 	application := recordingApplications(new([]call))
@@ -393,6 +441,10 @@ func recordingApplications(calls *[]call) applications {
 	return applications{
 		setup: func(_ context.Context, root string) (setup.Result, error) {
 			*calls = append(*calls, call{name: "setup", root: root})
+			return setup.Result{}, nil
+		},
+		check: func(_ context.Context, root string) (setup.Result, error) {
+			*calls = append(*calls, call{name: "check", root: root})
 			return setup.Result{}, nil
 		},
 		commit: func(_ context.Context, root, plan string) (string, error) {

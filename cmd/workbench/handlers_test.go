@@ -15,7 +15,44 @@ import (
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/evaluate"
 	"github.com/phosphorco/workbench-go/internal/legacy/v020v030snapshot"
+	"github.com/phosphorco/workbench-go/internal/setup"
 )
+
+func TestCheckApplicationUsesEnvironmentSetupAndExactBun(t *testing.T) {
+	root := t.TempDir()
+	log := filepath.Join(root, "check.log")
+	bun := filepath.Join(root, "private-bun")
+	writeHandlerFile(t, bun, []byte(`#!/bin/sh
+printf '%s\n' "$*" >> "$WORKBENCH_CHECK_LOG"
+`), 0o755)
+	t.Setenv("WORKBENCH_CHECK_LOG", log)
+
+	application := applicationsForEnvironment(func() (commandEnvironment, error) {
+		return commandEnvironment{
+			bun: bun,
+			setup: func(context.Context, string) (setup.Result, error) {
+				if err := os.WriteFile(log, []byte("setup\n"), 0o644); err != nil {
+					return setup.Result{}, err
+				}
+				return setup.Result{ChangedPaths: []string{"package.json"}}, nil
+			},
+		}, nil
+	})
+	result, err := application.check(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ChangedPaths) != 1 || result.ChangedPaths[0] != "package.json" {
+		t.Fatalf("setup result = %#v", result)
+	}
+	contents, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(contents), "setup\nrun typecheck\nrun test\n"; got != want {
+		t.Fatalf("check composition = %q, want %q", got, want)
+	}
+}
 
 func TestColdBuildableLifecycleEvaluatesLocalDeclarationWithoutProjection(t *testing.T) {
 	pkl, err := exec.LookPath("pkl")

@@ -201,6 +201,10 @@ typealias PackageName =
     length <= 214,
     matches(Regex(#"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"#)),
   )
+typealias PackageImport = String(length > 1, startsWith("#"), !contains(".."))
+typealias PackageExport = "." | String(length > 2, startsWith("./"), !contains(".."))
+typealias PackageTarget =
+  String(length > 2, startsWith("./"), !contains("\\"), !contains("../"))
 typealias GitHubRepository =
   String(matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#)), !endsWith(".git"))
 typealias SkillDomain = "orchestration" | "engineering" | "general"
@@ -227,7 +231,6 @@ class SkillRoots {
 
 class SkillPolicy {
   editing: SkillSelection = new SkillRoots {}
-  workbench: SkillSelection = new SkillRoots {}
 }
 
 class Include {
@@ -235,9 +238,13 @@ class Include {
 }
 
 class PackagePolicy {
+  dependencies: Mapping<PackageName, NonEmptyString> = new {}
+  devDependencies: Mapping<PackageName, NonEmptyString> = new {}
   requiredButNotReferenced: Mapping<PackageName, NonEmptyString> = new {}
   peerDependencies: Mapping<PackageName, NonEmptyString> = new {}
   optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  imports: Mapping<PackageImport, PackageTarget> = new {}
+  exports: Mapping<PackageExport, PackageTarget> = new {}
 }
 
 class GitHeadTreeInputDetection {
@@ -304,6 +311,10 @@ typealias PackageName =
     length <= 214,
     matches(Regex(#"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"#)),
   )
+typealias PackageImport = String(length > 1, startsWith("#"), !contains(".."))
+typealias PackageExport = "." | String(length > 2, startsWith("./"), !contains(".."))
+typealias PackageTarget =
+  String(length > 2, startsWith("./"), !contains("\\"), !contains("../"))
 typealias GitHubRepository =
   String(matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#)), !endsWith(".git"))
 typealias SkillDomain = "orchestration" | "engineering" | "general"
@@ -330,7 +341,6 @@ class SkillRoots {
 
 class SkillPolicy {
   editing: SkillSelection = new SkillRoots {}
-  workbench: SkillSelection = new SkillRoots {}
 }
 
 class Include {
@@ -338,9 +348,13 @@ class Include {
 }
 
 class PackagePolicy {
+  dependencies: Mapping<PackageName, NonEmptyString> = new {}
+  devDependencies: Mapping<PackageName, NonEmptyString> = new {}
   requiredButNotReferenced: Mapping<PackageName, NonEmptyString> = new {}
   peerDependencies: Mapping<PackageName, NonEmptyString> = new {}
   optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  imports: Mapping<PackageImport, PackageTarget> = new {}
+  exports: Mapping<PackageExport, PackageTarget> = new {}
 }
 
 class GitHeadTreeInputDetection {

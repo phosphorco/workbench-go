@@ -59,7 +59,7 @@ scope = "@basindb"
 includes {
 	["phosphorco/community-packages"] {
     skills {
-      workbench {
+      editing {
         domains = Set("engineering")
       }
     }

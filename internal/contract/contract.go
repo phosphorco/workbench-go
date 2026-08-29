@@ -50,9 +50,13 @@ type SkillSelection struct {
 }
 
 type PackagePolicy struct {
+	Dependencies             map[string]string `json:"dependencies"`
+	DevDependencies          map[string]string `json:"devDependencies"`
 	RequiredButNotReferenced map[string]string `json:"requiredButNotReferenced"`
 	PeerDependencies         map[string]string `json:"peerDependencies"`
 	OptionalDependencies     map[string]string `json:"optionalDependencies"`
+	Imports                  map[string]string `json:"imports"`
+	Exports                  map[string]string `json:"exports"`
 }
 
 func (selection *SkillSelection) UnmarshalJSON(encoded []byte) error {

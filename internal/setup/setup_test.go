@@ -103,6 +103,35 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 	}
 }
 
+func TestEvaluateCurrentDeclarationCarriesTypedPackageMetadata(t *testing.T) {
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte(fmt.Sprintf(`amends %q
+packages {
+  ["@fixture/app"] {
+    dependencies { ["alchemy"] = "2.0.0-beta.52" }
+    devDependencies { ["@phosphor/test"] = "workspace:*" }
+    imports { ["#src/*"] = "./src/*" }
+    exports { ["./Feature"] = "./src/Feature.ts" }
+  }
+}
+`, localV060RepositoryURI))
+	declaration, err := EvaluateCurrentDeclaration(context.Background(), evaluator, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := declaration.Packages["@fixture/app"]
+	if policy.Dependencies["alchemy"] != "2.0.0-beta.52" || policy.DevDependencies["@phosphor/test"] != "workspace:*" || policy.Imports["#src/*"] != "./src/*" || policy.Exports["./Feature"] != "./src/Feature.ts" {
+		t.Fatalf("evaluated package metadata = %#v", policy)
+	}
+}
+
 const buildablePklFixture = `
 buildables {
   ["hello"] = new Buildable {
@@ -358,6 +387,68 @@ func TestRunWithV030RefusesRootPackageLayoutBeforeGeneratedMutation(t *testing.T
 	} {
 		if _, err := os.Stat(filepath.Join(workbench, filepath.FromSlash(path))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("invalid PackageScope topology created %s: %v", path, err)
+		}
+	}
+}
+
+func TestRunWithV060ReportsClosureGapBeforeCanonicalOrGeneratedMutation(t *testing.T) {
+	root := t.TempDir()
+	remotes := filepath.Join(root, "remotes")
+	if err := os.MkdirAll(remotes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	createRemote(t, root, remotes, "services", fmt.Sprintf("amends %q\n\nscope = \"@services\"\npackages { [\"@services/app\"] {} }\n", localV060PackageScopeURI), map[string]string{
+		".gitignore":       "app/package.json\napp/tsconfig.json\napp/dist/\n.agents/skills/\n",
+		"app/src/index.ts": "// import { falsePositive } from \"@comment/not-a-package\"\n/** prose from \"@docs/not-a-package\" */\nconst prose = \"from '@string/not-a-package'\"\nimport { Paths } from \"@application-hosts/local-dev-server/Paths\"\nexport { Paths }\n",
+	})
+	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+filepath.ToSlash(remotes)+"/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/phosphorco/")
+
+	workbench := filepath.Join(root, "workbench")
+	if err := os.MkdirAll(workbench, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(workbench, "workbench-subject.pkl"), fmt.Sprintf("amends %q\n\nworkLine { branch = \"workbench/closure-gap\"; baseBranch = \"main\" }\nentrypoints { \"https://github.com/phosphorco/services\" }\n", localV060SubjectURI))
+	write(t, filepath.Join(workbench, "package.json"), "preserve generated sentinel\n")
+	before := mustRead(t, filepath.Join(workbench, "package.json"))
+
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skip("bun unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RunWith(context.Background(), workbench, NewToolchain(evaluator, bun))
+	if err == nil {
+		t.Fatal("missing closure package was accepted")
+	}
+	for _, fact := range []string{
+		"workspace closure contains 1 gap(s)",
+		"pkg/@services/app/src/index.ts:4",
+		"@services/app",
+		"@application-hosts/local-dev-server/Paths",
+		"add the Repository",
+		"to includes",
+		"external dependency class",
+	} {
+		if !strings.Contains(err.Error(), fact) {
+			t.Fatalf("closure diagnostic lacks %q:\n%v", fact, err)
+		}
+	}
+	if after := mustRead(t, filepath.Join(workbench, "package.json")); !slices.Equal(after, before) {
+		t.Fatal("closure refusal changed generated package projection")
+	}
+	for _, path := range []string{"pkg/@services", ".workbench/buildables.json", "tsconfig.json"} {
+		if _, statErr := os.Stat(filepath.Join(workbench, filepath.FromSlash(path))); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("closure refusal created %s: %v", path, statErr)
 		}
 	}
 }
@@ -618,6 +709,7 @@ func TestRunWithV020RoutesClosedShapesAndConvergesOrientation(t *testing.T) {
 	for _, path := range []string{
 		"pkg/@workbench-entry/.agents/skills/library-edit/SKILL.md",
 		"pkg/@workbench-entry/.agents/skills/library-support/SKILL.md",
+		".agents/skills/entry-export/SKILL.md",
 		".agents/skills/library-edit/SKILL.md",
 		".agents/skills/library-support/SKILL.md",
 	} {
@@ -959,6 +1051,7 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 		"pkg/@workbench-entry/.agents/skills/library-edit/SKILL.md",
 		"pkg/@workbench-entry/.agents/skills/library-support/SKILL.md",
 		"repos/workbench-fixture-library/.agents/skills/entry-export/SKILL.md",
+		".agents/skills/entry-export/SKILL.md",
 		".agents/skills/library-edit/SKILL.md",
 		".agents/skills/library-support/SKILL.md",
 	} {
@@ -992,6 +1085,9 @@ func TestProjectSkillsV020ReconcilesOwnedClosureWithoutConsumingSourceOrContext(
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("stale Workbench-owned projection %s remains: %v", path, err)
 		}
+	}
+	if projected := string(mustRead(t, filepath.Join(root, ".agents", "skills", "entry-export", "SKILL.md"))); projected != entrySource {
+		t.Fatalf("remaining flat root skill = %q, want entry source", projected)
 	}
 	if got := string(mustRead(t, contextSibling)); got != "context-owned sibling\n" {
 		t.Fatalf("context-owned sibling changed: %q", got)

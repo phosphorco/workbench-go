@@ -27,7 +27,7 @@ const (
 	ProjectionPath = ".workbench/buildables.json"
 	// ProjectionSchemaDigest binds the projection to the released Pkl schema
 	// interpreted by this binary. A schema edit must update this digest.
-	ProjectionSchemaDigest  = "fc9c556c96ad2a63a0fb563c7d61b98f21da1ab5b1f452c94a71afc56e90b2b1"
+	ProjectionSchemaDigest  = "229f7da5905c2463baae68650ecf758527ade2943d0dcaf5a1c47594d17d630e"
 	projectionSchemaVersion = 1
 )
 

@@ -50,7 +50,6 @@ const (
 
 var (
 	amendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
-	importPattern = regexp.MustCompile(`(?m)(?:from\s+|import\s*)["']([^"']+)["']`)
 )
 
 type Result struct {
@@ -216,7 +215,7 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, err
 	}
-	packages, err := observePackagesAt(resources, version, sourceRoots)
+	packages, err := observePackagesAt(ctx, resources, version, sourceRoots, toolchain.Bun)
 	if err != nil {
 		return Result{}, err
 	}
@@ -773,10 +772,14 @@ func observePackages(root string, resources []Resource, contractVersion string) 
 	for _, resource := range resources {
 		resourceRoots[resource.Identity] = filepath.Join(root, filepath.FromSlash(resource.CanonicalPath))
 	}
-	return observePackagesAt(resources, contractVersion, resourceRoots)
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		return nil, fmt.Errorf("locate Bun for package observation: %w", err)
+	}
+	return observePackagesAt(context.Background(), resources, contractVersion, resourceRoots, bun)
 }
 
-func observePackagesAt(resources []Resource, contractVersion string, resourceRoots map[string]string) ([]workspace.Package, error) {
+func observePackagesAt(ctx context.Context, resources []Resource, contractVersion string, resourceRoots map[string]string, bun string) ([]workspace.Package, error) {
 	result := make([]workspace.Package, 0)
 	for _, resource := range resources {
 		resourceRoot, exists := resourceRoots[resource.Identity]
@@ -798,9 +801,12 @@ func observePackagesAt(resources []Resource, contractVersion string, resourceRoo
 				return nil, err
 			}
 			relative := filepath.Join(filepath.FromSlash(resource.CanonicalPath), relativeInResource)
-			imports, err := sourceImports(filepath.Join(packageRoot, "src"))
+			imports, err := sourceImports(ctx, filepath.Join(packageRoot, "src"), bun)
 			if err != nil {
 				return nil, fmt.Errorf("observe package %q imports: %w", name, err)
+			}
+			for index := range imports {
+				imports[index].Source = filepath.ToSlash(filepath.Join(relative, "src", imports[index].Source))
 			}
 			result = append(result, workspace.Package{
 				Name:      name,
@@ -942,8 +948,8 @@ func locateLegacyPackage(resourceRoot string, name string, allowRoot bool) (stri
 	return "", fmt.Errorf("no source directory matches package leaf %q", leaf)
 }
 
-func sourceImports(root string) ([]string, error) {
-	set := make(map[string]struct{})
+func sourceImports(ctx context.Context, root, bun string) ([]workspace.Import, error) {
+	files := make([]typeScriptSourceFile, 0)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -955,20 +961,39 @@ func sourceImports(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		for _, match := range importPattern.FindAllSubmatch(contents, -1) {
-			set[string(match[1])] = struct{}{}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
 		}
+		loader := "ts"
+		if strings.HasSuffix(path, ".tsx") {
+			loader = "tsx"
+		}
+		files = append(files, typeScriptSourceFile{source: contents, path: filepath.ToSlash(relative), loader: loader, development: isDevelopmentSource(relative)})
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]string, 0, len(set))
-	for value := range set {
-		result = append(result, value)
+	observed, err := parserBackedTypeScriptImports(ctx, bun, files)
+	if err != nil {
+		return nil, err
 	}
-	sort.Strings(result)
-	return result, nil
+	sort.Slice(observed, func(left, right int) bool {
+		if observed[left].Source != observed[right].Source {
+			return observed[left].Source < observed[right].Source
+		}
+		if observed[left].Line != observed[right].Line {
+			return observed[left].Line < observed[right].Line
+		}
+		return observed[left].Specifier < observed[right].Specifier
+	})
+	return observed, nil
+}
+
+func isDevelopmentSource(path string) bool {
+	base := filepath.Base(path)
+	return strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") || strings.Contains(filepath.ToSlash(path), "/__tests__/")
 }
 
 type catalogObservation struct {
@@ -1138,16 +1163,12 @@ func planSkills(root string, resources []Resource, previous managedCheckoutRecei
 }
 
 func planSkillsWithCatalog(root string, resources []Resource, previous managedCheckoutReceipt, catalog skills.Catalog, sourceRoots map[string]string) (skillProjectionPlan, error) {
-	workbenchSelection := contract.SkillSelection{}
 	plan := skillProjectionPlan{entries: make([]skillProjectionEntry, 0, len(resources)+1)}
 	for _, consumer := range resources {
 		editing := contract.SkillSelection{}
 		for _, policy := range consumer.Includes {
 			if policy.Editing != nil {
 				editing = mergeSelection(editing, *policy.Editing)
-			}
-			if policy.Workbench != nil {
-				workbenchSelection = mergeSelection(workbenchSelection, *policy.Workbench)
 			}
 		}
 		selected, err := skills.Select(catalog, editing)
@@ -1204,7 +1225,10 @@ func planSkillsWithCatalog(root string, resources []Resource, previous managedCh
 			projection:  projection,
 		})
 	}
-	selected, err := skills.Select(catalog, workbenchSelection)
+	// The Workbench root is the closure-wide flat registry. Per-repository
+	// editing projections remain attenuated by each consumer's include policy,
+	// while the root reassembles every participating Git-owned skill source.
+	selected, err := skills.Select(catalog, contract.SkillSelection{All: true})
 	if err != nil {
 		return skillProjectionPlan{}, fmt.Errorf("select workbench skills: %w", err)
 	}
