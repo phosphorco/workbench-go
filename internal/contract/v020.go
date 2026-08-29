@@ -5,6 +5,8 @@ import (
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/phosphorco/workbench-go/internal/buildable"
 )
 
 var (
@@ -33,9 +35,10 @@ type ResourceShape struct {
 // rather than repeated as repository-authored identity. Version-specific
 // decoders establish the laws carried by Packages.
 type Declaration struct {
-	Shape    ResourceShape
-	Includes map[string]ResourceInclude `json:"includes"`
-	Packages map[string]PackagePolicy   `json:"packages"`
+	Shape      ResourceShape
+	Includes   map[string]ResourceInclude     `json:"includes"`
+	Packages   map[string]PackagePolicy       `json:"packages"`
+	Buildables map[string]buildable.Buildable `json:"buildables"`
 }
 
 type ResourceInclude struct {
@@ -44,17 +47,19 @@ type ResourceInclude struct {
 
 func DecodePackageScopeDeclaration(encoded []byte) (Declaration, error) {
 	var value struct {
-		Scope    string                     `json:"scope"`
-		Includes map[string]ResourceInclude `json:"includes"`
-		Packages map[string]PackagePolicy   `json:"packages"`
+		Scope      string                         `json:"scope"`
+		Includes   map[string]ResourceInclude     `json:"includes"`
+		Packages   map[string]PackagePolicy       `json:"packages"`
+		Buildables map[string]buildable.Buildable `json:"buildables"`
 	}
 	if err := decodeStrict(encoded, &value); err != nil {
 		return Declaration{}, fmt.Errorf("decode 0.2 package-scope declaration: %w", err)
 	}
 	declaration := Declaration{
-		Shape:    ResourceShape{Kind: PackageScopeShape, Scope: value.Scope},
-		Includes: value.Includes,
-		Packages: value.Packages,
+		Shape:      ResourceShape{Kind: PackageScopeShape, Scope: value.Scope},
+		Includes:   value.Includes,
+		Packages:   value.Packages,
+		Buildables: value.Buildables,
 	}
 	if err := declaration.Validate(); err != nil {
 		return Declaration{}, err
@@ -80,16 +85,18 @@ func DecodePackageScopeDeclarationV030(encoded []byte) (Declaration, error) {
 
 func DecodeRepositoryDeclaration(encoded []byte) (Declaration, error) {
 	var value struct {
-		Includes map[string]ResourceInclude `json:"includes"`
-		Packages map[string]PackagePolicy   `json:"packages"`
+		Includes   map[string]ResourceInclude     `json:"includes"`
+		Packages   map[string]PackagePolicy       `json:"packages"`
+		Buildables map[string]buildable.Buildable `json:"buildables"`
 	}
 	if err := decodeStrict(encoded, &value); err != nil {
 		return Declaration{}, fmt.Errorf("decode 0.2 repository declaration: %w", err)
 	}
 	declaration := Declaration{
-		Shape:    ResourceShape{Kind: RepositoryShape},
-		Includes: value.Includes,
-		Packages: value.Packages,
+		Shape:      ResourceShape{Kind: RepositoryShape},
+		Includes:   value.Includes,
+		Packages:   value.Packages,
+		Buildables: value.Buildables,
 	}
 	if err := declaration.Validate(); err != nil {
 		return Declaration{}, err
@@ -104,6 +111,14 @@ func (declaration Declaration) Validate() error {
 	for designation := range declaration.Includes {
 		if _, err := NormalizeGitHubRepository(designation); err != nil {
 			return fmt.Errorf("include designation %q: %w", designation, err)
+		}
+	}
+	for name, candidate := range declaration.Buildables {
+		if err := buildable.ValidateName(name); err != nil {
+			return err
+		}
+		if err := candidate.ValidateForName(name); err != nil {
+			return fmt.Errorf("buildable %q: %w", name, err)
 		}
 	}
 	return nil

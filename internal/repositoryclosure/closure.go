@@ -228,9 +228,13 @@ func cloneSkillSelection(selection *contract.SkillSelection) *contract.SkillSele
 func clonePackagePolicies(source map[string]contract.PackagePolicy) map[string]contract.PackagePolicy {
 	result := make(map[string]contract.PackagePolicy, len(source))
 	for name, policy := range source {
+		policy.Dependencies = cloneStringMap(policy.Dependencies)
+		policy.DevDependencies = cloneStringMap(policy.DevDependencies)
 		policy.RequiredButNotReferenced = cloneStringMap(policy.RequiredButNotReferenced)
 		policy.PeerDependencies = cloneStringMap(policy.PeerDependencies)
 		policy.OptionalDependencies = cloneStringMap(policy.OptionalDependencies)
+		policy.Imports = cloneStringMap(policy.Imports)
+		policy.Exports = cloneStringMap(policy.Exports)
 		result[name] = policy
 	}
 	return result

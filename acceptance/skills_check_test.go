@@ -26,6 +26,21 @@ func TestWorkbenchSkillsCheckPublicCommand(t *testing.T) {
 		t.Fatalf("build public Workbench CLI: %v\n%s", err, output)
 	}
 
+	t.Run("zero-skill projection", func(t *testing.T) {
+		root := t.TempDir()
+		before := skillCheckDirectoryDigest(t, root)
+		result := runSkillsCheckWithoutToolchain(t, binary, root, "skills", "check")
+		if result.exitCode != 0 || result.stderr != "" {
+			t.Fatalf("zero-skill check = exit %d stdout %q stderr %q", result.exitCode, result.stdout, result.stderr)
+		}
+		if got, want := result.stdout, "0 skills · 0 composition edges · domain, link, and skill-reference contracts valid\n"; got != want {
+			t.Fatalf("zero-skill stdout = %q, want %q", got, want)
+		}
+		if after := skillCheckDirectoryDigest(t, root); after != before {
+			t.Fatalf("zero-skill check mutated its subject: before %s after %s", before, after)
+		}
+	})
+
 	t.Run("valid catalog", func(t *testing.T) {
 		root := t.TempDir()
 		writeSkillCheckSkill(t, root, "shared-tool", "general", "General shared tool.", "")

@@ -366,9 +366,18 @@ exactly proven legacy receipt may be retired. Malformed, ambiguous, foreign, or
 disagreeing state causes a zero-change refusal, leaving a reachable manual
 repair path instead of guessing ownership.
 
-The public workflow remains centered on `setup`. Observation, planning, and comparison are internal machinery, though a future `status` or `setup --check` may expose their evidence.
+The public reconciliation workflow remains centered on `setup`. Observation,
+planning, and comparison are internal machinery.
 
 This gives Workbench Terraform-like desired state without requiring a separate public plan-and-apply lifecycle.
+
+`workbench check` is the one-command checkout-to-test loop. It runs setup first,
+prints the setup result as its own outcome, then invokes the generated root
+`typecheck` and `test` scripts with Workbench's exact Bun runtime. A setup
+failure never becomes a code-health failure, and a typecheck or test failure
+retains its own step and process output. The generated test script excludes
+emitted `dist/**` tests, so typecheck output cannot make one source test execute
+twice.
 
 ## Branch coherence is explicit but non-destructive
 
@@ -432,6 +441,69 @@ The governing rule is:
 
 > Source derives dependency adjacency. Pkl declares the dependency semantics that source cannot prove.
 
+The current `0.6.0` package policy expresses the package metadata needed by the
+assembled TypeScript graph directly:
+
+```pkl
+packages {
+  ["@services/app"] {
+    dependencies {
+      ["effect"] = "4.0.0-beta.93"
+    }
+    devDependencies {
+      ["@phosphor/test"] = "workspace:*"
+      ["typescript"] = "5.9.3"
+    }
+    imports {
+      ["#src/*"] = "./src/*"
+    }
+    exports {
+      ["."] = "./src/index.ts"
+      ["./Paths"] = "./src/Paths.ts"
+    }
+  }
+}
+```
+
+An authored dependency class is preserved. A dependency naming another
+participating package must use `workspace:*`; a registry version for that same
+package is contradictory and is refused. When an observed participating import
+has no authored class, Workbench derives `dependencies` for production source
+and `devDependencies` for test source. External dependencies remain explicit in
+exactly one of `dependencies`, `devDependencies`,
+`requiredButNotReferenced`, `peerDependencies`, or
+`optionalDependencies`.
+
+The current contract also reassembles exact external package authority at the
+generated root so repository-wide generated scripts resolve the same tools and
+libraries as participating packages. Workbench unions non-workspace values from
+every dependency class into private root `devDependencies` and refuses
+non-exact or cross-package-conflicting versions with their package and class
+provenance. Workspace edges remain workspace-only. At least one participating
+package must declare the exact external `typescript` version in
+`devDependencies`. Generated package projects use `module = "Preserve"`,
+Bundler resolution, declaration-only output, TypeScript-extension imports, and
+skipped library checks while retaining strict composite builds and
+source-rooted output.
+
+Before changing a canonical checkout, generated file, or installation,
+Workbench batches TypeScript source through the exact Bun toolchain's parser for
+import truth. A Go lexical pass identifies quoted spans and prefixes every
+candidate's raw string content with a unique sentinel in the temporary
+parser input; only a sentinel Bun reports with the same import kind becomes
+source evidence. Bun's cooked sentinel suffix supplies the exact specifier,
+while the Go span supplies its exact line. This preserves repeated imports of
+one path and distinguishes TypeScript `import = require` from ordinary
+`require()` calls. Static imports, export-from clauses, and string-literal
+dynamic imports are evidence; comments, documentation, regex literals,
+template text, and ordinary strings are not. Dynamic imports inside `${...}`
+template expressions remain ordinary code and are observed. A parser failure
+refuses setup before mutation. Every closure gap
+reports the importer, exact specifier, source file and line, plus whether to add
+the owning Repository, declare an external dependency class, or add a matching
+package `imports`/`exports` entry. Distinct source imports remain distinct
+diagnostics.
+
 ## Workbench owns complete generated outputs
 
 Generated files use whole-file ownership at the filesystem boundary.
@@ -481,12 +553,79 @@ The existing `workspaces-sync-go` work contributes two proven ideas:
 
 The final Workbench implementation absorbs repository observation, planning, and granted application into Go. A deterministic patch may remain available as an inspectable representation of the plan, but the internal JSON subprocess boundary need not survive.
 
+## Buildables make repository-owned tools explicit
+
+The `0.6.0` contract candidate adds the same `buildables` mapping to
+`PackageScopeRepository.pkl` and `Repository.pkl`. This is a candidate schema
+identity, not a claim that a `0.6.0` release is available. The immutable
+`0.1.0` through `0.5.0` contracts retain their historical meanings.
+
+A buildable declaration owns the facts Workbench cannot infer: producer input
+paths, the build command, an optional verification command, manifest identity
+and required source capabilities, local and committed candidate roots, and
+platform outputs. The candidate order and input strategies are fixed:
+
+```text
+.local-build/<name>  gitWorktree  # tracked, absent, and untracked input content
+.ci-build/<name>     gitHeadTree  # exact committed producer tree
+```
+
+The two roots are one preference, not fallbacks with different standards. If
+the first present candidate is invalid or stale, Workbench refuses it and
+reports the declaration's remedy. It never silently selects the committed
+candidate. Platform output paths must remain distinct after path cleaning and
+case normalization.
+
+Setup writes the strict `.workbench/buildables.json` registry for the assembled
+repository closure. Each projected declaration is bound to the exact owning
+`workbench.pkl`, its owner-relative checkout path, and the candidate schema
+digest. Duplicate names across the closure are rejected with both owners. Hot
+commands consume only that projection and never evaluate Pkl or mutate a
+candidate:
+
+```sh
+workbench buildable check --name <name>  # machine-readable JSON; does not execute
+workbench run <name> -- <arguments...>   # execs the selected validated output
+```
+
+Lifecycle commands are deliberately cold. They evaluate the caller's current
+root `workbench.pkl` against the bundled `0.6.0` candidate schema, so a fresh
+repository checkout can build before an assembled projection exists:
+
+```sh
+workbench buildable build --name <name> --platform <platform>
+workbench buildable seal --name <name> --candidate-root .local-build/<name>
+workbench buildable verify --name <name> --candidate-root .local-build/<name> \
+  --run-declared-verification
+workbench buildable check-fresh --name <name> \
+  --candidate-root .local-build/<name> --built-from <revision> --against <revision>
+workbench buildable promote --name <name> \
+  --candidate-root .local-build/<name> --committed-root .ci-build/<name>
+```
+
+The producer writes exactly one strict JSON source record named
+`.workbench-buildable-source.json` containing `source` and `capabilities`.
+`build` checks that record and the requested platform output. Matrix builds
+must compare the record bytes across every archive before assembly. `seal`
+then owns the final manifest: it records the producer-input digest and the
+hash, size, executable fact, and path of every declared output. `verify` rechecks those
+facts; `check-fresh` proves the candidate was built from one revision and that
+the promoted-against revision has the same producer inputs; `promote` installs
+a byte-identical verified tree at the committed root.
+
+The declared build receives `WORKBENCH_BUILDABLE_NAME`,
+`WORKBENCH_BUILDABLE_PLATFORM`, and `WORKBENCH_BUILDABLE_CANDIDATE_ROOT`.
+Declared verification receives the name and candidate root. A dirty local
+producer is usable after sealing because `gitWorktree` fingerprints its actual
+input contents, but it cannot pass a committed-revision freshness proof.
+
 ## Skills follow the repository closure
 
 Skills have two independent properties:
 
 - each skill declares one domain: `orchestration`, `engineering`, or `general`;
-- the consuming resource selects where imported skills should be visible.
+- each consuming resource attenuates which imported skills are visible while
+  editing that repository.
 
 Resource repositories author Git-owned skill sources only under
 `skills/<skill-name>/**`. Workbench discovers the assembled inventory from
@@ -495,7 +634,9 @@ source. This keeps export and import independent: a repository can export one
 skill from `skills/` while receiving a different editing skill under
 `.agents/skills/` without colliding with itself.
 
-`editing` exposes selected skills while changing the consuming resource. `workbench` exposes them at the workbench root.
+`editing` exposes selected skills while changing the consuming resource. The
+Workbench root is different: it reassembles the complete flat registry from
+every participating repository's skill sources.
 
 ```pkl
 skills {
@@ -504,7 +645,6 @@ skills {
     names = Set("mvvm", "view-model-interfaces")
   }
 
-  workbench = "all"
 }
 ```
 
@@ -514,8 +654,9 @@ Resource authors select semantic roots. They do not order traversal or copy tran
 
 For `editing`, Workbench projects the selected roots and their explicit
 composition closure into the consuming resource's
-`.agents/skills/<skill-name>/**`. For `workbench`, it projects that same closure
-at the Workbench root. Each projected skill subtree is a recorded
+`.agents/skills/<skill-name>/**`. At the Workbench root, it projects all
+participating skills into one flat registry, regardless of per-repository
+editing selection. Each projected skill subtree is a recorded
 whole-output-owned artifact. Setup preserves unrelated context-owned sibling
 skills, refuses a selected-name collision it does not own, and removes only a
 stale subtree whose prior Workbench ownership and bytes are still proven.
@@ -539,7 +680,9 @@ workbench skills check
 ```
 
 The command intentionally has no path flag. It checks `.agents/skills` in the
-current directory and reports the derived skill and composition-edge counts.
+current directory and reports the derived skill and composition-edge counts. A
+missing projection is a valid empty catalog and reports zero skills without
+creating it.
 Each skill is one flat `.agents/skills/<name>/SKILL.md` directory. YAML
 frontmatter must name the folder and declare one of the three domains.
 Workbench validates local Markdown targets, explicit composition labels,

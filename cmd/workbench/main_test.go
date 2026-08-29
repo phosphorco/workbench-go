@@ -4,11 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/phosphorco/workbench-go/internal/buildable"
+	"github.com/phosphorco/workbench-go/internal/checkworkflow"
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/setup"
 	"github.com/phosphorco/workbench-go/internal/skills"
@@ -23,12 +28,21 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 		want      call
 	}{
 		{"setup", []string{"setup"}, call{name: "setup", root: "/workbench"}},
+		{"check", []string{"check"}, call{name: "check", root: "/workbench"}},
 		{"default commit", []string{"commit"}, call{name: "commit", root: "/workbench", values: []string{defaultCommitPlan}}},
 		{"explicit commit", []string{"commit", "delivery.pkl"}, call{name: "commit", root: "/workbench", values: []string{"delivery.pkl"}}},
 		{"default snapshot", []string{"snapshot", "record"}, call{name: "snapshot record", root: "/workbench", values: []string{defaultSnapshot}}},
 		{"explicit snapshot", []string{"snapshot", "record", "exact.pkl"}, call{name: "snapshot record", root: "/workbench", values: []string{"exact.pkl"}}},
 		{"reproduce", []string{"snapshot", "reproduce", "exact.pkl"}, call{name: "snapshot reproduce", root: "/workbench", values: []string{"exact.pkl"}}},
 		{"prune", []string{"prune", "@scope", "owner/repository"}, call{name: "prune", root: "/workbench", values: []string{"@scope", "owner/repository"}}},
+		{"run without arguments", []string{"run", "tsgo", "--"}, call{name: "run", root: "/workbench", values: []string{"tsgo"}}},
+		{"run with arguments", []string{"run", "tsgo", "--", "-b", "."}, call{name: "run", root: "/workbench", values: []string{"tsgo", "-b", "."}}},
+		{"check buildable", []string{"buildable", "check", "--name", "tsgo"}, call{name: "buildable check", root: "/workbench", values: []string{"tsgo"}}},
+		{"build buildable", []string{"buildable", "build", "--platform", "linux-x86_64", "--name", "tsgo"}, call{name: "buildable build", root: "/workbench", values: []string{"tsgo", "linux-x86_64"}}},
+		{"seal buildable", []string{"buildable", "seal", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"}, call{name: "buildable seal", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo"}}},
+		{"verify buildable", []string{"buildable", "verify", "--run-declared-verification", "--candidate-root", ".local-build/tsgo", "--name", "tsgo"}, call{name: "buildable verify", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", "true"}}},
+		{"check buildable freshness", []string{"buildable", "check-fresh", "--name", "tsgo", "--against", "origin/main", "--candidate-root", ".local-build/tsgo", "--built-from", "abc"}, call{name: "buildable check-fresh", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", "abc", "origin/main"}}},
+		{"promote buildable", []string{"buildable", "promote", "--committed-root", ".ci-build/tsgo", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"}, call{name: "buildable promote", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", ".ci-build/tsgo"}}},
 		{"skills check", []string{"skills", "check"}, call{name: "skills check", root: "/workbench"}},
 		{"version", []string{"version"}, call{name: "version"}},
 	}
@@ -56,9 +70,15 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 func TestInvalidCommandsAcquireNoAuthority(t *testing.T) {
 	t.Parallel()
 	invalid := [][]string{
-		nil, {"inspect"}, {"setup", "extra"}, {"commit", "a", "b"},
+		nil, {"inspect"}, {"setup", "extra"}, {"check", "extra"}, {"commit", "a", "b"},
 		{"snapshot"}, {"snapshot", "record", "a", "b"}, {"snapshot", "reproduce"},
-		{"prune"}, {"prune", ""}, {"skills"}, {"skills", "check", "--root", "/tmp"}, {"skills", "list"}, {"version", "extra"},
+		{"prune"}, {"prune", ""}, {"run"}, {"run", "tsgo"}, {"run", "", "--"}, {"run", "tsgo", "-b", "."},
+		{"buildable"}, {"buildable", "check"}, {"buildable", "check", "--name", "tsgo", "--extra", "value"},
+		{"buildable", "build", "--name", "tsgo"}, {"buildable", "seal", "--name", "tsgo", "--candidate-root"},
+		{"buildable", "verify", "--name", "tsgo", "--run-declared-verification", "--run-declared-verification", "--candidate-root", ".local-build/tsgo"},
+		{"buildable", "check-fresh", "--name", "tsgo", "--candidate-root", ".local-build/tsgo", "--built-from", "a"},
+		{"buildable", "promote", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"},
+		{"skills"}, {"skills", "check", "--root", "/tmp"}, {"skills", "list"}, {"version", "extra"},
 	}
 	for _, arguments := range invalid {
 		var calls []call
@@ -90,6 +110,32 @@ func TestVersionDoesNotObserveWorkingDirectory(t *testing.T) {
 	}
 	if got := output.String(); got != "workbench 0.3.0 ("+strings.Repeat("a", 40)+")\n" {
 		t.Fatalf("version output = %q", got)
+	}
+}
+
+func TestBuildableCheckWritesOneMachineReadableRefusal(t *testing.T) {
+	t.Parallel()
+	refusal := &buildable.Refusal{
+		Code: buildable.RefusalCandidateInvalid, Buildable: "tsgo", Candidate: ".local-build/tsgo",
+		Reason: "manifest hash mismatch", Remedy: "Rebuild the local candidate.",
+	}
+	application := applications{
+		checkBuildable: func(context.Context, string, string) (buildable.CheckReport, error) {
+			return buildable.CheckReport{SchemaVersion: 1, Status: "refused", Buildable: "tsgo", Refusal: refusal}, refusal
+		},
+	}
+	var output bytes.Buffer
+	err := runWith(context.Background(), []string{"buildable", "check", "--name", "tsgo"}, func() (string, error) {
+		return "/workbench", nil
+	}, &output, io.Discard, application)
+	var reported reportedError
+	if !errors.As(err, &reported) {
+		t.Fatalf("check error = %T %v, want reportedError", err, err)
+	}
+	for _, fact := range []string{`"status":"refused"`, `"code":"candidateInvalid"`, `"remedy":"Rebuild the local candidate."`} {
+		if !strings.Contains(output.String(), fact) {
+			t.Fatalf("machine check output %q omits %q", output.String(), fact)
+		}
 	}
 }
 
@@ -225,6 +271,50 @@ func TestWorkingDirectoryFailurePrecedesApplication(t *testing.T) {
 	}
 }
 
+func TestCheckReportsSuccessfulSetupBeforeTypedCodeHealthFailure(t *testing.T) {
+	root := t.TempDir()
+	bun := filepath.Join(root, "bun")
+	if err := os.WriteFile(bun, []byte("#!/bin/sh\nprintf 'typecheck diagnostic\\n'\nexit 17\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	application := recordingApplications(new([]call))
+	application.check = func(ctx context.Context, gotRoot string) (setup.Result, error) {
+		return checkworkflow.Run(ctx, gotRoot, bun, func(context.Context, string) (setup.Result, error) {
+			return setup.Result{Resources: make([]setup.Resource, 1), ChangedPaths: []string{"package.json"}}, nil
+		})
+	}
+	var stdout bytes.Buffer
+	err := runWith(context.Background(), []string{"check"}, func() (string, error) {
+		return root, nil
+	}, &stdout, io.Discard, application)
+	var failure *checkworkflow.StepFailure
+	if !errors.As(err, &failure) || failure.Step != checkworkflow.StepTypecheck {
+		t.Fatalf("check error = %T %v, want typecheck StepFailure", err, err)
+	}
+	if !strings.Contains(err.Error(), "check: typecheck failed") || !strings.Contains(err.Error(), "typecheck diagnostic") {
+		t.Fatalf("check error = %q, want stage and command diagnostic", err)
+	}
+	if got, want := stdout.String(), "Workbench reconciled 1 repository; 1 generated path changed.\n"; got != want {
+		t.Fatalf("check stdout = %q, want setup-only success %q", got, want)
+	}
+}
+
+func TestCheckReportsCodeHealthOnlyAfterBothScriptsPass(t *testing.T) {
+	application := recordingApplications(new([]call))
+	application.check = func(context.Context, string) (setup.Result, error) {
+		return setup.Result{}, nil
+	}
+	var stdout bytes.Buffer
+	if err := runWith(context.Background(), []string{"check"}, func() (string, error) {
+		return "/workbench", nil
+	}, &stdout, io.Discard, application); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "Workbench reconciled 0 repositories; 0 generated paths changed.\nCode health passed: typecheck and test.\n"; got != want {
+		t.Fatalf("check stdout = %q, want %q", got, want)
+	}
+}
+
 func TestSkillsCheckRendersWarningsBeforeIssuesAndRepairAction(t *testing.T) {
 	t.Parallel()
 	application := recordingApplications(new([]call))
@@ -353,6 +443,10 @@ func recordingApplications(calls *[]call) applications {
 			*calls = append(*calls, call{name: "setup", root: root})
 			return setup.Result{}, nil
 		},
+		check: func(_ context.Context, root string) (setup.Result, error) {
+			*calls = append(*calls, call{name: "check", root: root})
+			return setup.Result{}, nil
+		},
 		commit: func(_ context.Context, root, plan string) (string, error) {
 			*calls = append(*calls, call{name: "commit", root: root, values: []string{plan}})
 			return "", nil
@@ -368,6 +462,35 @@ func recordingApplications(calls *[]call) applications {
 		prune: func(_ context.Context, root string, identities []string) (string, error) {
 			*calls = append(*calls, call{name: "prune", root: root, values: append([]string(nil), identities...)})
 			return "", nil
+		},
+		runBuildable: func(_ context.Context, root, name string, arguments []string) error {
+			values := append([]string{name}, arguments...)
+			*calls = append(*calls, call{name: "run", root: root, values: values})
+			return nil
+		},
+		checkBuildable: func(_ context.Context, root, name string) (buildable.CheckReport, error) {
+			*calls = append(*calls, call{name: "buildable check", root: root, values: []string{name}})
+			return buildable.CheckReport{SchemaVersion: 1, Status: "valid", Buildable: name}, nil
+		},
+		buildBuildable: func(_ context.Context, root, name, platform string) error {
+			*calls = append(*calls, call{name: "buildable build", root: root, values: []string{name, platform}})
+			return nil
+		},
+		sealBuildable: func(_ context.Context, root, name, candidate string) error {
+			*calls = append(*calls, call{name: "buildable seal", root: root, values: []string{name, candidate}})
+			return nil
+		},
+		verifyBuildable: func(_ context.Context, root, name, candidate string, runDeclared bool) error {
+			*calls = append(*calls, call{name: "buildable verify", root: root, values: []string{name, candidate, fmt.Sprint(runDeclared)}})
+			return nil
+		},
+		checkFreshBuildable: func(_ context.Context, root, name, candidate, builtFrom, against string) error {
+			*calls = append(*calls, call{name: "buildable check-fresh", root: root, values: []string{name, candidate, builtFrom, against}})
+			return nil
+		},
+		promoteBuildable: func(_ context.Context, root, name, candidate, committed string) error {
+			*calls = append(*calls, call{name: "buildable promote", root: root, values: []string{name, candidate, committed}})
+			return nil
 		},
 		skillsCheck: func(_ context.Context, root string) (skills.Report, error) {
 			*calls = append(*calls, call{name: "skills check", root: root})

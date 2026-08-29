@@ -41,6 +41,14 @@ type Observation struct {
 	// at the checkout. For an already-current Subject branch it is the local
 	// HEAD; otherwise it is the selected local or observed remote revision.
 	Commit string
+	// cloneAuthor is the enclosing Workbench's repository-local author identity.
+	// A missing checkout receives this identity without changing existing clones.
+	cloneAuthor authorConfig
+}
+
+type authorConfig struct {
+	Name  string
+	Email string
 }
 
 // PreparedCheckout is the immutable revision fact exposed by a prepared
@@ -67,6 +75,7 @@ type operation struct {
 	checkout         Checkout
 	fromRemoteBranch bool
 	commit           string
+	cloneAuthor      authorConfig
 }
 
 // ChangeSet is an opaque, deterministic sequence of Git effects produced by Plan.
@@ -115,7 +124,7 @@ func Plan(observations []Observation) (ChangeSet, error) {
 			if !observed.RemoteBranch && !observed.RemoteBase {
 				return ChangeSet{}, fmt.Errorf("plan checkout %q: neither subject branch %q nor base branch %q exists at %q", checkout.Path, checkout.Branch, checkout.BaseBranch, checkout.RemoteURL)
 			}
-			operations = append(operations, operation{kind: operationClone, checkout: checkout, fromRemoteBranch: observed.RemoteBranch, commit: observed.Commit})
+			operations = append(operations, operation{kind: operationClone, checkout: checkout, fromRemoteBranch: observed.RemoteBranch, commit: observed.Commit, cloneAuthor: observed.cloneAuthor})
 			continue
 		}
 
@@ -253,6 +262,10 @@ func observeCheckout(ctx context.Context, checkout Checkout) (Observation, error
 
 	info, err := os.Stat(checkout.Path)
 	if errors.Is(err, os.ErrNotExist) {
+		observed.cloneAuthor, err = observeLocalAuthor(ctx, checkout.Path)
+		if err != nil {
+			return Observation{}, fmt.Errorf("read enclosing Workbench author identity: %w", err)
+		}
 		if observed.RemoteBranch {
 			observed.Commit = observed.RemoteCommit
 		} else {
@@ -329,6 +342,61 @@ func observeCheckout(ctx context.Context, checkout Checkout) (Observation, error
 	return observed, nil
 }
 
+func observeLocalAuthor(ctx context.Context, checkoutPath string) (authorConfig, error) {
+	directory, err := nearestExistingDirectory(filepath.Dir(checkoutPath))
+	if err != nil {
+		return authorConfig{}, err
+	}
+	if _, err := runGit(ctx, directory, "rev-parse", "--git-dir"); err != nil {
+		var failure *gitCommandError
+		if errors.As(err, &failure) && failure.ExitCode == 128 {
+			return authorConfig{}, nil
+		}
+		return authorConfig{}, err
+	}
+	name, err := optionalLocalConfig(ctx, directory, "user.name")
+	if err != nil {
+		return authorConfig{}, err
+	}
+	email, err := optionalLocalConfig(ctx, directory, "user.email")
+	if err != nil {
+		return authorConfig{}, err
+	}
+	return authorConfig{Name: name, Email: email}, nil
+}
+
+func nearestExistingDirectory(path string) (string, error) {
+	for {
+		info, err := os.Stat(path)
+		if err == nil {
+			if !info.IsDir() {
+				return "", fmt.Errorf("enclosing path %q is not a directory", path)
+			}
+			return path, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect enclosing path %q: %w", path, err)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", fmt.Errorf("no existing directory encloses checkout path")
+		}
+		path = parent
+	}
+}
+
+func optionalLocalConfig(ctx context.Context, directory, key string) (string, error) {
+	value, err := runGit(ctx, directory, "config", "--local", "--get", key)
+	if err == nil {
+		return strings.TrimSpace(value), nil
+	}
+	var failure *gitCommandError
+	if errors.As(err, &failure) && failure.ExitCode == 1 {
+		return "", nil
+	}
+	return "", err
+}
+
 func isFullObjectID(value string) bool {
 	if len(value) != 40 && len(value) != 64 {
 		return false
@@ -389,7 +457,14 @@ func applyOperation(ctx context.Context, operation operation) error {
 		if err := os.MkdirAll(filepath.Dir(checkout.Path), 0o755); err != nil {
 			return fmt.Errorf("create checkout parent for %q: %w", checkout.Path, err)
 		}
-		arguments = []string{"clone", "--no-checkout", "--origin", "origin", "--", checkout.RemoteURL, checkout.Path}
+		arguments = []string{"clone", "--no-checkout", "--origin", "origin"}
+		if operation.cloneAuthor.Name != "" {
+			arguments = append(arguments, "--config", "user.name="+operation.cloneAuthor.Name)
+		}
+		if operation.cloneAuthor.Email != "" {
+			arguments = append(arguments, "--config", "user.email="+operation.cloneAuthor.Email)
+		}
+		arguments = append(arguments, "--", checkout.RemoteURL, checkout.Path)
 		if _, err := runGit(ctx, "", arguments...); err != nil {
 			return fmt.Errorf("clone %q into %q: %w", checkout.RemoteURL, checkout.Path, err)
 		}

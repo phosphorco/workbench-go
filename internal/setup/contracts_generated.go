@@ -34,7 +34,6 @@ typealias GitHubRepository =
 typealias SkillDomain = "orchestration" | "engineering" | "general"
 typealias SkillName = String(matches(Regex(#"[a-z0-9][a-z0-9-]*"#)))
 typealias SkillSelection = "all" | SkillRoots
-
 class SkillRoots {
   domains: Set<SkillDomain> = Set()
   names: Set<SkillName> = Set()
@@ -104,8 +103,9 @@ includes: Mapping<GitHubRepository, Include> = new {}
 packages: Mapping<PackageName, PackagePolicy> = new {}
 `
 
-// Generated from ../../pkl/PackageScopeRepository.pkl. Do not edit independently.
-const localRepositoryContract = `module phosphor.workbench.PackageScopeRepository
+// Frozen from the immutable 0.3.0-0.5.0 PackageScopeRepository contract.
+// New declarations must use localRepositoryContract instead.
+const localV050RepositoryContract = `module phosphor.workbench.PackageScopeRepository
 
 typealias NonEmptyString = String(length > 0)
 typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
@@ -148,8 +148,8 @@ includes: Mapping<GitHubRepository, Include> = new {}
 packages: Mapping<PackageName, PackagePolicy>(keys.every((name) -> name.startsWith(scope + "/"))) = new {}
 `
 
-// Generated from ../../pkl/Repository.pkl.
-const localRepositoryDeclarationContract = `module phosphor.workbench.Repository
+// Frozen from the immutable 0.2.0-0.5.0 Repository contract.
+const localV050RepositoryDeclarationContract = `module phosphor.workbench.Repository
 
 typealias NonEmptyString = String(length > 0)
 typealias PackageName =
@@ -188,6 +188,226 @@ class PackagePolicy {
 /// to acquire this declaration; it is intentionally not authored here.
 includes: Mapping<GitHubRepository, Include> = new {}
 packages: Mapping<PackageName, PackagePolicy> = new {}
+`
+
+// Generated from ../../pkl/PackageScopeRepository.pkl. Do not edit independently.
+const localRepositoryContract = `module phosphor.workbench.PackageScopeRepository
+
+typealias NonEmptyString = String(length > 0)
+typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
+typealias PackageName =
+  String(
+    length > 0,
+    length <= 214,
+    matches(Regex(#"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"#)),
+  )
+typealias PackageImport = String(length > 1, startsWith("#"), !contains(".."))
+typealias PackageExport = "." | String(length > 2, startsWith("./"), !contains(".."))
+typealias PackageTarget =
+  String(length > 2, startsWith("./"), !contains("\\"), !contains("../"))
+typealias GitHubRepository =
+  String(matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#)), !endsWith(".git"))
+typealias SkillDomain = "orchestration" | "engineering" | "general"
+typealias SkillName = String(matches(Regex(#"[a-z0-9][a-z0-9-]*"#)))
+typealias SkillSelection = "all" | SkillRoots
+typealias BuildableName = String(matches(Regex(#"[a-z0-9][a-z0-9._-]*"#)))
+typealias RelativePath =
+  String(
+    length > 0,
+    !startsWith("/"),
+    !contains("\\"),
+    !matches(Regex(#".*[\x00-\x1f\x7f].*"#)),
+    this != ".",
+    this != "..",
+    !startsWith("../"),
+    !contains("/../"),
+    !endsWith("/.."),
+  )
+
+class SkillRoots {
+  domains: Set<SkillDomain> = Set()
+  names: Set<SkillName> = Set()
+}
+
+class SkillPolicy {
+  editing: SkillSelection = new SkillRoots {}
+}
+
+class Include {
+  skills: SkillPolicy = new SkillPolicy {}
+}
+
+class PackagePolicy {
+  dependencies: Mapping<PackageName, NonEmptyString> = new {}
+  devDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  requiredButNotReferenced: Mapping<PackageName, NonEmptyString> = new {}
+  peerDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  imports: Mapping<PackageImport, PackageTarget> = new {}
+  exports: Mapping<PackageExport, PackageTarget> = new {}
+}
+
+class GitHeadTreeInputDetection {
+  strategy: "gitHeadTree" = "gitHeadTree"
+  paths: Listing<RelativePath>(length > 0)
+}
+
+class BuildCommand {
+  executable: NonEmptyString
+  arguments: Listing<NonEmptyString> = new {}
+}
+
+class ManifestContract {
+  schemaVersion: UInt16(isPositive)
+  kind: NonEmptyString
+  contractId: NonEmptyString
+  expectedSource: Mapping<NonEmptyString, NonEmptyString> = new {}
+  requiredSourceFields: Listing<NonEmptyString> = new {}
+  requiredCapabilities: Listing<NonEmptyString> = new {}
+}
+
+class BuildableCandidate {
+  root: RelativePath
+  inputStrategy: "gitWorktree" | "gitHeadTree"
+  invalidRemedy: NonEmptyString
+}
+
+class BuildablePlatformOutput {
+  os: Listing<NonEmptyString>(length > 0)
+  arch: Listing<NonEmptyString>(length > 0)
+  path: RelativePath
+  executable: Boolean = true
+}
+
+class Buildable {
+  inputDetection: GitHeadTreeInputDetection
+  buildCommand: BuildCommand
+  /// Optional repository-owned composition proof invoked only by the explicit
+  /// buildable verify command.
+  verificationCommand: BuildCommand? = null
+  manifest: ManifestContract
+  /// Preference is authored order. A present-invalid candidate refuses; it
+  /// never falls through to a later candidate.
+  candidates: Listing<BuildableCandidate>(length > 0)
+  /// Keys are the platform names recorded by the artifact manifest.
+  platforms: Mapping<NonEmptyString, BuildablePlatformOutput>(length > 0)
+}
+
+scope: PackageScope
+includes: Mapping<GitHubRepository, Include> = new {}
+/// A PackageScope is always a container. Every package identity derives one
+/// child directory from its unscoped leaf, regardless of package cardinality.
+packages: Mapping<PackageName, PackagePolicy>(keys.every((name) -> name.startsWith(scope + "/"))) = new {}
+buildables: Mapping<BuildableName, Buildable> = new {}
+`
+
+// Generated from ../../pkl/Repository.pkl.
+const localRepositoryDeclarationContract = `module phosphor.workbench.Repository
+
+typealias NonEmptyString = String(length > 0)
+typealias PackageName =
+  String(
+    length > 0,
+    length <= 214,
+    matches(Regex(#"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"#)),
+  )
+typealias PackageImport = String(length > 1, startsWith("#"), !contains(".."))
+typealias PackageExport = "." | String(length > 2, startsWith("./"), !contains(".."))
+typealias PackageTarget =
+  String(length > 2, startsWith("./"), !contains("\\"), !contains("../"))
+typealias GitHubRepository =
+  String(matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#)), !endsWith(".git"))
+typealias SkillDomain = "orchestration" | "engineering" | "general"
+typealias SkillName = String(matches(Regex(#"[a-z0-9][a-z0-9-]*"#)))
+typealias SkillSelection = "all" | SkillRoots
+typealias BuildableName = String(matches(Regex(#"[a-z0-9][a-z0-9._-]*"#)))
+typealias RelativePath =
+  String(
+    length > 0,
+    !startsWith("/"),
+    !contains("\\"),
+    !matches(Regex(#".*[\x00-\x1f\x7f].*"#)),
+    this != ".",
+    this != "..",
+    !startsWith("../"),
+    !contains("/../"),
+    !endsWith("/.."),
+  )
+
+class SkillRoots {
+  domains: Set<SkillDomain> = Set()
+  names: Set<SkillName> = Set()
+}
+
+class SkillPolicy {
+  editing: SkillSelection = new SkillRoots {}
+}
+
+class Include {
+  skills: SkillPolicy = new SkillPolicy {}
+}
+
+class PackagePolicy {
+  dependencies: Mapping<PackageName, NonEmptyString> = new {}
+  devDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  requiredButNotReferenced: Mapping<PackageName, NonEmptyString> = new {}
+  peerDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
+  imports: Mapping<PackageImport, PackageTarget> = new {}
+  exports: Mapping<PackageExport, PackageTarget> = new {}
+}
+
+class GitHeadTreeInputDetection {
+  strategy: "gitHeadTree" = "gitHeadTree"
+  paths: Listing<RelativePath>(length > 0)
+}
+
+class BuildCommand {
+  executable: NonEmptyString
+  arguments: Listing<NonEmptyString> = new {}
+}
+
+class ManifestContract {
+  schemaVersion: UInt16(isPositive)
+  kind: NonEmptyString
+  contractId: NonEmptyString
+  expectedSource: Mapping<NonEmptyString, NonEmptyString> = new {}
+  requiredSourceFields: Listing<NonEmptyString> = new {}
+  requiredCapabilities: Listing<NonEmptyString> = new {}
+}
+
+class BuildableCandidate {
+  root: RelativePath
+  inputStrategy: "gitWorktree" | "gitHeadTree"
+  invalidRemedy: NonEmptyString
+}
+
+class BuildablePlatformOutput {
+  os: Listing<NonEmptyString>(length > 0)
+  arch: Listing<NonEmptyString>(length > 0)
+  path: RelativePath
+  executable: Boolean = true
+}
+
+class Buildable {
+  inputDetection: GitHeadTreeInputDetection
+  buildCommand: BuildCommand
+  /// Optional repository-owned composition proof invoked only by the explicit
+  /// buildable verify command.
+  verificationCommand: BuildCommand? = null
+  manifest: ManifestContract
+  /// Preference is authored order. A present-invalid candidate refuses; it
+  /// never falls through to a later candidate.
+  candidates: Listing<BuildableCandidate>(length > 0)
+  /// Keys are the platform names recorded by the artifact manifest.
+  platforms: Mapping<NonEmptyString, BuildablePlatformOutput>(length > 0)
+}
+
+/// Repository identity is derived from the normalized GitHub designation used
+/// to acquire this declaration; it is intentionally not authored here.
+includes: Mapping<GitHubRepository, Include> = new {}
+packages: Mapping<PackageName, PackagePolicy> = new {}
+buildables: Mapping<BuildableName, Buildable> = new {}
 `
 
 // Generated from ../../pkl/AgentInstructions.pkl.

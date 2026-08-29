@@ -7,5 +7,5 @@ A fresh corrected PackageScope Subject assembles its two independently governed 
 
 ```console
 $ workbench setup
-Workbench reconciled 2 repositories; 10 generated paths changed.
+Workbench reconciled 2 repositories; 11 generated paths changed.
 ```

@@ -19,8 +19,8 @@ const (
 	releasePackageZIP        = "https://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0.zip"
 	v020ReleasePackageURI    = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0"
 	v020ReleasePackageZIP    = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
-	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0"
-	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0.zip"
+	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0"
+	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0.zip"
 )
 
 func TestReleasePackageCandidate(t *testing.T) {
@@ -28,7 +28,7 @@ func TestReleasePackageCandidate(t *testing.T) {
 	outputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, outputRoot)
 
-	metadataPath := filepath.Join(outputRoot, "workbench@0.5.0")
+	metadataPath := filepath.Join(outputRoot, "workbench@0.6.0")
 	archivePath := metadataPath + ".zip"
 	metadata := readReleaseMetadata(t, metadataPath)
 	if metadata.Name != "workbench" {
@@ -37,8 +37,8 @@ func TestReleasePackageCandidate(t *testing.T) {
 	if metadata.PackageURI != currentReleasePackageURI {
 		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, currentReleasePackageURI)
 	}
-	if metadata.Version != "0.5.0" {
-		t.Errorf("metadata version = %q, want 0.5.0", metadata.Version)
+	if metadata.Version != "0.6.0" {
+		t.Errorf("metadata version = %q, want 0.6.0", metadata.Version)
 	}
 	if metadata.PackageZIPURL != currentReleasePackageZIP {
 		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, currentReleasePackageZIP)
@@ -87,10 +87,10 @@ func TestReleasePackageCandidate(t *testing.T) {
 	secondOutputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, secondOutputRoot)
 	for _, name := range []string{
-		"workbench@0.5.0",
-		"workbench@0.5.0.sha256",
-		"workbench@0.5.0.zip",
-		"workbench@0.5.0.zip.sha256",
+		"workbench@0.6.0",
+		"workbench@0.6.0.sha256",
+		"workbench@0.6.0.zip",
+		"workbench@0.6.0.zip.sha256",
 	} {
 		first, err := os.ReadFile(filepath.Join(outputRoot, name))
 		if err != nil {
@@ -238,6 +238,69 @@ includes {
 }
 `,
 			wantSuccess: true,
+		},
+		{
+			name: "package scope buildable contract",
+			source: `amends "modulepath:/PackageScopeRepository.pkl"
+
+scope = "@workbench-entry"
+buildables {
+  ["tsgo"] = new Buildable {
+    inputDetection = new GitHeadTreeInputDetection { paths { "scripts/tsgo-artifact-contract.mts" } }
+    buildCommand = new BuildCommand { executable = "mise"; arguments { "run"; "tsgo:build-local" } }
+    manifest = new ManifestContract { schemaVersion = 2; kind = "tsgo-artifact-manifest"; contractId = "tsgo-v2" }
+    candidates {
+      new BuildableCandidate { root = ".local-build/tsgo"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild it." }
+      new BuildableCandidate { root = ".ci-build/tsgo"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore it." }
+    }
+    platforms {
+      ["linux-x86_64"] = new BuildablePlatformOutput { os { "linux" }; arch { "amd64" }; path = "linux-x86_64/tsgo" }
+    }
+  }
+}
+`,
+			wantSuccess: true,
+		},
+		{
+			name: "repository buildable contract",
+			source: `amends "modulepath:/Repository.pkl"
+
+buildables {
+  ["tool"] = new Buildable {
+    inputDetection = new GitHeadTreeInputDetection { paths { "tools" } }
+    buildCommand = new BuildCommand { executable = "mise" }
+    manifest = new ManifestContract { schemaVersion = 1; kind = "tool-manifest"; contractId = "tool-v1" }
+    candidates {
+      new BuildableCandidate { root = ".local-build/tool"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild it." }
+      new BuildableCandidate { root = ".ci-build/tool"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore it." }
+    }
+    platforms {
+      ["macos-arm64"] = new BuildablePlatformOutput { os { "darwin" }; arch { "arm64" }; path = "bin/tool" }
+    }
+  }
+}
+`,
+			wantSuccess: true,
+		},
+		{
+			name: "buildable contract rejects nonportable paths",
+			source: `amends "modulepath:/Repository.pkl"
+
+buildables {
+  ["tool"] = new Buildable {
+    inputDetection = new GitHeadTreeInputDetection { paths { "producer\\input" } }
+    buildCommand = new BuildCommand { executable = "mise" }
+    manifest = new ManifestContract { schemaVersion = 1; kind = "tool-manifest"; contractId = "tool-v1" }
+    candidates {
+      new BuildableCandidate { root = ".local-build/tool"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild it." }
+      new BuildableCandidate { root = ".ci-build/tool"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore it." }
+    }
+    platforms {
+      ["linux-x86_64"] = new BuildablePlatformOutput { os { "linux" }; arch { "amd64" }; path = "bin\ncontrol" }
+    }
+  }
+}
+`,
 		},
 		{
 			name: "repository shape rejects authored identity",

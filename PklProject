@@ -2,10 +2,10 @@ amends "pkl:Project"
 
 package {
   name = "workbench"
-  baseUri = "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench"
-  version = "0.5.0"
+  baseUri = "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench"
+  version = "0.6.0"
   packageZipUrl =
-    "https://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@\(version).zip"
+    "https://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@\(version).zip"
 
   exclude {
     "acceptance/**"
@@ -19,5 +19,6 @@ package {
     "go.mod"
     "go.sum"
     "mise.toml"
+    "pkl-spike/**"
   }
 }

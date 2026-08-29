@@ -36,6 +36,33 @@ func TestMissingCheckoutCreatesSubjectBranchFromRemoteBase(t *testing.T) {
 	}
 }
 
+func TestMissingCheckoutPreservesWorkbenchLocalAuthorIdentity(t *testing.T) {
+	fixture := newGitFixture(t, false)
+	workbench := t.TempDir()
+	git(t, workbench, "init", "-b", "main")
+	git(t, workbench, "config", "user.name", "Workbench Operator")
+	git(t, workbench, "config", "user.email", "operator@example.invalid")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "empty-global-gitconfig"))
+
+	target := filepath.Join(workbench, "repos", "resource")
+	err := gitreconcile.Reconcile(context.Background(), []gitreconcile.Checkout{{
+		Path:       target,
+		RemoteURL:  fixture.remote,
+		Branch:     "cole/shared-line",
+		BaseBranch: "main",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, filepath.Join(target, "operator-change.txt"), "change from assembled checkout\n")
+	git(t, target, "add", "operator-change.txt")
+	git(t, target, "commit", "-m", "operator change")
+	if author := git(t, target, "show", "-s", "--format=%an <%ae>", "HEAD"); author != "Workbench Operator <operator@example.invalid>" {
+		t.Fatalf("author = %q, want preserved Workbench-local identity", author)
+	}
+}
+
 func TestExistingCheckoutUsesRemoteSubjectBranch(t *testing.T) {
 	fixture := newGitFixture(t, true)
 	target := filepath.Join(t.TempDir(), "resource")
