@@ -19,8 +19,8 @@ const (
 	releasePackageZIP        = "https://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0.zip"
 	v020ReleasePackageURI    = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0"
 	v020ReleasePackageZIP    = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
-	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0"
-	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0.zip"
+	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench@0.6.1"
+	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench@0.6.1.zip"
 )
 
 func TestReleasePackageCandidate(t *testing.T) {
@@ -28,7 +28,7 @@ func TestReleasePackageCandidate(t *testing.T) {
 	outputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, outputRoot)
 
-	metadataPath := filepath.Join(outputRoot, "workbench@0.6.0")
+	metadataPath := filepath.Join(outputRoot, "workbench@0.6.1")
 	archivePath := metadataPath + ".zip"
 	metadata := readReleaseMetadata(t, metadataPath)
 	if metadata.Name != "workbench" {
@@ -37,8 +37,8 @@ func TestReleasePackageCandidate(t *testing.T) {
 	if metadata.PackageURI != currentReleasePackageURI {
 		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, currentReleasePackageURI)
 	}
-	if metadata.Version != "0.6.0" {
-		t.Errorf("metadata version = %q, want 0.6.0", metadata.Version)
+	if metadata.Version != "0.6.1" {
+		t.Errorf("metadata version = %q, want 0.6.1", metadata.Version)
 	}
 	if metadata.PackageZIPURL != currentReleasePackageZIP {
 		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, currentReleasePackageZIP)
@@ -87,10 +87,10 @@ func TestReleasePackageCandidate(t *testing.T) {
 	secondOutputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, secondOutputRoot)
 	for _, name := range []string{
-		"workbench@0.6.0",
-		"workbench@0.6.0.sha256",
-		"workbench@0.6.0.zip",
-		"workbench@0.6.0.zip.sha256",
+		"workbench@0.6.1",
+		"workbench@0.6.1.sha256",
+		"workbench@0.6.1.zip",
+		"workbench@0.6.1.zip.sha256",
 	} {
 		first, err := os.ReadFile(filepath.Join(outputRoot, name))
 		if err != nil {

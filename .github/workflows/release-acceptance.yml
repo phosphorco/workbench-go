@@ -20,6 +20,7 @@ jobs:
       MISE_GITHUB_GH_CLI_TOKENS: "false"
       MISE_GITHUB_USE_GIT_CREDENTIALS: "false"
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
         with:
           version: 2026.8.12
@@ -29,8 +30,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/anonymous-home" "$RUNNER_TEMP/catalog/.agents/skills/release-smoke"
           export HOME="$RUNNER_TEMP/anonymous-home"
-          mise install github:phosphorco/workbench-go@0.6.1
-          test "$(mise exec github:phosphorco/workbench-go@0.6.1 -- workbench version)" = "workbench 0.6.1 (${{ github.sha }})"
+          mise install github:phosphorco/workbench-go@0.6.2
+          test "$(mise exec github:phosphorco/workbench-go@0.6.2 -- workbench version)" = "workbench 0.6.2 (${{ github.sha }})"
           cat > "$RUNNER_TEMP/catalog/.agents/skills/release-smoke/SKILL.md" <<'EOF'
           ---
           name: release-smoke
@@ -41,4 +42,268 @@ jobs:
 
           # Release smoke
           EOF
-          (cd "$RUNNER_TEMP/catalog" && mise exec github:phosphorco/workbench-go@0.6.1 -- workbench skills check)
+          (cd "$RUNNER_TEMP/catalog" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench skills check)
+
+      - name: Resolve a cold buildable through the published 0.6.2 asset
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/cold-resolve-home"
+          export MISE_DATA_DIR="$RUNNER_TEMP/cold-resolve-mise-data"
+          export MISE_CACHE_DIR="$RUNNER_TEMP/cold-resolve-mise-cache"
+          export MISE_STATE_DIR="$RUNNER_TEMP/cold-resolve-mise-state"
+          export MISE_CONFIG_DIR="$RUNNER_TEMP/cold-resolve-mise-config"
+          mkdir -p "$HOME" "$MISE_DATA_DIR" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_CONFIG_DIR"
+          mise install github:phosphorco/workbench-go@0.6.2
+          root="$RUNNER_TEMP/cold-resolve-fixture"
+          mkdir -p "$root/.local-build/cold"
+          cat > "$root/workbench.pkl" <<'EOF'
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench@0.6.1#/Repository.pkl"
+          buildables {
+            ["cold"] = new Buildable {
+              inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
+              buildCommand = new BuildCommand { executable = "true" }
+              manifest = new ManifestContract {
+                schemaVersion = 1
+                kind = "cold-manifest"
+                contractId = "cold-v1"
+                expectedSource { ["repository"] = "example/cold" }
+                requiredSourceFields { "revision" }
+                requiredCapabilities { "cold-v1" }
+              }
+              candidates {
+                new BuildableCandidate { root = ".local-build/cold"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild the local candidate." }
+                new BuildableCandidate { root = ".ci-build/cold"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore the committed candidate." }
+              }
+              platforms {
+                ["linux-x86_64"] = new BuildablePlatformOutput {
+                  os { "linux" }
+                  arch { "amd64" }
+                  outputs { new BuildableOutput { path = "cold.bin"; destination = "bin/cold"; kind = "executable"; executable = true } }
+                }
+              }
+            }
+          }
+          EOF
+          printf 'producer\n' > "$root/producer.txt"
+          printf '#!/bin/sh\nprintf cold\\n' > "$root/.local-build/cold/cold.bin"
+          chmod 0755 "$root/.local-build/cold/cold.bin"
+          printf '%s\n' '{"source":{"repository":"example/cold","revision":"fixture"},"capabilities":["cold-v1"]}' > "$root/.local-build/cold/.workbench-buildable-source.json"
+          git -C "$root" init -q -b main
+          git -C "$root" config user.name "Workbench release acceptance"
+          git -C "$root" config user.email "workbench-release@example.invalid"
+          git -C "$root" add producer.txt workbench.pkl
+          git -C "$root" commit -qm fixture
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable seal --name cold --candidate-root .local-build/cold)
+          test ! -e "$root/.workbench"
+          result="$(cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable resolve --name cold --platform linux-x86_64 --format json)"
+          test ! -e "$root/.workbench"
+          printf '%s\n' "$result"
+          printf '%s\n' "$result" | grep -Eq '"candidate":"local"'
+          ! printf '%s\n' "$result" | grep -Fq '"candidate":".local-build/cold"'
+          printf '%s\n' "$result" | grep -Eq '"platform":"linux-x86_64"'
+          printf '%s\n' "$result" | grep -Eq '"path":"[^"]+/cold.bin"'
+          printf '%s\n' "$result" | grep -Eq '"destination":"bin/cold"'
+          printf '%s\n' "$result" | grep -Eq '"digest":"[0-9a-f]{64}"'
+          ! printf '%s\n' "$result" | grep -Fq '"sha256"'
+          printf '%s\n' "$result" | grep -Eq '"size":[1-9][0-9]*'
+          printf '%s\n' "$result" | grep -Fq '"capabilities":["cold-v1"]'
+
+      - name: Verify and check freshness of an origin-shaped legacy manifest
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/legacy-manifest-home"
+          export MISE_DATA_DIR="$RUNNER_TEMP/legacy-manifest-mise-data"
+          export MISE_CACHE_DIR="$RUNNER_TEMP/legacy-manifest-mise-cache"
+          export MISE_STATE_DIR="$RUNNER_TEMP/legacy-manifest-mise-state"
+          export MISE_CONFIG_DIR="$RUNNER_TEMP/legacy-manifest-mise-config"
+          mkdir -p "$HOME" "$MISE_DATA_DIR" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_CONFIG_DIR"
+          mise install github:phosphorco/workbench-go@0.6.2
+          root="$RUNNER_TEMP/legacy-manifest-fixture"
+          candidate="$root/.local-build/basindb-state-sql-browser"
+          mkdir -p "$candidate"
+          cat > "$root/workbench.pkl" <<'EOF'
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench@0.6.1#/Repository.pkl"
+          buildables {
+            ["basindb-state-sql-browser"] = new Buildable {
+              inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
+              buildCommand = new BuildCommand { executable = "true" }
+              manifest = new ManifestContract {
+                schemaVersion = 1
+                kind = "basindb-state-sql-browser-manifest"
+                contractId = "basindb-state-sql-browser-v1"
+                expectedSource { ["repository"] = "synthetic/origin-main-fixture" }
+                requiredSourceFields { "revision" }
+                requiredCapabilities { "browser-v1" }
+              }
+              candidates {
+                new BuildableCandidate { root = ".local-build/basindb-state-sql-browser"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild the local browser candidate." }
+                new BuildableCandidate { root = ".ci-build/basindb-state-sql-browser"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore the committed browser candidate." }
+              }
+              platforms {
+                ["browser-wasm"] = new BuildablePlatformOutput {
+                  os { "browser" }
+                  arch { "wasm32" }
+                  outputs {
+                    new BuildableOutput { path = "basindb_sql_browser.js"; destination = "basindb_sql_browser.js"; kind = "module" }
+                    new BuildableOutput { path = "basindb_sql_browser_bg.wasm"; destination = "basindb_sql_browser_bg.wasm"; kind = "wasm" }
+                    new BuildableOutput { path = "basindb_sql_browser.d.ts"; destination = "basindb_sql_browser.d.ts"; kind = "declaration" }
+                    new BuildableOutput { path = "basindb_sql_browser_bg.wasm.d.ts"; destination = "basindb_sql_browser_bg.wasm.d.ts"; kind = "declaration" }
+                  }
+                }
+              }
+            }
+          }
+          EOF
+          printf 'producer\n' > "$root/producer.txt"
+          # Output paths are the four identities observed in the committed
+          # origin/main BasinDB browser manifest; source facts below are synthetic.
+          printf 'export default "browser";\n' > "$candidate/basindb_sql_browser.js"
+          printf 'wasm\n' > "$candidate/basindb_sql_browser_bg.wasm"
+          printf 'export default string;\n' > "$candidate/basindb_sql_browser.d.ts"
+          printf 'export default string;\n' > "$candidate/basindb_sql_browser_bg.wasm.d.ts"
+          printf '%s\n' '{"source":{"repository":"synthetic/origin-main-fixture","revision":"origin-main-fixture"},"capabilities":["browser-v1"]}' > "$candidate/.workbench-buildable-source.json"
+          git -C "$root" init -q -b main
+          git -C "$root" config user.name "Workbench release acceptance"
+          git -C "$root" config user.email "workbench-release@example.invalid"
+          git -C "$root" add producer.txt workbench.pkl
+          git -C "$root" commit -qm fixture
+          git -C "$root" update-ref refs/remotes/origin/main HEAD
+          printf 'origin-shaped fixture origin/main=%s\n' "$(git -C "$root" rev-parse refs/remotes/origin/main)"
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable seal --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser)
+          test ! -e "$root/.workbench"
+          manifest="$candidate/manifest.json"
+          test -s "$manifest"
+          python3 - "$manifest" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              manifest = json.load(stream)
+          manifest.pop("declarationIdentity", None)
+          with open(sys.argv[1], "w", encoding="utf-8") as stream:
+              json.dump(manifest, stream, indent=2)
+              stream.write("\n")
+          PY
+          python3 - "$manifest" <<'PY'
+          import json
+          import re
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              manifest = json.load(stream)
+          expected_keys = {"schemaVersion", "kind", "contractId", "source", "producerInputs", "capabilities", "outputs"}
+          if set(manifest) != expected_keys:
+              raise SystemExit(f"unexpected legacy manifest keys: {sorted(manifest)}")
+          if manifest["schemaVersion"] != 1 or not manifest["kind"] or not manifest["contractId"]:
+              raise SystemExit(f"unexpected origin/main manifest contract shape: {manifest}")
+          if manifest["source"] != {"repository": "synthetic/origin-main-fixture", "revision": "origin-main-fixture"}:
+              raise SystemExit(f"unexpected origin/main source facts: {manifest['source']}")
+          if manifest["capabilities"] != ["browser-v1"]:
+              raise SystemExit(f"unexpected origin/main capabilities: {manifest['capabilities']}")
+          if manifest["producerInputs"]["algorithm"] != "sha256" or not re.fullmatch(r"[0-9a-f]{64}", manifest["producerInputs"]["digest"]):
+              raise SystemExit("origin/main producer input evidence is incomplete")
+          expected_outputs = [
+              ("browser-wasm", "basindb_sql_browser.js"),
+              ("browser-wasm", "basindb_sql_browser_bg.wasm"),
+              ("browser-wasm", "basindb_sql_browser.d.ts"),
+              ("browser-wasm", "basindb_sql_browser_bg.wasm.d.ts"),
+          ]
+          actual_outputs = [
+              (output["platform"], output["path"])
+              for output in manifest["outputs"]
+          ]
+          if actual_outputs != expected_outputs:
+              raise SystemExit(f"unexpected origin/main output identities: {actual_outputs}")
+          if any(not re.fullmatch(r"[0-9a-f]{64}", output["sha256"]) for output in manifest["outputs"]):
+              raise SystemExit("origin/main output SHA-256 evidence is incomplete")
+          print(f"origin-shaped legacy manifest keys={sorted(manifest)}")
+          print("origin-shaped legacy manifest source facts=synthetic fixture")
+          print(f"origin/main observed output identities={actual_outputs}")
+          PY
+          ! grep -Fq '"declarationIdentity"' "$manifest"
+          verify_status=0
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable verify --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser) || verify_status=$?
+          printf 'origin-shaped legacy manifest verify exit=%s\n' "$verify_status"
+          test "$verify_status" -eq 0
+          fresh_status=0
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable check-fresh --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser --built-from HEAD --against origin/main) || fresh_status=$?
+          printf 'origin-shaped legacy manifest check-fresh exit=%s\n' "$fresh_status"
+          test "$fresh_status" -eq 0
+          test ! -e "$root/.workbench"
+          result="$(cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable resolve --name basindb-state-sql-browser --platform browser-wasm --format json)"
+          test ! -e "$root/.workbench"
+          printf '%s\n' "$result"
+          printf '%s\n' "$result" | grep -Eq '"candidate":"local"'
+          printf '%s\n' "$result" | grep -Eq '"platform":"browser-wasm"'
+          printf '%s\n' "$result" | grep -Eq '"destination":"basindb_sql_browser.js"'
+          printf '%s\n' "$result" | grep -Eq '"digest":"[0-9a-f]{64}"'
+          ! printf '%s\n' "$result" | grep -Fq '"sha256"'
+
+      - name: Verify the published asset against the committed origin/main BasinDB browser candidate
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/origin-main-mise-home"
+          export MISE_DATA_DIR="$RUNNER_TEMP/origin-main-mise-data"
+          export MISE_CACHE_DIR="$RUNNER_TEMP/origin-main-mise-cache"
+          export MISE_STATE_DIR="$RUNNER_TEMP/origin-main-mise-state"
+          export MISE_CONFIG_DIR="$RUNNER_TEMP/origin-main-mise-config"
+          mkdir -p "$HOME" "$MISE_DATA_DIR" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_CONFIG_DIR"
+          mise install github:phosphorco/workbench-go@0.6.2
+          root="$RUNNER_TEMP/monorepo-origin-main"
+          git clone --depth 1 --branch main https://github.com/phosphorco/monorepo.git "$root"
+          candidate="$root/.ci-build/basindb-state-sql-browser"
+          test -f "$root/workbench.pkl"
+          test -f "$candidate/manifest.json"
+          test ! -e "$root/.workbench"
+          manifest="$candidate/manifest.json"
+          python3 - "$manifest" <<'PY'
+          import json
+          import re
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              manifest = json.load(stream)
+          required_keys = {"schemaVersion", "kind", "contractId", "source", "producerInputs", "capabilities", "outputs"}
+          if set(manifest) != required_keys:
+              raise SystemExit(f"unexpected origin/main manifest keys: {sorted(manifest)}")
+          if "declarationIdentity" in manifest:
+              raise SystemExit("origin/main manifest unexpectedly contains declarationIdentity")
+          expected_paths = [
+              "basindb_sql_browser.js",
+              "basindb_sql_browser_bg.wasm",
+              "basindb_sql_browser.d.ts",
+              "basindb_sql_browser_bg.wasm.d.ts",
+          ]
+          actual_paths = [output["path"] for output in manifest["outputs"]]
+          if actual_paths != expected_paths:
+              raise SystemExit(f"unexpected origin/main output paths: {actual_paths}")
+          if manifest["producerInputs"]["algorithm"] != "sha256":
+              raise SystemExit(f"unexpected origin/main producer input algorithm: {manifest['producerInputs']}")
+          if not re.fullmatch(r"[0-9a-f]{64}", manifest["producerInputs"]["digest"]):
+              raise SystemExit("origin/main producer input digest is not SHA-256")
+          if any(not re.fullmatch(r"[0-9a-f]{64}", output["sha256"]) for output in manifest["outputs"]):
+              raise SystemExit("origin/main output SHA-256 evidence is incomplete")
+          print(f"origin/main manifest keys={sorted(manifest)}")
+          print(f"origin/main manifest output paths={actual_paths}")
+          print(f"origin/main producerInputs.algorithm={manifest['producerInputs']['algorithm']}")
+          print(f"origin/main producerInputs.digest={manifest['producerInputs']['digest']}")
+          print("origin/main manifest declarationIdentity=absent")
+          PY
+          built_from="$(git -C "$root" rev-parse origin/main)"
+          verify_status=0
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable verify --name basindb-state-sql-browser --candidate-root .ci-build/basindb-state-sql-browser) || verify_status=$?
+          printf 'origin/main BasinDB browser verify exit=%s\n' "$verify_status"
+          test "$verify_status" -eq 0
+          test ! -e "$root/.workbench"
+          fresh_status=0
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable check-fresh --name basindb-state-sql-browser --candidate-root .ci-build/basindb-state-sql-browser --built-from "$built_from" --against origin/main) || fresh_status=$?
+          printf 'origin/main BasinDB browser check-fresh exit=%s\n' "$fresh_status"
+          test "$fresh_status" -eq 0
+          test ! -e "$root/.workbench"
+
+      - name: Compare the published five-command compatibility matrix
+        # acceptance/release_compatibility.sh prints command/scenario                  0.6.1 exit  0.6.2 exit
+        # and uses python3 - "$manifest" for the public receipt assertions.
+        # Only typed resolve/receipt and digest-only JSON may differ; changed legacy
+        # acceptance or any five-command exit mismatch is a release defect.
+        run: bash acceptance/release_compatibility.sh

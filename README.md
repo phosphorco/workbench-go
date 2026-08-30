@@ -441,7 +441,7 @@ The governing rule is:
 
 > Source derives dependency adjacency. Pkl declares the dependency semantics that source cannot prove.
 
-The current `0.6.0` package policy expresses the package metadata needed by the
+The current `0.6.1` package policy expresses the package metadata needed by the
 assembled TypeScript graph directly:
 
 ```pkl
@@ -555,9 +555,9 @@ The final Workbench implementation absorbs repository observation, planning, and
 
 ## Buildables make repository-owned tools explicit
 
-The `0.6.0` contract candidate adds the same `buildables` mapping to
+The `0.6.1` contract package adds the same `buildables` mapping to
 `PackageScopeRepository.pkl` and `Repository.pkl`. This is a candidate schema
-identity, not a claim that a `0.6.0` release is available. The immutable
+identity paired with the Workbench 0.6.2 binary. The immutable
 `0.1.0` through `0.5.0` contracts retain their historical meanings.
 
 A buildable declaration owns the facts Workbench cannot infer: producer input
@@ -581,10 +581,10 @@ case normalization.
 
 Setup writes the strict `.workbench/buildables.json` registry for the assembled
 repository closure. Each projected declaration is bound to the exact owning
-`workbench.pkl`, its owner-relative checkout path, and the candidate schema
-digest. Duplicate names across the closure are rejected with both owners. Hot
-commands consume only that projection and never evaluate Pkl or mutate a
-candidate:
+`workbench.pkl`, its owner-relative checkout path, and a per-buildable semantic
+declaration identity. Duplicate names across the closure are rejected with
+both owners. Hot commands consume only that projection and never evaluate Pkl
+or mutate a candidate:
 
 ```sh
 workbench buildable check --name <name>  # machine-readable JSON; does not execute
@@ -593,8 +593,21 @@ workbench buildable materialize --name <name> --platform <platform> \
   --destination <directory>             # installs the validated output set
 ```
 
+The generic cold admission operation evaluates the caller's local declaration
+when no projection exists and returns JSON containing the opaque candidate
+identity, requested platform, complete verified output set, capabilities, and
+producer source facts:
+
+```sh
+workbench buildable resolve --name <name> --platform <platform> --format json
+```
+
+`materialize` writes a JSON receipt with the installed destination and output
+records. Output paths in a resolution or receipt are invocation-scoped handles;
+consumers compare output digest and size and persist destinations, never paths.
+
 Lifecycle commands are deliberately cold. They evaluate the caller's current
-root `workbench.pkl` against the bundled `0.6.0` candidate schema, so a fresh
+root `workbench.pkl` against the bundled `0.6.1` contract package, so a fresh
 repository checkout can build before an assembled projection exists:
 
 ```sh
