@@ -195,8 +195,9 @@ func applicationsForEnvironment(provider environmentProvider) applications {
 			}
 			return buildable.PromoteDeclared(ctx, root, name, declaration, candidate, committed)
 		},
-		skillsCheck: checkSkills,
-		version:     version.Current,
+		materializeBuildable: buildable.Materialize,
+		skillsCheck:          checkSkills,
+		version:              version.Current,
 	}
 }
 
