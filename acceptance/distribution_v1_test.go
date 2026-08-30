@@ -125,11 +125,12 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 		"origin-shaped legacy manifest source facts=synthetic fixture", "origin/main observed output identities=",
 		"basindb_sql_browser.js", "basindb_sql_browser_bg.wasm", "basindb_sql_browser.d.ts",
 		"Consume a candidate sealed by published 0.6.1 with published 0.6.2",
-		"revision:", "default: published-0.6.2", "github:phosphorco/workbench-go@0.6.1",
+		"published_revision:", "required: true", "fixture_revision:", "default: published-0.6.2", "EXPECTED_PUBLISHED_REVISION: ${{ inputs.published_revision }}", "FIXTURE_REVISION: ${{ inputs.fixture_revision }}", "ACCEPTANCE_REVISION=\"$FIXTURE_REVISION\"", "published binary provenance does not match expected published revision", "github:phosphorco/workbench-go@0.6.1",
 		"releases/download/0.6.0/workbench@0.6.0#/Repository.pkl",
 		"published 0.6.1 legacy manifest declarationIdentity=absent",
 		"published 0.6.1 sealed output evidence=sha256", "published 0.6.2 consuming verify exit=",
-		"published 0.6.2 consuming check-fresh exit=", "bash acceptance/release_compatibility.sh",
+		"published 0.6.2 consuming check-fresh exit=", "buildable materialize --name compat --platform linux-x86_64 --destination materialized",
+		"bash acceptance/release_compatibility.sh",
 		"command/scenario                  0.6.1 exit  0.6.2 exit", "python3 - \"$manifest\"",
 	} {
 		if !strings.Contains(workflow, marker) {
@@ -144,6 +145,15 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 			t.Errorf("release acceptance silently treats invalid historical skill bytes as a setup success through %q", forbidden)
 		}
 	}
+	for _, forbidden := range []string{
+		"EXPECTED_PUBLISHED_REVISION: ${{ inputs.revision || github.sha }}",
+		"EXPECTED_PUBLISHED_REVISION: ${{ inputs.revision }}",
+		"ACCEPTANCE_REVISION=\"$EXPECTED_PUBLISHED_REVISION\"",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("release acceptance conflates published binary provenance with fixture source revision through %q", forbidden)
+		}
+	}
 }
 
 func TestReleaseWorkflowBuildsCompleteCandidateBeforeTagOnlyPublication(t *testing.T) {
@@ -151,6 +161,7 @@ func TestReleaseWorkflowBuildsCompleteCandidateBeforeTagOnlyPublication(t *testi
 	for _, marker := range []string{
 		`tags: ["0.6.2"]`,
 		"workflow_dispatch:",
+		"published_revision: ${{ github.sha }}",
 		"if: github.event_name == 'push' && github.ref_type == 'tag'",
 		"needs: [binaries, contracts]",
 		"subject-path: candidate/out/workbench-*.tar.gz",
