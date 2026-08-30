@@ -112,6 +112,80 @@ func TestResolveDeclaredPlatformReturnsTheCompleteMultiOutputSet(t *testing.T) {
 	}
 }
 
+func TestOriginMainBasinDBManifestWithoutDeclarationIdentityRemainsVerifiable(t *testing.T) {
+	workbench, repository := multiOutputFixture(t)
+	const name = "basindb-state-sql-browser"
+	const candidateRoot = ".local-build/basindb-state-sql-browser"
+	writeMultiOutputCandidate(t, repository, candidateRoot, "local")
+	manifestPath := filepath.Join(repository, candidateRoot, "manifest.json")
+	encoded, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(encoded, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	delete(manifest, "declarationIdentity")
+	legacy, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, manifestPath, string(legacy)+"\n", 0o644)
+
+	var origin struct {
+		DeclarationIdentity string `json:"declarationIdentity"`
+		Outputs             []struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+		} `json:"outputs"`
+	}
+	if err := json.Unmarshal(legacy, &origin); err != nil {
+		t.Fatal(err)
+	}
+	if origin.DeclarationIdentity != "" {
+		t.Fatal("origin/main manifest unexpectedly gained declarationIdentity")
+	}
+	wantPaths := []string{
+		"basindb_sql_browser.js",
+		"basindb_sql_browser_bg.wasm",
+		"basindb_sql_browser.d.ts",
+		"basindb_sql_browser_bg.wasm.d.ts",
+	}
+	if len(origin.Outputs) != len(wantPaths) {
+		t.Fatalf("origin/main output count = %d, want %d", len(origin.Outputs), len(wantPaths))
+	}
+	for index, output := range origin.Outputs {
+		if output.Path != wantPaths[index] || len(output.SHA256) != 64 {
+			t.Fatalf("origin/main output[%d] = %#v, want path %q and internal SHA-256", index, output, wantPaths[index])
+		}
+	}
+
+	declaration := moduleDeclaration()
+	declaration.Candidates[0].Root = candidateRoot
+	declaration.Candidates[1].Root = ".ci-build/basindb-state-sql-browser"
+	source, err := os.ReadFile(filepath.Join(repository, "workbench.pkl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedProjection, err := buildable.EncodeProjection([]buildable.ProjectionOwner{{
+		Identity: "example/browser-module", RepositoryPath: "repos/browser-module", Source: source,
+		Buildables: map[string]buildable.Buildable{name: declaration},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(workbench, buildable.ProjectionPath), string(encodedProjection), 0o644)
+	if err := buildable.Verify(context.Background(), workbench, name, candidateRoot, false); err != nil {
+		t.Fatalf("origin/main manifest verify = %v", err)
+	}
+	head := gitOutput(t, repository, "rev-parse", "HEAD")
+	git(t, repository, "update-ref", "refs/remotes/origin/main", head)
+	if err := buildable.CheckFresh(context.Background(), workbench, name, candidateRoot, head, "origin/main"); err != nil {
+		t.Fatalf("origin/main manifest check-fresh = %v", err)
+	}
+}
+
 func TestMaterializeRefusesCorruptPreferredCandidateWithoutFallingThrough(t *testing.T) {
 	workbench, repository := multiOutputFixture(t)
 	writeMultiOutputCandidate(t, repository, ".ci-build/browser-module", "committed")

@@ -108,10 +108,36 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	}
 
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release-acceptance.yml"))
-	for _, marker := range []string{"mise install github:phosphorco/workbench-go@0.6.2", "workbench skills check", "workbench buildable resolve --name cold --platform linux-x86_64 --format json", `"digest":"[0-9a-f]{64}"`, "releases/download/0.6.2/workbench@0.6.1#/Repository.pkl", `root = ".local-build/cold"`, `root = ".ci-build/cold"`, `test ! -e "$MISE_DATA_DIR/installs"`, "published Workbench cold resolver=", "GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\"", "Verify and check freshness of an origin-shaped legacy manifest", "workbench buildable verify --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser", "workbench buildable check-fresh --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser --built-from HEAD --against origin/main", "origin-shaped fixture origin/main=", "origin-shaped legacy manifest verify exit=", "origin-shaped legacy manifest check-fresh exit=", "origin-shaped legacy manifest keys=", "origin-shaped legacy manifest source facts=synthetic fixture", "origin/main observed output identities=", "basindb_sql_browser.js", "basindb_sql_browser_bg.wasm", "basindb_sql_browser.d.ts", "basindb_sql_browser_bg.wasm.d.ts", "git clone --depth 1 --branch main https://github.com/phosphorco/monorepo.git", "Verify the published asset against the committed origin/main BasinDB browser candidate", "origin/main manifest output paths=", "origin/main producerInputs.algorithm=", "origin/main manifest declarationIdentity=absent", "bash acceptance/release_compatibility.sh", "command/scenario                  0.6.1 exit  0.6.2 exit", "python3 - \"$manifest\""} {
+	for _, marker := range []string{
+		"mise install github:phosphorco/workbench-go@0.6.2",
+		"workbench skills check",
+		"workbench buildable resolve --name cold --platform linux-x86_64 --format json",
+		`"digest":"[0-9a-f]{64}"`,
+		"releases/download/0.6.2/workbench@0.6.1#/Repository.pkl",
+		`root = ".local-build/cold"`, `root = ".ci-build/cold"`,
+		`test ! -e "$MISE_DATA_DIR/installs"`, "published Workbench cold resolver=",
+		"GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\"",
+		"Verify and check freshness of an origin-shaped legacy manifest",
+		"workbench buildable verify --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser",
+		"workbench buildable check-fresh --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser --built-from HEAD --against origin/main",
+		"origin-shaped fixture origin/main=", "origin-shaped legacy manifest verify exit=",
+		"origin-shaped legacy manifest check-fresh exit=", "origin-shaped legacy manifest keys=",
+		"origin-shaped legacy manifest source facts=synthetic fixture", "origin/main observed output identities=",
+		"basindb_sql_browser.js", "basindb_sql_browser_bg.wasm", "basindb_sql_browser.d.ts",
+		"Consume a candidate sealed by published 0.6.1 with published 0.6.2",
+		"revision:", "default: published-0.6.2", "github:phosphorco/workbench-go@0.6.1",
+		"releases/download/0.6.0/workbench@0.6.0#/Repository.pkl",
+		"published 0.6.1 legacy manifest declarationIdentity=absent",
+		"published 0.6.1 sealed output evidence=sha256", "published 0.6.2 consuming verify exit=",
+		"published 0.6.2 consuming check-fresh exit=", "bash acceptance/release_compatibility.sh",
+		"command/scenario                  0.6.1 exit  0.6.2 exit", "python3 - \"$manifest\"",
+	} {
 		if !strings.Contains(workflow, marker) {
 			t.Errorf("final public acceptance workflow lacks marker %q", marker)
 		}
+	}
+	if strings.Contains(workflow, "git clone --depth 1 --branch main https://github.com/phosphorco/monorepo.git") {
+		t.Fatal("release acceptance must not clone the private monorepo; use the public 0.6.1 seal/0.6.2 consume witness")
 	}
 	for _, forbidden := range []string{"workbench setup", "0.4.0/workbench@0.4.0", "workbench/proof-0.4.0"} {
 		if strings.Contains(workflow, forbidden) {
