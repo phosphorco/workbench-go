@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,6 +101,158 @@ buildables {
 	if _, err := os.Stat(filepath.Join(root, buildable.ProjectionPath)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cold lifecycle acquired a projection: %v", err)
 	}
+}
+
+func TestColdMaterializeEvaluatesLocalDeclarationAndPreservesRefusalSemantics(t *testing.T) {
+	t.Run("materializes without projection", func(t *testing.T) {
+		root, evaluator, _ := coldMaterializeFixture(t)
+		runColdMaterialize(t, root, evaluator)
+		contents, err := os.ReadFile(filepath.Join(root, "materialized", "runtime", "hello.js"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := string(contents), "hello\n"; got != want {
+			t.Fatalf("materialized output = %q, want %q", got, want)
+		}
+		if _, err := os.Stat(filepath.Join(root, buildable.ProjectionPath)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("cold materialization acquired a projection: %v", err)
+		}
+	})
+
+	for _, test := range []struct {
+		name string
+		mutate func(t *testing.T, root string)
+		code buildable.RefusalCode
+		reason string
+	}{
+		{
+			name: "corrupt preferred candidate does not fall through",
+			mutate: func(t *testing.T, root string) {
+				writeHandlerFile(t, filepath.Join(root, ".local-build/hello/hello.js"), []byte("tampered\n"), 0o644)
+			},
+			code: buildable.RefusalCandidateInvalid, reason: "hash mismatch",
+		},
+		{
+			name: "stale preferred candidate does not fall through",
+			mutate: func(t *testing.T, root string) {
+				writeHandlerFile(t, filepath.Join(root, "producer.txt"), []byte("changed\n"), 0o644)
+			},
+			code: buildable.RefusalStaleProducerInputs, reason: "stale artifact",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, evaluator, _ := coldMaterializeFixture(t)
+			test.mutate(t, root)
+			err := runColdMaterializeError(t, root, evaluator)
+			var refusal *buildable.Refusal
+			if !errors.As(err, &refusal) || refusal.Code != test.code || refusal.Candidate != ".local-build/hello" {
+				t.Fatalf("cold materialization error = %T %v, want %s refusal from local candidate", err, err, test.code)
+			}
+			if !strings.Contains(refusal.Reason, test.reason) || strings.Contains(err.Error(), ".ci-build/hello") {
+				t.Fatalf("cold refusal = %v, want reason %q without CI fall-through", err, test.reason)
+			}
+			if _, statErr := os.Stat(filepath.Join(root, "materialized")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("refused cold materialization changed destination: %v", statErr)
+			}
+		})
+	}
+
+	t.Run("present invalid projection remains projected", func(t *testing.T) {
+		root, evaluator, _ := coldMaterializeFixture(t)
+		writeHandlerFile(t, filepath.Join(root, buildable.ProjectionPath), []byte("not json\n"), 0o644)
+		err := runColdMaterializeError(t, root, evaluator)
+		var refusal *buildable.Refusal
+		if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalProjectionInvalid {
+			t.Fatalf("materialization error = %T %v, want projection refusal", err, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(root, "materialized")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("invalid projection acquired cold destination: %v", statErr)
+		}
+	})
+}
+
+func coldMaterializeFixture(t *testing.T) (string, evaluate.Evaluator, buildable.Buildable) {
+	t.Helper()
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	pkl, err = filepath.Abs(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	source := `amends "workbench-contract:/0.6.0/Repository.pkl"
+buildables {
+  ["hello"] = new Buildable {
+    inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
+    buildCommand = new BuildCommand { executable = "true" }
+    manifest = new ManifestContract { schemaVersion = 1; kind = "hello-manifest"; contractId = "hello-v1" }
+    candidates {
+      new BuildableCandidate { root = ".local-build/hello"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild the local candidate." }
+      new BuildableCandidate { root = ".ci-build/hello"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore the committed candidate." }
+    }
+    platforms {
+      ["browser-wasm"] = new BuildablePlatformOutput {
+        os { "browser" }
+        arch { "wasm32" }
+        outputs { new BuildableOutput { path = "hello.js"; destination = "runtime/hello.js"; kind = "module" } }
+      }
+    }
+  }
+}
+`
+	writeHandlerFile(t, filepath.Join(root, "workbench.pkl"), []byte(source), 0o644)
+	writeHandlerFile(t, filepath.Join(root, "producer.txt"), []byte("producer\n"), 0o644)
+	gitOutput(t, root, "init", "-q", "-b", "main")
+	gitOutput(t, root, "config", "user.name", "Workbench Test")
+	gitOutput(t, root, "config", "user.email", "workbench@example.invalid")
+	gitOutput(t, root, "add", "producer.txt", "workbench.pkl")
+	gitOutput(t, root, "commit", "-qm", "fixture")
+
+	for _, candidate := range []string{".local-build/hello", ".ci-build/hello"} {
+		writeHandlerFile(t, filepath.Join(root, candidate, "hello.js"), []byte("hello\n"), 0o644)
+		writeHandlerFile(t, filepath.Join(root, candidate, buildable.SourceDescriptorFilename), []byte(`{"source":{},"capabilities":[]}`+"\n"), 0o644)
+	}
+	declaration, err := setup.EvaluateCurrentDeclaration(context.Background(), evaluator, []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := declaration.Buildables["hello"]
+	for _, candidate := range selected.Candidates {
+		if err := buildable.SealDeclared(context.Background(), root, "hello", selected, candidate.Root); err != nil {
+			t.Fatalf("seal %s: %v", candidate.Root, err)
+		}
+	}
+	return root, evaluator, selected
+}
+
+func runColdMaterialize(t *testing.T, root string, evaluator evaluate.Evaluator) {
+	t.Helper()
+	if err := runWith(context.Background(), []string{
+		"buildable", "materialize", "--name", "hello", "--platform", "browser-wasm", "--destination", "materialized",
+	}, func() (string, error) {
+		return root, nil
+	}, io.Discard, io.Discard, applicationsForEnvironment(func() (commandEnvironment, error) {
+		return commandEnvironment{evaluator: evaluator}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runColdMaterializeError(t *testing.T, root string, evaluator evaluate.Evaluator) error {
+	t.Helper()
+	return runWith(context.Background(), []string{
+		"buildable", "materialize", "--name", "hello", "--platform", "browser-wasm", "--destination", "materialized",
+	}, func() (string, error) {
+		return root, nil
+	}, io.Discard, io.Discard, applicationsForEnvironment(func() (commandEnvironment, error) {
+		return commandEnvironment{evaluator: evaluator}, nil
+	}))
 }
 
 func writeHandlerFile(t *testing.T, path string, contents []byte, mode os.FileMode) {
