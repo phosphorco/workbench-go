@@ -3,15 +3,23 @@ name: Released distribution acceptance
 on:
   workflow_call:
     inputs:
-      revision:
-        description: Expected source revision label for the public compatibility witness.
+      published_revision:
+        description: Required revision embedded in the published binary; callers must state it explicitly.
+        required: true
+        type: string
+      fixture_revision:
+        description: Synthetic source revision label for the old-seal/new-consume fixture.
         required: false
         type: string
         default: published-0.6.2
   workflow_dispatch:
     inputs:
-      revision:
-        description: Expected source revision label for the public compatibility witness.
+      published_revision:
+        description: Required revision embedded in the published binary; enter the published release build revision.
+        required: true
+        type: string
+      fixture_revision:
+        description: Synthetic source revision label for the old-seal/new-consume fixture.
         required: false
         default: published-0.6.2
         type: string
@@ -31,6 +39,8 @@ jobs:
       GITHUB_TOKEN: ""
       MISE_GITHUB_GH_CLI_TOKENS: "false"
       MISE_GITHUB_USE_GIT_CREDENTIALS: "false"
+      EXPECTED_PUBLISHED_REVISION: ${{ inputs.published_revision }}
+      FIXTURE_REVISION: ${{ inputs.fixture_revision }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
@@ -43,7 +53,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/anonymous-home" "$RUNNER_TEMP/catalog/.agents/skills/release-smoke"
           export HOME="$RUNNER_TEMP/anonymous-home"
           mise install github:phosphorco/workbench-go@0.6.2
-          test "$(mise exec github:phosphorco/workbench-go@0.6.2 -- workbench version)" = "workbench 0.6.2 (${{ github.sha }})"
+          published_version="$(mise exec github:phosphorco/workbench-go@0.6.2 -- workbench version)"
+          expected_version="workbench 0.6.2 ($EXPECTED_PUBLISHED_REVISION)"
+          if [[ "$published_version" != "$expected_version" ]]; then
+            printf 'published binary provenance does not match expected published revision: observed=%s expected=%s\n' "$published_version" "$expected_version" >&2
+            exit 1
+          fi
           cat > "$RUNNER_TEMP/catalog/.agents/skills/release-smoke/SKILL.md" <<'EOF'
           ---
           name: release-smoke
@@ -257,8 +272,6 @@ jobs:
           ! printf '%s\n' "$result" | grep -Fq '"sha256"'
 
       - name: Consume a candidate sealed by published 0.6.1 with published 0.6.2
-        env:
-          ACCEPTANCE_REVISION: ${{ inputs.revision || 'published-0.6.2' }}
         run: |
           set -euo pipefail
           old_home="$RUNNER_TEMP/legacy-consumer-old-home"
@@ -310,6 +323,7 @@ jobs:
           printf 'producer\n' > "$root/producer.txt"
           printf '#!/bin/sh\nprintf compat\\n\n' > "$candidate/compat.bin"
           chmod 0755 "$candidate/compat.bin"
+          ACCEPTANCE_REVISION="$FIXTURE_REVISION"
           python3 - "$candidate/.workbench-buildable-source.json" "$ACCEPTANCE_REVISION" <<'PY'
           import json
           import sys
@@ -377,6 +391,14 @@ jobs:
           printf '%s\n' "$result" | grep -Eq '"destination":"bin/compat"'
           printf '%s\n' "$result" | grep -Eq '"digest":"[0-9a-f]{64}"'
           ! printf '%s\n' "$result" | grep -Fq '"sha256"'
+          receipt="$(new_workbench buildable materialize --name compat --platform linux-x86_64 --destination materialized)"
+          test ! -e "$root/.workbench"
+          printf '%s\n' "$receipt"
+          printf '%s\n' "$receipt" | grep -Eq '"candidate":"local"'
+          printf '%s\n' "$receipt" | grep -Eq '"platform":"linux-x86_64"'
+          printf '%s\n' "$receipt" | grep -Eq '"destination":"bin/compat"'
+          printf '%s\n' "$receipt" | grep -Eq '"digest":"[0-9a-f]{64}"'
+          ! printf '%s\n' "$receipt" | grep -Fq '"sha256"'
 
       - name: Compare the published five-command compatibility matrix
         # acceptance/release_compatibility.sh prints command/scenario                  0.6.1 exit  0.6.2 exit
