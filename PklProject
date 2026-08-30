@@ -3,6 +3,8 @@ amends "pkl:Project"
 local releaseCoordinate = "0.6.2"
 
 package {
+  // releaseCoordinate identifies the executable release/tag. The package
+  // version below identifies the independent schema contract.
   name = "workbench"
   baseUri = "package://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench"
   version = "0.6.1"

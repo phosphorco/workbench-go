@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,53 @@ const (
 	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1"
 	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1.zip"
 )
+
+func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
+	read := func(path string) string {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(contents)
+	}
+	project := read(filepath.Join("..", "PklProject"))
+	for _, marker := range []string{
+		`local releaseCoordinate = "0.6.2"`,
+		`baseUri = "package://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench"`,
+		`version = "0.6.1"`,
+		`"https://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench@\(version).zip"`,
+	} {
+		if !strings.Contains(project, marker) {
+			t.Fatalf("PklProject lacks current independent release marker %q", marker)
+		}
+	}
+	if strings.Contains(project, "releases/download/0.6.1/workbench@0.6.1") {
+		t.Fatal("PklProject points at nonexistent release coordinate 0.6.1 for contract package 0.6.1")
+	}
+
+	workflow := read(filepath.Join("..", ".github", "workflows", "release.yml"))
+	for _, marker := range []string{
+		"WORKBENCH_VERSION: 0.6.2",
+		"WORKBENCH_CONTRACT_VERSION: 0.6.1",
+		"mise exec -- pkl project package --skip-publish-check --output-path contracts .",
+		"contracts/workbench@0.6.1.zip",
+		"gh release create \"${{ github.ref_name }}\" release-assets/*",
+	} {
+		if !strings.Contains(workflow, marker) {
+			t.Fatalf("release workflow lacks current contract publication marker %q", marker)
+		}
+	}
+	if currentReleasePackageURI != "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1" {
+		t.Fatalf("current contract URI = %q, want the 0.6.2 release asset", currentReleasePackageURI)
+	}
+	acceptance := read(filepath.Join("..", ".github", "workflows", "release-acceptance.yml"))
+	if !strings.Contains(acceptance, currentReleasePackageURI+"#/Repository.pkl") {
+		t.Fatal("release acceptance does not amend the package asset produced under release 0.6.2")
+	}
+	if strings.Contains(acceptance, "releases/download/0.6.1/workbench@0.6.1") {
+		t.Fatal("release acceptance points at nonexistent release coordinate 0.6.1 for contract package 0.6.1")
+	}
+}
 
 func TestReleasePackageCandidate(t *testing.T) {
 	projectRoot := filepath.Clean("..")
