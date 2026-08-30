@@ -2,7 +2,19 @@ name: Released distribution acceptance
 
 on:
   workflow_call:
+    inputs:
+      revision:
+        description: Expected source revision label for the public compatibility witness.
+        required: false
+        type: string
+        default: published-0.6.2
   workflow_dispatch:
+    inputs:
+      revision:
+        description: Expected source revision label for the public compatibility witness.
+        required: false
+        default: published-0.6.2
+        type: string
 
 permissions:
   contents: read
@@ -244,23 +256,86 @@ jobs:
           printf '%s\n' "$result" | grep -Eq '"digest":"[0-9a-f]{64}"'
           ! printf '%s\n' "$result" | grep -Fq '"sha256"'
 
-      - name: Verify the published asset against the committed origin/main BasinDB browser candidate
+      - name: Consume a candidate sealed by published 0.6.1 with published 0.6.2
+        env:
+          ACCEPTANCE_REVISION: ${{ inputs.revision || 'published-0.6.2' }}
         run: |
           set -euo pipefail
-          export HOME="$RUNNER_TEMP/origin-main-mise-home"
-          export MISE_DATA_DIR="$RUNNER_TEMP/origin-main-mise-data"
-          export MISE_CACHE_DIR="$RUNNER_TEMP/origin-main-mise-cache"
-          export MISE_STATE_DIR="$RUNNER_TEMP/origin-main-mise-state"
-          export MISE_CONFIG_DIR="$RUNNER_TEMP/origin-main-mise-config"
-          mkdir -p "$HOME" "$MISE_DATA_DIR" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_CONFIG_DIR"
-          mise install github:phosphorco/workbench-go@0.6.2
-          root="$RUNNER_TEMP/monorepo-origin-main"
-          git clone --depth 1 --branch main https://github.com/phosphorco/monorepo.git "$root"
-          candidate="$root/.ci-build/basindb-state-sql-browser"
-          test -f "$root/workbench.pkl"
-          test -f "$candidate/manifest.json"
+          old_home="$RUNNER_TEMP/legacy-consumer-old-home"
+          old_data="$RUNNER_TEMP/legacy-consumer-old-data"
+          old_cache="$RUNNER_TEMP/legacy-consumer-old-cache"
+          old_state="$RUNNER_TEMP/legacy-consumer-old-state"
+          old_config="$RUNNER_TEMP/legacy-consumer-old-config"
+          new_home="$RUNNER_TEMP/legacy-consumer-new-home"
+          new_data="$RUNNER_TEMP/legacy-consumer-new-data"
+          new_cache="$RUNNER_TEMP/legacy-consumer-new-cache"
+          new_state="$RUNNER_TEMP/legacy-consumer-new-state"
+          new_config="$RUNNER_TEMP/legacy-consumer-new-config"
+          mkdir -p "$old_home" "$old_data" "$old_cache" "$old_state" "$old_config" "$new_home" "$new_data" "$new_cache" "$new_state" "$new_config"
+          (HOME="$old_home" MISE_DATA_DIR="$old_data" MISE_CACHE_DIR="$old_cache" MISE_STATE_DIR="$old_state" MISE_CONFIG_DIR="$old_config" mise install github:phosphorco/workbench-go@0.6.1)
+          (HOME="$new_home" MISE_DATA_DIR="$new_data" MISE_CACHE_DIR="$new_cache" MISE_STATE_DIR="$new_state" MISE_CONFIG_DIR="$new_config" mise install github:phosphorco/workbench-go@0.6.2)
+          root="$RUNNER_TEMP/public-legacy-consumer"
+          candidate="$root/.local-build/compat"
+          mkdir -p "$candidate"
+          cat > "$root/workbench.pkl" <<'EOF'
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl"
+          buildables {
+            ["compat"] = new Buildable {
+              inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
+              buildCommand = new BuildCommand { executable = "true" }
+              manifest = new ManifestContract {
+                schemaVersion = 1
+                kind = "public-compatibility-manifest"
+                contractId = "public-compatibility-v1"
+                expectedSource { ["repository"] = "synthetic/public-compatibility" }
+                requiredSourceFields { "revision" }
+                requiredCapabilities { "compatibility-v1" }
+              }
+              candidates {
+                new BuildableCandidate { root = ".local-build/compat"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild the public compatibility candidate." }
+                new BuildableCandidate { root = ".ci-build/compat"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore the committed compatibility candidate." }
+              }
+              platforms {
+                ["linux-x86_64"] = new BuildablePlatformOutput {
+                  os { "linux" }
+                  arch { "amd64" }
+                  outputs { new BuildableOutput { path = "compat.bin"; destination = "bin/compat"; kind = "executable"; executable = true } }
+                }
+              }
+            }
+          }
+          EOF
+          printf 'producer\n' > "$root/producer.txt"
+          printf '#!/bin/sh\nprintf compat\\n\n' > "$candidate/compat.bin"
+          chmod 0755 "$candidate/compat.bin"
+          python3 - "$candidate/.workbench-buildable-source.json" "$ACCEPTANCE_REVISION" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "w", encoding="utf-8") as stream:
+              json.dump({
+                  "source": {"repository": "synthetic/public-compatibility", "revision": sys.argv[2]},
+                  "capabilities": ["compatibility-v1"],
+              }, stream)
+              stream.write("\n")
+          PY
+          git -C "$root" init -q -b main
+          git -C "$root" config user.name "Workbench public compatibility acceptance"
+          git -C "$root" config user.email "workbench-release@example.invalid"
+          git -C "$root" add producer.txt workbench.pkl
+          git -C "$root" commit -qm fixture
+          git -C "$root" update-ref refs/remotes/origin/main HEAD
+          printf 'public compatibility source revision=%s\n' "$ACCEPTANCE_REVISION"
+          old_workbench() {
+            (cd "$root" && HOME="$old_home" MISE_DATA_DIR="$old_data" MISE_CACHE_DIR="$old_cache" MISE_STATE_DIR="$old_state" MISE_CONFIG_DIR="$old_config" mise exec github:phosphorco/workbench-go@0.6.1 -- workbench "$@")
+          }
+          new_workbench() {
+            (cd "$root" && HOME="$new_home" MISE_DATA_DIR="$new_data" MISE_CACHE_DIR="$new_cache" MISE_STATE_DIR="$new_state" MISE_CONFIG_DIR="$new_config" mise exec github:phosphorco/workbench-go@0.6.2 -- workbench "$@")
+          }
+          old_workbench buildable seal --name compat --candidate-root .local-build/compat
           test ! -e "$root/.workbench"
           manifest="$candidate/manifest.json"
+          test -s "$manifest"
           python3 - "$manifest" <<'PY'
           import json
           import re
@@ -268,43 +343,38 @@ jobs:
 
           with open(sys.argv[1], encoding="utf-8") as stream:
               manifest = json.load(stream)
-          required_keys = {"schemaVersion", "kind", "contractId", "source", "producerInputs", "capabilities", "outputs"}
-          if set(manifest) != required_keys:
-              raise SystemExit(f"unexpected origin/main manifest keys: {sorted(manifest)}")
           if "declarationIdentity" in manifest:
-              raise SystemExit("origin/main manifest unexpectedly contains declarationIdentity")
-          expected_paths = [
-              "basindb_sql_browser.js",
-              "basindb_sql_browser_bg.wasm",
-              "basindb_sql_browser.d.ts",
-              "basindb_sql_browser_bg.wasm.d.ts",
-          ]
-          actual_paths = [output["path"] for output in manifest["outputs"]]
-          if actual_paths != expected_paths:
-              raise SystemExit(f"unexpected origin/main output paths: {actual_paths}")
-          if manifest["producerInputs"]["algorithm"] != "sha256":
-              raise SystemExit(f"unexpected origin/main producer input algorithm: {manifest['producerInputs']}")
-          if not re.fullmatch(r"[0-9a-f]{64}", manifest["producerInputs"]["digest"]):
-              raise SystemExit("origin/main producer input digest is not SHA-256")
-          if any(not re.fullmatch(r"[0-9a-f]{64}", output["sha256"]) for output in manifest["outputs"]):
-              raise SystemExit("origin/main output SHA-256 evidence is incomplete")
-          print(f"origin/main manifest keys={sorted(manifest)}")
-          print(f"origin/main manifest output paths={actual_paths}")
-          print(f"origin/main producerInputs.algorithm={manifest['producerInputs']['algorithm']}")
-          print(f"origin/main producerInputs.digest={manifest['producerInputs']['digest']}")
-          print("origin/main manifest declarationIdentity=absent")
+              raise SystemExit("published 0.6.1 legacy manifest unexpectedly contains declarationIdentity")
+          if manifest["source"]["repository"] != "synthetic/public-compatibility":
+              raise SystemExit(f"unexpected public compatibility source: {manifest['source']}")
+          if manifest["producerInputs"]["algorithm"] != "sha256" or not re.fullmatch(r"[0-9a-f]{64}", manifest["producerInputs"]["digest"]):
+              raise SystemExit("published 0.6.1 producer input evidence is incomplete")
+          if len(manifest["outputs"]) != 1 or manifest["outputs"][0]["path"] != "compat.bin":
+              raise SystemExit(f"unexpected public compatibility outputs: {manifest['outputs']}")
+          if not re.fullmatch(r"[0-9a-f]{64}", manifest["outputs"][0]["sha256"]):
+              raise SystemExit("published 0.6.1 output SHA-256 evidence is incomplete")
+          print(f"published 0.6.1 legacy manifest keys={sorted(manifest)}")
+          print("published 0.6.1 legacy manifest declarationIdentity=absent")
+          print("published 0.6.1 sealed output evidence=sha256")
           PY
-          built_from="$(git -C "$root" rev-parse origin/main)"
           verify_status=0
-          (cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable verify --name basindb-state-sql-browser --candidate-root .ci-build/basindb-state-sql-browser) || verify_status=$?
-          printf 'origin/main BasinDB browser verify exit=%s\n' "$verify_status"
+          new_workbench buildable verify --name compat --candidate-root .local-build/compat || verify_status=$?
+          printf 'published 0.6.2 consuming verify exit=%s\n' "$verify_status"
           test "$verify_status" -eq 0
           test ! -e "$root/.workbench"
           fresh_status=0
-          (cd "$root" && mise exec github:phosphorco/workbench-go@0.6.2 -- workbench buildable check-fresh --name basindb-state-sql-browser --candidate-root .ci-build/basindb-state-sql-browser --built-from "$built_from" --against origin/main) || fresh_status=$?
-          printf 'origin/main BasinDB browser check-fresh exit=%s\n' "$fresh_status"
+          new_workbench buildable check-fresh --name compat --candidate-root .local-build/compat --built-from HEAD --against origin/main || fresh_status=$?
+          printf 'published 0.6.2 consuming check-fresh exit=%s\n' "$fresh_status"
           test "$fresh_status" -eq 0
           test ! -e "$root/.workbench"
+          result="$(new_workbench buildable resolve --name compat --platform linux-x86_64 --format json)"
+          test ! -e "$root/.workbench"
+          printf '%s\n' "$result"
+          printf '%s\n' "$result" | grep -Eq '"candidate":"local"'
+          printf '%s\n' "$result" | grep -Eq '"platform":"linux-x86_64"'
+          printf '%s\n' "$result" | grep -Eq '"destination":"bin/compat"'
+          printf '%s\n' "$result" | grep -Eq '"digest":"[0-9a-f]{64}"'
+          ! printf '%s\n' "$result" | grep -Fq '"sha256"'
 
       - name: Compare the published five-command compatibility matrix
         # acceptance/release_compatibility.sh prints command/scenario                  0.6.1 exit  0.6.2 exit
