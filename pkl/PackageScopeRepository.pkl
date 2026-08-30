@@ -79,11 +79,20 @@ class BuildableCandidate {
   invalidRemedy: NonEmptyString
 }
 
+class BuildableOutput {
+  path: RelativePath
+  destination: RelativePath
+  kind: NonEmptyString
+  executable: Boolean = false
+}
+
 class BuildablePlatformOutput {
   os: Listing<NonEmptyString>(length > 0)
   arch: Listing<NonEmptyString>(length > 0)
-  path: RelativePath
+  /// Legacy single-output field retained so 0.6 declarations remain parseable.
+  path: RelativePath? = null
   executable: Boolean = true
+  outputs: Listing<BuildableOutput> = new {}
 }
 
 class Buildable {

@@ -27,7 +27,7 @@ const (
 	ProjectionPath = ".workbench/buildables.json"
 	// ProjectionSchemaDigest binds the projection to the released Pkl schema
 	// interpreted by this binary. A schema edit must update this digest.
-	ProjectionSchemaDigest  = "229f7da5905c2463baae68650ecf758527ade2943d0dcaf5a1c47594d17d630e"
+	ProjectionSchemaDigest  = "e66e5b5997e5730fe026ed45aa1776c9ceae99e62095b18cf0f6584bd24d931d"
 	projectionSchemaVersion = 1
 )
 
@@ -48,6 +48,7 @@ const (
 	RefusalDirtyProducerInputs RefusalCode = "dirtyProducerInputs"
 	RefusalStaleProducerInputs RefusalCode = "staleProducerInputs"
 	RefusalCandidatesAbsent    RefusalCode = "candidatesAbsent"
+	RefusalNotExecutable       RefusalCode = "notExecutable"
 )
 
 // Refusal is a buildable that cannot lawfully run and its actionable remedy.
@@ -71,6 +72,7 @@ func (refusal *Refusal) Error() string {
 type Resolution struct {
 	Buildable string `json:"buildable"`
 	Candidate string `json:"candidate"`
+	Platform  string `json:"platform"`
 	Path      string `json:"path"`
 }
 
@@ -148,10 +150,22 @@ type Candidate struct {
 }
 
 type Platform struct {
-	OS         []string `json:"os"`
-	Arch       []string `json:"arch"`
-	Path       string   `json:"path"`
-	Executable bool     `json:"executable"`
+	OS   []string `json:"os"`
+	Arch []string `json:"arch"`
+	// Path and Executable are the 0.6 single-output shape. They remain
+	// accepted so existing declarations continue to parse and run.
+	Path       string   `json:"path,omitempty"`
+	Executable bool     `json:"executable,omitempty"`
+	Outputs    []Output `json:"outputs,omitempty"`
+}
+
+// Output is one candidate-relative generated file. Destination is relative
+// to the explicit materialization destination, never to a candidate root.
+type Output struct {
+	Path        string `json:"path"`
+	Destination string `json:"destination"`
+	Kind        string `json:"kind"`
+	Executable  bool   `json:"executable"`
 }
 
 type artifactManifest struct {
@@ -168,11 +182,18 @@ type artifactManifest struct {
 }
 
 type artifactOutput struct {
-	Platform   string `json:"platform"`
-	Path       string `json:"path"`
-	SHA256     string `json:"sha256"`
-	Size       int64  `json:"size"`
-	Executable bool   `json:"executable"`
+	Platform    string `json:"platform"`
+	Path        string `json:"path"`
+	Destination string `json:"destination,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	SHA256      string `json:"sha256"`
+	Size        int64  `json:"size"`
+	Executable  bool   `json:"executable"`
+}
+
+type candidateVerification struct {
+	Root    string
+	Outputs map[string][]artifactOutput
 }
 
 // EncodeProjection validates and deterministically encodes all owner declarations.
@@ -315,21 +336,46 @@ func resolveDeclared(ctx context.Context, root, name string, declaration Buildab
 			Remedy: "Run this buildable on one of its declared host platforms.",
 		}
 	}
+	candidate, verified, err := resolveCandidate(ctx, root, name, declaration, platformName)
+	if err != nil {
+		return Resolution{}, err
+	}
+	resolution := Resolution{Buildable: name, Candidate: candidate.Root, Platform: platformName}
+	if output, exists := executableOutput(platform); exists {
+		resolution.Path, err = existingPathWithin(verified.Root, output.Path)
+		if err != nil {
+			return Resolution{}, &Refusal{
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
+				Reason: fmt.Sprintf("selected executable output %q is missing or escapes the candidate: %v", output.Path, err),
+				Remedy: candidate.InvalidRemedy,
+			}
+		}
+	}
+	return resolution, nil
+}
+
+func resolveCandidate(ctx context.Context, root, name string, declaration Buildable, selectedPlatform string) (Candidate, candidateVerification, error) {
 	for _, candidate := range declaration.Candidates {
 		present, err := candidatePresent(root, candidate, declaration.Platforms)
 		if err != nil {
-			return Resolution{}, fmt.Errorf("observe buildable %q candidate %q: %w", name, candidate.Root, err)
+			return Candidate{}, candidateVerification{}, fmt.Errorf("observe buildable %q candidate %q: %w", name, candidate.Root, err)
 		}
 		if !present {
 			continue
 		}
-		path, code, err := verifyCandidate(ctx, root, declaration, candidate, platformName, platform)
+		verified, code, err := verifyCandidate(ctx, root, declaration, candidate)
 		if err != nil {
-			return Resolution{}, &Refusal{Code: code, Buildable: name, Candidate: candidate.Root, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
+			return Candidate{}, candidateVerification{}, &Refusal{Code: code, Buildable: name, Candidate: candidate.Root, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 		}
-		return Resolution{Buildable: name, Candidate: candidate.Root, Path: path}, nil
+		if _, exists := verified.Outputs[selectedPlatform]; !exists {
+			return Candidate{}, candidateVerification{}, &Refusal{
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
+				Reason: fmt.Sprintf("candidate has no validated outputs for platform %q", selectedPlatform), Remedy: candidate.InvalidRemedy,
+			}
+		}
+		return candidate, verified, nil
 	}
-	return Resolution{}, &Refusal{
+	return Candidate{}, candidateVerification{}, &Refusal{
 		Code: RefusalCandidatesAbsent, Buildable: name,
 		Reason: "no declared artifact candidate is present",
 		Remedy: fmt.Sprintf("Run '%s' to create the preferred local candidate.", declaration.BuildCommand.String()),
@@ -362,6 +408,13 @@ func Run(ctx context.Context, workbenchRoot, name string, arguments []string) er
 	resolution, err := Resolve(ctx, workbenchRoot, name, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
+	}
+	if resolution.Path == "" {
+		return &Refusal{
+			Code: RefusalNotExecutable, Buildable: name, Candidate: resolution.Candidate,
+			Reason: fmt.Sprintf("platform %q declares no executable output; run is only for executable buildables", resolution.Platform),
+			Remedy: "Use 'workbench buildable materialize' with an explicit destination for this module.",
+		}
 	}
 	argv := append([]string{resolution.Path}, arguments...)
 	if err := syscall.Exec(resolution.Path, argv, os.Environ()); err != nil {
@@ -494,19 +547,85 @@ func (buildable Buildable) Validate() error {
 		if duplicates(platform.OS) || duplicates(platform.Arch) {
 			return fmt.Errorf("platform %q host aliases are empty or duplicated", name)
 		}
-		if err := validateRelativePath(platform.Path); err != nil {
-			return fmt.Errorf("platform %q output path: %w", name, err)
+		outputs, err := platform.outputs()
+		if err != nil {
+			return fmt.Errorf("platform %q: %w", name, err)
 		}
-		normalizedPath := strings.ToLower(filepath.ToSlash(filepath.Clean(filepath.FromSlash(platform.Path))))
-		if previous, duplicate := seenOutputPaths[normalizedPath]; duplicate {
-			return fmt.Errorf("platforms %q and %q share normalized output path %q", previous, name, normalizedPath)
+		seenDestinations := make(map[string]string, len(outputs))
+		executableOutputs := 0
+		for _, output := range outputs {
+			if err := validateRelativePath(output.Path); err != nil {
+				return fmt.Errorf("platform %q output path: %w", name, err)
+			}
+			normalizedPath := strings.ToLower(filepath.ToSlash(filepath.Clean(filepath.FromSlash(output.Path))))
+			if previous, duplicate := seenOutputPaths[normalizedPath]; duplicate {
+				return fmt.Errorf("platforms %q and %q share normalized output path %q", previous, name, normalizedPath)
+			}
+			seenOutputPaths[normalizedPath] = name
+			if output.Kind == "" {
+				return fmt.Errorf("platform %q output %q kind is empty", name, output.Path)
+			}
+			if output.Executable {
+				executableOutputs++
+			}
+			if len(platform.Outputs) > 0 {
+				if err := validateRelativePath(output.Destination); err != nil {
+					return fmt.Errorf("platform %q output %q destination: %w", name, output.Path, err)
+				}
+				normalizedDestination := strings.ToLower(filepath.ToSlash(filepath.Clean(filepath.FromSlash(output.Destination))))
+				if previous, duplicate := seenDestinations[normalizedDestination]; duplicate {
+					return fmt.Errorf("platform %q outputs %q and %q share normalized destination %q", name, previous, output.Path, normalizedDestination)
+				}
+				seenDestinations[normalizedDestination] = output.Path
+			}
 		}
-		seenOutputPaths[normalizedPath] = name
-		if !platform.Executable {
-			return fmt.Errorf("platform %q output is not executable", name)
+		if executableOutputs > 1 {
+			return fmt.Errorf("platform %q declares %d executable outputs; run requires exactly one", name, executableOutputs)
+		}
+		for _, left := range outputs {
+			for _, right := range outputs {
+				if left.Path != right.Path && pathPrefix(left.Path, right.Path) {
+					return fmt.Errorf("platform %q outputs have colliding paths %q and %q", name, left.Path, right.Path)
+				}
+				if len(platform.Outputs) > 0 && left.Destination != right.Destination && pathPrefix(left.Destination, right.Destination) {
+					return fmt.Errorf("platform %q outputs have colliding destinations %q and %q", name, left.Destination, right.Destination)
+				}
+			}
 		}
 	}
 	return nil
+}
+
+func (platform Platform) outputs() ([]Output, error) {
+	if len(platform.Outputs) == 0 {
+		if platform.Path == "" {
+			return nil, errors.New("output set is empty")
+		}
+		return []Output{{Path: platform.Path, Kind: "executable", Executable: platform.Executable}}, nil
+	}
+	if platform.Path != "" {
+		return nil, errors.New("legacy path cannot be combined with an output set")
+	}
+	return platform.Outputs, nil
+}
+
+func pathPrefix(parent, child string) bool {
+	parent = filepath.ToSlash(filepath.Clean(filepath.FromSlash(parent)))
+	child = filepath.ToSlash(filepath.Clean(filepath.FromSlash(child)))
+	return strings.HasPrefix(child, parent+"/")
+}
+
+func executableOutput(platform Platform) (Output, bool) {
+	outputs, err := platform.outputs()
+	if err != nil {
+		return Output{}, false
+	}
+	for _, output := range outputs {
+		if output.Executable {
+			return output, true
+		}
+	}
+	return Output{}, false
 }
 
 // ValidateForName adds the fixed local-then-CI candidate topology.
@@ -559,50 +678,41 @@ func candidatePresent(root string, candidate Candidate, _ map[string]Platform) (
 	return false, err
 }
 
-func verifyCandidate(ctx context.Context, root string, buildable Buildable, candidate Candidate, selectedName string, selected Platform) (string, RefusalCode, error) {
+func verifyCandidate(ctx context.Context, root string, buildable Buildable, candidate Candidate) (candidateVerification, RefusalCode, error) {
 	candidateRoot, err := existingPathWithin(root, candidate.Root)
 	if err != nil {
-		return "", RefusalCandidateInvalid, fmt.Errorf("candidate root is not confined to the repository: %w", err)
+		return candidateVerification{}, RefusalCandidateInvalid, fmt.Errorf("candidate root is not confined to the repository: %w", err)
 	}
 	manifestPath, err := existingPathWithin(candidateRoot, "manifest.json")
 	if err != nil {
-		return "", RefusalCandidateInvalid, fmt.Errorf("manifest is missing or escapes the candidate root: %w", err)
+		return candidateVerification{}, RefusalCandidateInvalid, fmt.Errorf("manifest is missing or escapes the candidate root: %w", err)
 	}
 	manifest, err := readManifest(manifestPath)
 	if err != nil {
-		return "", RefusalCandidateInvalid, err
+		return candidateVerification{}, RefusalCandidateInvalid, err
 	}
 	if err := validateManifest(buildable, manifest); err != nil {
-		return "", RefusalCandidateInvalid, err
+		return candidateVerification{}, RefusalCandidateInvalid, err
 	}
 	currentDigest, err := candidateInputDigest(ctx, root, candidate, buildable.InputDetection.Paths)
 	if err != nil {
-		return "", RefusalCandidateInvalid, err
+		return candidateVerification{}, RefusalCandidateInvalid, err
 	}
 	if manifest.ProducerInputs.Digest != currentDigest {
-		return "", RefusalStaleProducerInputs, fmt.Errorf("stale artifact: producer input digest is %s, current inputs require %s", manifest.ProducerInputs.Digest, currentDigest)
+		return candidateVerification{}, RefusalStaleProducerInputs, fmt.Errorf("stale artifact: producer input digest is %s, current inputs require %s", manifest.ProducerInputs.Digest, currentDigest)
 	}
-	outputs := make(map[string]artifactOutput, len(manifest.Outputs))
+	outputs := make(map[string][]artifactOutput, len(buildable.Platforms))
 	for _, output := range manifest.Outputs {
-		outputs[output.Platform] = output
-		platform := buildable.Platforms[output.Platform]
-		artifactPath, err := existingPathWithin(candidateRoot, platform.Path)
+		artifactPath, err := existingPathWithin(candidateRoot, output.Path)
 		if err != nil {
-			return "", RefusalCandidateInvalid, fmt.Errorf("output %s is missing or escapes the candidate root: %w", output.Platform, err)
+			return candidateVerification{}, RefusalCandidateInvalid, fmt.Errorf("output %s is missing or escapes the candidate root: %w", output.Path, err)
 		}
 		if err := verifyOutput(artifactPath, output); err != nil {
-			return "", RefusalCandidateInvalid, fmt.Errorf("output %s: %w", output.Platform, err)
+			return candidateVerification{}, RefusalCandidateInvalid, fmt.Errorf("output %s: %w", output.Path, err)
 		}
+		outputs[output.Platform] = append(outputs[output.Platform], output)
 	}
-	output := outputs[selectedName]
-	path, err := existingPathWithin(candidateRoot, output.Path)
-	if err != nil {
-		return "", RefusalCandidateInvalid, fmt.Errorf("selected output %s is missing or escapes the candidate root: %w", selectedName, err)
-	}
-	if output.Path != selected.Path {
-		return "", RefusalCandidateInvalid, fmt.Errorf("selected output path is %q, want %q", output.Path, selected.Path)
-	}
-	return path, "", nil
+	return candidateVerification{Root: candidateRoot, Outputs: outputs}, "", nil
 }
 
 func readManifest(path string) (artifactManifest, error) {
@@ -649,8 +759,16 @@ func validateManifest(buildable Buildable, manifest artifactManifest) error {
 			return fmt.Errorf("manifest lacks required capability %q", required)
 		}
 	}
-	if len(manifest.Outputs) != len(buildable.Platforms) {
-		return fmt.Errorf("manifest has %d outputs, want %d", len(manifest.Outputs), len(buildable.Platforms))
+	wantedOutputs := 0
+	for platformName, platform := range buildable.Platforms {
+		outputs, err := platform.outputs()
+		if err != nil {
+			return fmt.Errorf("platform %q: %w", platformName, err)
+		}
+		wantedOutputs += len(outputs)
+	}
+	if len(manifest.Outputs) != wantedOutputs {
+		return fmt.Errorf("manifest has %d outputs, want %d", len(manifest.Outputs), wantedOutputs)
 	}
 	seen := make(map[string]struct{}, len(manifest.Outputs))
 	for _, output := range manifest.Outputs {
@@ -658,18 +776,49 @@ func validateManifest(buildable Buildable, manifest artifactManifest) error {
 		if !exists {
 			return fmt.Errorf("manifest has unexpected platform %q", output.Platform)
 		}
-		if _, duplicate := seen[output.Platform]; duplicate {
-			return fmt.Errorf("manifest repeats platform %q", output.Platform)
+		declaredOutputs, err := platform.outputs()
+		if err != nil {
+			return fmt.Errorf("platform %q: %w", output.Platform, err)
 		}
-		seen[output.Platform] = struct{}{}
-		if filepath.ToSlash(filepath.Clean(output.Path)) != filepath.ToSlash(filepath.Clean(platform.Path)) {
-			return fmt.Errorf("manifest output path for %s is %q, want %q", output.Platform, output.Path, platform.Path)
+		key := outputKey(output.Platform, output.Path)
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("manifest repeats output %s", key)
 		}
-		if !sha256Pattern.MatchString(output.SHA256) || output.Size <= 0 || output.Executable != platform.Executable {
+		seen[key] = struct{}{}
+		var declared *Output
+		for index := range declaredOutputs {
+			if filepath.ToSlash(filepath.Clean(declaredOutputs[index].Path)) == filepath.ToSlash(filepath.Clean(output.Path)) {
+				declared = &declaredOutputs[index]
+				break
+			}
+		}
+		if declared == nil {
+			return fmt.Errorf("manifest output path for %s is %q not declared", output.Platform, output.Path)
+		}
+		kind := output.Kind
+		if len(platform.Outputs) == 0 && kind == "" {
+			kind = declared.Kind
+		}
+		if !sha256Pattern.MatchString(output.SHA256) || output.Size <= 0 || output.Executable != declared.Executable || kind != declared.Kind {
 			return fmt.Errorf("manifest output facts for %s are invalid", output.Platform)
+		}
+		if len(platform.Outputs) > 0 && filepath.ToSlash(filepath.Clean(output.Destination)) != filepath.ToSlash(filepath.Clean(declared.Destination)) {
+			return fmt.Errorf("manifest output destination for %s is %q, want %q", output.Platform, output.Destination, declared.Destination)
+		}
+	}
+	for platformName, platform := range buildable.Platforms {
+		outputs, _ := platform.outputs()
+		for _, declared := range outputs {
+			if _, exists := seen[outputKey(platformName, declared.Path)]; !exists {
+				return fmt.Errorf("manifest omits output %s", outputKey(platformName, declared.Path))
+			}
 		}
 	}
 	return nil
+}
+
+func outputKey(platform, path string) string {
+	return platform + "\x00" + filepath.ToSlash(filepath.Clean(filepath.FromSlash(path)))
 }
 
 func gitWorktreeStatus(ctx context.Context, root string, paths []string) ([]byte, error) {

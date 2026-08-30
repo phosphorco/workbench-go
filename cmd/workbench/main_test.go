@@ -43,6 +43,7 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 		{"verify buildable", []string{"buildable", "verify", "--run-declared-verification", "--candidate-root", ".local-build/tsgo", "--name", "tsgo"}, call{name: "buildable verify", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", "true"}}},
 		{"check buildable freshness", []string{"buildable", "check-fresh", "--name", "tsgo", "--against", "origin/main", "--candidate-root", ".local-build/tsgo", "--built-from", "abc"}, call{name: "buildable check-fresh", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", "abc", "origin/main"}}},
 		{"promote buildable", []string{"buildable", "promote", "--committed-root", ".ci-build/tsgo", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"}, call{name: "buildable promote", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", ".ci-build/tsgo"}}},
+		{"materialize buildable", []string{"buildable", "materialize", "--destination", "pkg/@scope", "--platform", "browser-wasm", "--name", "browser-module"}, call{name: "buildable materialize", root: "/workbench", values: []string{"browser-module", "browser-wasm", "pkg/@scope"}}},
 		{"skills check", []string{"skills", "check"}, call{name: "skills check", root: "/workbench"}},
 		{"version", []string{"version"}, call{name: "version"}},
 	}
@@ -78,6 +79,7 @@ func TestInvalidCommandsAcquireNoAuthority(t *testing.T) {
 		{"buildable", "verify", "--name", "tsgo", "--run-declared-verification", "--run-declared-verification", "--candidate-root", ".local-build/tsgo"},
 		{"buildable", "check-fresh", "--name", "tsgo", "--candidate-root", ".local-build/tsgo", "--built-from", "a"},
 		{"buildable", "promote", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"},
+		{"buildable", "materialize", "--name", "browser-module", "--platform", "browser-wasm"},
 		{"skills"}, {"skills", "check", "--root", "/tmp"}, {"skills", "list"}, {"version", "extra"},
 	}
 	for _, arguments := range invalid {
@@ -490,6 +492,10 @@ func recordingApplications(calls *[]call) applications {
 		},
 		promoteBuildable: func(_ context.Context, root, name, candidate, committed string) error {
 			*calls = append(*calls, call{name: "buildable promote", root: root, values: []string{name, candidate, committed}})
+			return nil
+		},
+		materializeBuildable: func(_ context.Context, root, name, platform, destination string) error {
+			*calls = append(*calls, call{name: "buildable materialize", root: root, values: []string{name, platform, destination}})
 			return nil
 		},
 		skillsCheck: func(_ context.Context, root string) (skills.Report, error) {

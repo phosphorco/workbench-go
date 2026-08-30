@@ -22,7 +22,7 @@ import (
 const (
 	defaultCommitPlan = "commit-plan.pkl"
 	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
-	usage             = "usage: workbench setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable check|build|seal|verify|check-fresh|promote ... | skills check | version"
+	usage             = "usage: workbench setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable check|build|seal|verify|check-fresh|promote|materialize ... | skills check | version"
 )
 
 type setupApplication func(context.Context, string) (setup.Result, error)
@@ -38,27 +38,29 @@ type sealBuildableApplication func(context.Context, string, string, string) erro
 type verifyBuildableApplication func(context.Context, string, string, string, bool) error
 type checkFreshBuildableApplication func(context.Context, string, string, string, string, string) error
 type promoteBuildableApplication func(context.Context, string, string, string, string) error
+type materializeBuildableApplication func(context.Context, string, string, string, string) error
 type skillsCheckApplication func(context.Context, string) (skills.Report, error)
 type versionApplication func() (version.Info, error)
 
 // applications contains command-scoped capabilities. Parsing succeeds before
 // runWith designates any one capability or observes the working directory.
 type applications struct {
-	setup               setupApplication
-	check               checkApplication
-	commit              commitApplication
-	snapshotRecord      snapshotRecordApplication
-	snapshotReproduce   snapshotReproduceApplication
-	prune               pruneApplication
-	runBuildable        runBuildableApplication
-	checkBuildable      checkBuildableApplication
-	buildBuildable      buildBuildableApplication
-	sealBuildable       sealBuildableApplication
-	verifyBuildable     verifyBuildableApplication
-	checkFreshBuildable checkFreshBuildableApplication
-	promoteBuildable    promoteBuildableApplication
-	skillsCheck         skillsCheckApplication
-	version             versionApplication
+	setup                setupApplication
+	check                checkApplication
+	commit               commitApplication
+	snapshotRecord       snapshotRecordApplication
+	snapshotReproduce    snapshotReproduceApplication
+	prune                pruneApplication
+	runBuildable         runBuildableApplication
+	checkBuildable       checkBuildableApplication
+	buildBuildable       buildBuildableApplication
+	sealBuildable        sealBuildableApplication
+	verifyBuildable      verifyBuildableApplication
+	checkFreshBuildable  checkFreshBuildableApplication
+	promoteBuildable     promoteBuildableApplication
+	materializeBuildable materializeBuildableApplication
+	skillsCheck          skillsCheckApplication
+	version              versionApplication
 }
 
 type commandKind uint8
@@ -77,6 +79,7 @@ const (
 	commandVerifyBuildable
 	commandCheckFreshBuildable
 	commandPromoteBuildable
+	commandMaterializeBuildable
 	commandSkillsCheck
 	commandVersion
 )
@@ -257,6 +260,11 @@ func runWith(ctx context.Context, arguments []string, workingDirectory func() (s
 			return errors.New("promote buildable application is absent")
 		}
 		return application.promoteBuildable(ctx, root, command.arguments[0], command.arguments[1], command.arguments[2])
+	case commandMaterializeBuildable:
+		if application.materializeBuildable == nil {
+			return errors.New("materialize buildable application is absent")
+		}
+		return application.materializeBuildable(ctx, root, command.arguments[0], command.arguments[1], command.arguments[2])
 	case commandSkillsCheck:
 		if application.skillsCheck == nil {
 			return errors.New("skills check application is absent")
@@ -399,6 +407,10 @@ func parseBuildableInvocation(arguments []string) (invocation, error) {
 	case "promote":
 		if len(values) == 3 && values["candidate-root"] != "" && values["committed-root"] != "" && len(switches) == 0 {
 			return invocation{kind: commandPromoteBuildable, arguments: []string{name, values["candidate-root"], values["committed-root"]}}, nil
+		}
+	case "materialize":
+		if len(values) == 3 && values["platform"] != "" && values["destination"] != "" && len(switches) == 0 {
+			return invocation{kind: commandMaterializeBuildable, arguments: []string{name, values["platform"], values["destination"]}}, nil
 		}
 	}
 	return invocation{}, errors.New(usage)

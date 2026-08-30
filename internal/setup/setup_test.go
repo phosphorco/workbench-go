@@ -103,6 +103,49 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 	}
 }
 
+func TestEvaluateCurrentDeclarationLoadsAPlatformOutputSetAndKeepsLegacyPathParseable(t *testing.T) {
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte(fmt.Sprintf(`amends %q
+
+buildables {
+  ["browser-module"] = new Buildable {
+    inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
+    buildCommand = new BuildCommand { executable = "true" }
+    manifest = new ManifestContract { schemaVersion = 1; kind = "browser-module"; contractId = "browser-module-v1" }
+    candidates {
+      new BuildableCandidate { root = ".local-build/browser-module"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild it." }
+      new BuildableCandidate { root = ".ci-build/browser-module"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore it." }
+    }
+    platforms {
+      ["browser-wasm"] = new BuildablePlatformOutput {
+        os { "browser" }
+        arch { "wasm32" }
+        outputs {
+          new BuildableOutput { path = "browser.js"; destination = "dist/browser.js"; kind = "module" }
+          new BuildableOutput { path = "browser.wasm"; destination = "dist/browser.wasm"; kind = "wasm" }
+        }
+      }
+    }
+  }
+}
+`, localV060RepositoryURI))
+	declaration, err := EvaluateCurrentDeclaration(context.Background(), evaluator, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform := declaration.Buildables["browser-module"].Platforms["browser-wasm"]
+	if len(platform.Outputs) != 2 || platform.Outputs[0].Destination != "dist/browser.js" || platform.Outputs[1].Kind != "wasm" {
+		t.Fatalf("evaluated output set = %#v", platform.Outputs)
+	}
+}
+
 func TestEvaluateCurrentDeclarationCarriesTypedPackageMetadata(t *testing.T) {
 	pkl, err := exec.LookPath("pkl")
 	if err != nil {

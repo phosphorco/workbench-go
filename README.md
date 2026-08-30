@@ -563,7 +563,10 @@ identity, not a claim that a `0.6.0` release is available. The immutable
 A buildable declaration owns the facts Workbench cannot infer: producer input
 paths, the build command, an optional verification command, manifest identity
 and required source capabilities, local and committed candidate roots, and
-platform outputs. The candidate order and input strategies are fixed:
+platform output sets. Each output carries a candidate-relative path, a
+materialization-relative destination, a kind, and an executable requirement.
+The previous single `path` platform form remains parseable for compatibility.
+The candidate order and input strategies are fixed:
 
 ```text
 .local-build/<name>  gitWorktree  # tracked, absent, and untracked input content
@@ -585,7 +588,9 @@ candidate:
 
 ```sh
 workbench buildable check --name <name>  # machine-readable JSON; does not execute
-workbench run <name> -- <arguments...>   # execs the selected validated output
+workbench run <name> -- <arguments...>   # execs the selected validated executable
+workbench buildable materialize --name <name> --platform <platform> \
+  --destination <directory>             # installs the validated output set
 ```
 
 Lifecycle commands are deliberately cold. They evaluate the caller's current
@@ -608,10 +613,19 @@ The producer writes exactly one strict JSON source record named
 `build` checks that record and the requested platform output. Matrix builds
 must compare the record bytes across every archive before assembly. `seal`
 then owns the final manifest: it records the producer-input digest and the
-hash, size, executable fact, and path of every declared output. `verify` rechecks those
-facts; `check-fresh` proves the candidate was built from one revision and that
+hash, size, executable fact, path, destination, and kind of every declared
+output. `verify` rechecks those facts; `check-fresh` proves the candidate was
+built from one revision and that
 the promoted-against revision has the same producer inputs; `promote` installs
 a byte-identical verified tree at the committed root.
+
+`run` remains executable-only. `materialize` is explicit and selects a named
+platform so browser/WASM or other non-host modules can be installed without
+pretending to be executables. It stages the complete output set, verifies the
+staged bytes, and atomically replaces the caller-supplied destination. The
+destination is never considered a candidate and is never used as a source of
+truth; a present-invalid preferred candidate refuses before any materialization
+or fallback occurs.
 
 The declared build receives `WORKBENCH_BUILDABLE_NAME`,
 `WORKBENCH_BUILDABLE_PLATFORM`, and `WORKBENCH_BUILDABLE_CANDIDATE_ROOT`.
