@@ -108,7 +108,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	}
 
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release-acceptance.yml"))
-	for _, marker := range []string{"mise install github:phosphorco/workbench-go@0.5.0", "workbench skills check", "GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\""} {
+	for _, marker := range []string{"mise install github:phosphorco/workbench-go@0.6.0", "workbench skills check", "GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\""} {
 		if !strings.Contains(workflow, marker) {
 			t.Errorf("final public acceptance workflow lacks marker %q", marker)
 		}
@@ -123,12 +123,12 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 func TestReleaseWorkflowBuildsCompleteCandidateBeforeTagOnlyPublication(t *testing.T) {
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release.yml"))
 	for _, marker := range []string{
-		`tags: ["0.5.0"]`,
+		`tags: ["0.6.0"]`,
 		"workflow_dispatch:",
 		"if: github.event_name == 'push' && github.ref_type == 'tag'",
 		"needs: [binaries, contracts]",
 		"subject-path: candidate/out/workbench-*.tar.gz",
-		"subject-path: contracts/workbench@0.5.0.zip",
+		"subject-path: contracts/workbench@0.6.0.zip",
 		"gh release create",
 	} {
 		if !strings.Contains(workflow, marker) {
