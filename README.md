@@ -556,8 +556,11 @@ The final Workbench implementation absorbs repository observation, planning, and
 ## Buildables make repository-owned tools explicit
 
 The `0.6.1` contract package adds the same `buildables` mapping to
-`PackageScopeRepository.pkl` and `Repository.pkl`. This is a candidate schema
-identity paired with the Workbench 0.6.2 binary. The immutable
+`PackageScopeRepository.pkl` and `Repository.pkl`. It is published as
+`workbench@0.6.1` under the independent Workbench `0.6.2` release coordinate;
+current declarations therefore amend, for example,
+`package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/Repository.pkl`.
+This is a candidate schema identity paired with the Workbench 0.6.2 binary. The immutable
 `0.1.0` through `0.5.0` contracts retain their historical meanings.
 
 A buildable declaration owns the facts Workbench cannot infer: producer input

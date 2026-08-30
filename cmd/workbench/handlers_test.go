@@ -429,6 +429,18 @@ func TestCommitPlanContractsMatchTheExactSubjectRelease(t *testing.T) {
 	}
 }
 
+func TestCurrentContractUsesIndependentReleaseCoordinate(t *testing.T) {
+	for _, filename := range []string{"Repository.pkl", "WorkbenchSubject.pkl"} {
+		want := "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/" + filename
+		if got := releasedContractURI(currentContractVersion, filename); got != want {
+			t.Fatalf("current %s URI = %q, want %q", filename, got, want)
+		}
+	}
+	if got := releasedContractURI("0.6.0", "Repository.pkl"); got != "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl" {
+		t.Fatalf("historical URI changed to %q", got)
+	}
+}
+
 func TestSnapshotContractSelectionDistinguishesCurrentAndExactLegacyIdentities(t *testing.T) {
 	t.Parallel()
 	currentURI := releasedContractURI(currentContractVersion, "WorkbenchSnapshot.pkl")

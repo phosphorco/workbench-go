@@ -244,6 +244,11 @@ func TestSchemaForSourceDiscriminatesReleasedAndCurrentPackageScopeContracts(t *
 	} else if version != "0.5.0" {
 		t.Fatalf("released 0.5 package selected %q", version)
 	}
+	if _, version, err := schemaForSource([]byte(`amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/PackageScopeRepository.pkl"`), "PackageScopeRepository.pkl"); err != nil {
+		t.Fatal(err)
+	} else if version != "0.6.1" {
+		t.Fatalf("independent release coordinate selected %q", version)
+	}
 	if _, _, err := schemaForSource([]byte(`amends "package://example.invalid/releases/download/0.4.0/workbench@0.4.0#/PackageScopeRepository.pkl"`), "PackageScopeRepository.pkl"); err == nil {
 		t.Fatal("foreign package URI was accepted by release-shaped substring")
 	}

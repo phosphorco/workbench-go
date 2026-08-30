@@ -19,8 +19,8 @@ const (
 	releasePackageZIP        = "https://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0.zip"
 	v020ReleasePackageURI    = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0"
 	v020ReleasePackageZIP    = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
-	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench@0.6.1"
-	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench@0.6.1.zip"
+	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1"
+	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1.zip"
 )
 
 func TestReleasePackageCandidate(t *testing.T) {

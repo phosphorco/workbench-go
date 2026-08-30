@@ -32,7 +32,7 @@ import (
 
 const generatedPolicyID = "workbench-0.2-generated-projections-v2"
 
-const currentContractVersion = "0.6.1"
+const currentContractVersion = version.CurrentContractVersion
 
 var releasedAmendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
 
@@ -385,10 +385,18 @@ func renderChangeProgress(progress change.Progress) string {
 }
 
 func releasedContractURI(contractVersion, filename string) string {
+	coordinate := contractVersion
+	if contractVersion == currentContractVersion {
+		coordinate = version.ReleaseCoordinate
+	}
+	return releasedContractURIAt(coordinate, contractVersion, filename)
+}
+
+func releasedContractURIAt(coordinate, packageVersion, filename string) string {
 	return fmt.Sprintf(
 		"package://github.com/phosphorco/workbench-go/releases/download/%s/workbench@%s#/%s",
-		contractVersion,
-		contractVersion,
+		coordinate,
+		packageVersion,
 		filename,
 	)
 }

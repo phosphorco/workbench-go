@@ -20,6 +20,7 @@ import (
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/repositoryclosure"
 	"github.com/phosphorco/workbench-go/internal/skills"
+	workbenchversion "github.com/phosphorco/workbench-go/internal/version"
 	"github.com/phosphorco/workbench-go/internal/workspace"
 )
 
@@ -744,10 +745,21 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 		return value, "0.6.1", err
 	default:
 		version := ""
-		for _, candidate := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1"} {
-			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate + "/workbench@" + candidate + "#/" + filename
+		for _, candidate := range []struct {
+			coordinate string
+			version    string
+		}{
+			{coordinate: "0.1.0", version: "0.1.0"},
+			{coordinate: "0.2.0", version: "0.2.0"},
+			{coordinate: "0.3.0", version: "0.3.0"},
+			{coordinate: "0.4.0", version: "0.4.0"},
+			{coordinate: "0.5.0", version: "0.5.0"},
+			{coordinate: "0.6.0", version: "0.6.0"},
+			{coordinate: workbenchversion.ReleaseCoordinate, version: workbenchversion.CurrentContractVersion},
+		} {
+			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate.coordinate + "/workbench@" + candidate.version + "#/" + filename
 			if uri == exact {
-				version = candidate
+				version = candidate.version
 			}
 		}
 		if version == "" {
@@ -777,7 +789,7 @@ func EvaluateCurrentDeclaration(ctx context.Context, evaluator evaluate.Evaluato
 	if err != nil {
 		return contract.Declaration{}, err
 	}
-	if version != "0.6.0" && version != "0.6.1" {
+	if version != "0.6.0" && version != workbenchversion.CurrentContractVersion {
 		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires exact 0.6.1 declaration, got %s", version)
 	}
 	if filename == "PackageScopeRepository.pkl" {

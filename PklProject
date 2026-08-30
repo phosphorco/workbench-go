@@ -1,11 +1,13 @@
 amends "pkl:Project"
 
+local releaseCoordinate = "0.6.2"
+
 package {
   name = "workbench"
-  baseUri = "package://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench"
+  baseUri = "package://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench"
   version = "0.6.1"
   packageZipUrl =
-    "https://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench@\(version).zip"
+    "https://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench@\(version).zip"
 
   exclude {
     "acceptance/**"

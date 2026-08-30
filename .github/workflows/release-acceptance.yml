@@ -53,11 +53,15 @@ jobs:
           export MISE_STATE_DIR="$RUNNER_TEMP/cold-resolve-mise-state"
           export MISE_CONFIG_DIR="$RUNNER_TEMP/cold-resolve-mise-config"
           mkdir -p "$HOME" "$MISE_DATA_DIR" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_CONFIG_DIR"
+          test ! -e "$MISE_DATA_DIR/installs"
+          test -z "$(find "$MISE_CACHE_DIR" -mindepth 1 -print -quit)"
           mise install github:phosphorco/workbench-go@0.6.2
+          printf 'published Workbench cold resolver='
+          (mise exec github:phosphorco/workbench-go@0.6.2 -- workbench version)
           root="$RUNNER_TEMP/cold-resolve-fixture"
           mkdir -p "$root/.local-build/cold"
           cat > "$root/workbench.pkl" <<'EOF'
-          amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench@0.6.1#/Repository.pkl"
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/Repository.pkl"
           buildables {
             ["cold"] = new Buildable {
               inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
@@ -84,6 +88,7 @@ jobs:
             }
           }
           EOF
+          test "$(sed -n '1p' "$root/workbench.pkl")" = 'amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/Repository.pkl"'
           printf 'producer\n' > "$root/producer.txt"
           printf '#!/bin/sh\nprintf cold\\n' > "$root/.local-build/cold/cold.bin"
           chmod 0755 "$root/.local-build/cold/cold.bin"
@@ -122,7 +127,7 @@ jobs:
           candidate="$root/.local-build/basindb-state-sql-browser"
           mkdir -p "$candidate"
           cat > "$root/workbench.pkl" <<'EOF'
-          amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.1/workbench@0.6.1#/Repository.pkl"
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/Repository.pkl"
           buildables {
             ["basindb-state-sql-browser"] = new Buildable {
               inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }

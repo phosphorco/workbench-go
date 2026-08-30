@@ -16,6 +16,13 @@ var (
 const (
 	developmentRelease  = "dev"
 	developmentRevision = "unknown"
+
+	// CurrentContractVersion is the semantic version of the Pkl contract
+	// package embedded by the current Workbench release.
+	CurrentContractVersion = "0.6.1"
+	// ReleaseCoordinate is the independent GitHub release coordinate that
+	// publishes CurrentContractVersion.
+	ReleaseCoordinate = "0.6.2"
 )
 
 // Info identifies one released Workbench binary and its exact source revision.
