@@ -291,9 +291,9 @@ jobs:
           candidate="$root/.local-build/compat"
           mkdir -p "$candidate"
           cat > "$root/workbench.pkl" <<'EOF'
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl"
           # Public 0.6.1 bundles the historical 0.6.0 lifecycle contract;
           # this URI is deliberate for the old-seal/new-consume compatibility proof.
-          amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl"
           buildables {
             ["compat"] = new Buildable {
               inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
