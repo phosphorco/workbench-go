@@ -11,6 +11,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +32,7 @@ import (
 
 const generatedPolicyID = "workbench-0.2-generated-projections-v2"
 
-const currentContractVersion = "0.6.0"
+const currentContractVersion = version.CurrentContractVersion
 
 var releasedAmendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
 
@@ -158,8 +159,47 @@ func applicationsForEnvironment(provider environmentProvider) applications {
 			}
 			return pruneCheckouts(ctx, root, identities, environment)
 		},
-		runBuildable:   buildable.Run,
-		checkBuildable: buildable.CheckCurrent,
+		runBuildable: func(ctx context.Context, root, name string, arguments []string) error {
+			projectionPath := filepath.Join(root, filepath.FromSlash(buildable.ProjectionPath))
+			if _, statErr := os.Lstat(projectionPath); statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
+				if err := validateCurrentProjectedBuildable(ctx, provider, root, name); err != nil {
+					return err
+				}
+				return buildable.Run(ctx, root, name, arguments)
+			}
+			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
+			if err != nil {
+				return err
+			}
+			resolution, err := buildable.ResolveDeclared(ctx, root, name, declaration, runtime.GOOS, runtime.GOARCH)
+			if err != nil {
+				return err
+			}
+			return buildable.RunResolved(resolution, name, arguments)
+		},
+		resolveBuildable: func(ctx context.Context, root, name, platform string) (buildable.Resolution, error) {
+			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
+			if err != nil {
+				return buildable.Resolution{}, err
+			}
+			if err := buildable.ValidateProjectedDeclaration(root, name, declaration); err != nil {
+				return buildable.Resolution{}, err
+			}
+			return buildable.ResolveDeclaredPlatform(ctx, root, name, declaration, platform)
+		},
+		checkBuildable: func(ctx context.Context, root, name string) (buildable.CheckReport, error) {
+			projectionPath := filepath.Join(root, filepath.FromSlash(buildable.ProjectionPath))
+			if _, statErr := os.Lstat(projectionPath); statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
+				if err := validateCurrentProjectedBuildable(ctx, provider, root, name); err != nil {
+					var refusal *buildable.Refusal
+					if errors.As(err, &refusal) {
+						return buildable.CheckReport{SchemaVersion: 1, Status: "refused", Buildable: name, Refusal: refusal}, err
+					}
+					return buildable.CheckReport{}, err
+				}
+			}
+			return buildable.CheckCurrent(ctx, root, name)
+		},
 		buildBuildable: func(ctx context.Context, root, name, platform string) error {
 			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
 			if err != nil {
@@ -195,20 +235,31 @@ func applicationsForEnvironment(provider environmentProvider) applications {
 			}
 			return buildable.PromoteDeclared(ctx, root, name, declaration, candidate, committed)
 		},
-		materializeBuildable: func(ctx context.Context, root, name, platform, destination string) error {
+		materializeBuildable: func(ctx context.Context, root, name, platform, destination string) (buildable.MaterializeReceipt, error) {
 			projectionPath := filepath.Join(root, filepath.FromSlash(buildable.ProjectionPath))
-			if _, err := os.Lstat(projectionPath); err == nil || !errors.Is(err, os.ErrNotExist) {
+			if _, statErr := os.Lstat(projectionPath); statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
+				if err := validateCurrentProjectedBuildable(ctx, provider, root, name); err != nil {
+					return buildable.MaterializeReceipt{}, err
+				}
 				return buildable.Materialize(ctx, root, name, platform, destination)
 			}
 			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
 			if err != nil {
-				return err
+				return buildable.MaterializeReceipt{}, err
 			}
 			return buildable.MaterializeDeclared(ctx, root, name, declaration, platform, destination)
 		},
-		skillsCheck:          checkSkills,
-		version:              version.Current,
+		skillsCheck: checkSkills,
+		version:     version.Current,
 	}
+}
+
+func validateCurrentProjectedBuildable(ctx context.Context, provider environmentProvider, root, name string) error {
+	declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
+	if err != nil {
+		return err
+	}
+	return buildable.ValidateProjectedDeclaration(root, name, declaration)
 }
 
 func evaluateLocalBuildable(ctx context.Context, provider environmentProvider, root, name string) (buildable.Buildable, error) {
@@ -334,17 +385,25 @@ func renderChangeProgress(progress change.Progress) string {
 }
 
 func releasedContractURI(contractVersion, filename string) string {
+	coordinate := contractVersion
+	if contractVersion == currentContractVersion {
+		coordinate = version.ReleaseCoordinate
+	}
+	return releasedContractURIAt(coordinate, contractVersion, filename)
+}
+
+func releasedContractURIAt(coordinate, packageVersion, filename string) string {
 	return fmt.Sprintf(
 		"package://github.com/phosphorco/workbench-go/releases/download/%s/workbench@%s#/%s",
-		contractVersion,
-		contractVersion,
+		coordinate,
+		packageVersion,
 		filename,
 	)
 }
 
 func lifecycleContractURI(contractVersion, filename string) (string, error) {
 	switch contractVersion {
-	case "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion:
+	case "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", currentContractVersion:
 		return releasedContractURI(contractVersion, filename), nil
 	case "0.1.0":
 		return "", fmt.Errorf("Workbench 0.1.0 has no released %s contract", filename)
@@ -388,7 +447,7 @@ func releasedCommitPlanContract(source []byte, contractVersion string) (evaluate
 	if _, err := lifecycleContractURI(contractVersion, filename); err != nil {
 		return evaluate.Contract{}, err
 	}
-	return releasedContractForSubjectLine(source, filename, contractVersion, "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion)
+	return releasedContractForSubjectLine(source, filename, contractVersion, "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", currentContractVersion)
 }
 
 type snapshotContractKind uint8
@@ -408,7 +467,7 @@ func releasedSnapshotContractFromSource(source []byte) (evaluate.Contract, snaps
 		schema, err := evaluate.ReleasedContract(current)
 		return schema, currentSnapshotContract, err
 	}
-	for _, contractVersion := range []string{"0.4.0", "0.5.0"} {
+	for _, contractVersion := range []string{"0.4.0", "0.5.0", "0.6.0"} {
 		previous := releasedContractURI(contractVersion, "WorkbenchSnapshot.pkl")
 		if got == previous {
 			schema, err := evaluate.ReleasedContract(previous)
@@ -436,7 +495,7 @@ func evaluateSubject(ctx context.Context, root string, evaluator evaluate.Evalua
 	if err != nil {
 		return contract.Subject{}, fmt.Errorf("read workbench-subject.pkl: %w", err)
 	}
-	schema, err := releasedContractForSubjectLine(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion)
+	schema, err := releasedContractForSubjectLine(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", currentContractVersion)
 	if err != nil {
 		return contract.Subject{}, err
 	}

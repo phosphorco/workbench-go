@@ -38,8 +38,25 @@ func TestMaterializeCopiesTheValidatedMultiOutputSetToItsDestination(t *testing.
 	destination := filepath.Join(t.TempDir(), "runtime")
 	write(t, filepath.Join(destination, "stale.txt"), "must be removed\n", 0o644)
 
-	if err := buildable.Materialize(context.Background(), workbench, "browser-module", "browser-wasm", destination); err != nil {
+	receipt, err := buildable.Materialize(context.Background(), workbench, "browser-module", "browser-wasm", destination)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if receipt.SchemaVersion != 1 || receipt.Status != "materialized" || receipt.Buildable != "browser-module" || receipt.Candidate != "local" || receipt.Platform != "browser-wasm" || filepath.Clean(receipt.Destination) != filepath.Clean(destination) || len(receipt.Outputs) != 4 {
+		t.Fatalf("materialize receipt = %#v", receipt)
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"status":"materialized"`) || !strings.Contains(string(encoded), `"destination":"runtime/browser-module.js"`) || strings.Contains(string(encoded), ".local-build/browser-module") {
+		t.Fatalf("materialize receipt JSON = %s", encoded)
+	}
+	if strings.Contains(string(encoded), `"sha256"`) {
+		t.Fatalf("public materialize receipt boundary leaked sealed-manifest sha256: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"digest":"`) {
+		t.Fatalf("materialize receipt omitted public generic digest: %s", encoded)
 	}
 	for path, want := range map[string]string{
 		"runtime/browser-module.js":         "javascript module\n",
@@ -66,6 +83,35 @@ func TestMaterializeCopiesTheValidatedMultiOutputSetToItsDestination(t *testing.
 	}
 }
 
+func TestResolveDeclaredPlatformReturnsTheCompleteMultiOutputSet(t *testing.T) {
+	_, repository := multiOutputFixture(t)
+	resolution, err := buildable.ResolveDeclaredPlatform(context.Background(), repository, "browser-module", moduleDeclaration(), "browser-wasm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Candidate != "local" || resolution.Platform != "browser-wasm" || len(resolution.Outputs) != 4 {
+		t.Fatalf("resolution = %#v", resolution)
+	}
+	for _, output := range resolution.Outputs {
+		if output.Destination == "" || len(output.Digest) != 64 || output.Size <= 0 || output.Path == "" {
+			t.Fatalf("incomplete resolved output = %#v", output)
+		}
+	}
+	encoded, err := json.Marshal(resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"candidate":".local-build/browser-module"`) {
+		t.Fatalf("resolution JSON leaked candidate root: %s", encoded)
+	}
+	if strings.Contains(string(encoded), `"sha256"`) {
+		t.Fatalf("public resolution boundary leaked sealed-manifest sha256: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"digest":"`) || !strings.Contains(string(encoded), `"outputs"`) {
+		t.Fatalf("resolution JSON = %s", encoded)
+	}
+}
+
 func TestMaterializeRefusesCorruptPreferredCandidateWithoutFallingThrough(t *testing.T) {
 	workbench, repository := multiOutputFixture(t)
 	writeMultiOutputCandidate(t, repository, ".ci-build/browser-module", "committed")
@@ -74,7 +120,7 @@ func TestMaterializeRefusesCorruptPreferredCandidateWithoutFallingThrough(t *tes
 
 	_, err := materializeWithDestination(t, workbench)
 	var refusal *buildable.Refusal
-	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid || refusal.Candidate != ".local-build/browser-module" {
+	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid || refusal.Candidate != "local" {
 		t.Fatalf("Materialize error = %T %v, want corrupt preferred candidate refusal", err, err)
 	}
 	if !strings.Contains(refusal.Reason, "hash mismatch") || !strings.Contains(refusal.Remedy, "local") {
@@ -90,7 +136,7 @@ func TestMaterializeRefusesStalePreferredCandidateWithoutFallingThrough(t *testi
 
 	_, err := materializeWithDestination(t, workbench)
 	var refusal *buildable.Refusal
-	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalStaleProducerInputs || refusal.Candidate != ".local-build/browser-module" {
+	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalStaleProducerInputs || refusal.Candidate != "local" {
 		t.Fatalf("Materialize error = %T %v, want stale preferred candidate refusal", err, err)
 	}
 	if !strings.Contains(refusal.Reason, "stale artifact") || !strings.Contains(refusal.Remedy, "local") {
@@ -102,12 +148,12 @@ func TestMaterializeRefusesACandidateDestination(t *testing.T) {
 	workbench, repository := multiOutputFixture(t)
 	destination := filepath.Join(repository, ".local-build", "browser-module", "runtime")
 
-	err := buildable.Materialize(context.Background(), workbench, "browser-module", "browser-wasm", destination)
+	_, err := buildable.Materialize(context.Background(), workbench, "browser-module", "browser-wasm", destination)
 	var refusal *buildable.Refusal
 	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid {
 		t.Fatalf("Materialize error = %T %v, want candidate-path refusal", err, err)
 	}
-	if !strings.Contains(refusal.Reason, "candidate path") {
+	if !strings.Contains(refusal.Reason, "overlaps a declared candidate") || strings.Contains(refusal.Reason, `candidate ".local-build/browser-module"`) {
 		t.Fatalf("refusal = %#v", refusal)
 	}
 }
@@ -119,6 +165,9 @@ func TestRunRefusesAValidNonExecutableModule(t *testing.T) {
 		OS: []string{"linux"}, Arch: []string{"amd64"}, Outputs: declaration.Platforms["browser-wasm"].Outputs,
 	}
 	project(t, workbench, repository, declaration)
+	if err := buildable.Seal(context.Background(), workbench, "browser-module", ".local-build/browser-module"); err != nil {
+		t.Fatal(err)
+	}
 	_, err := buildable.Resolve(context.Background(), workbench, "browser-module", "browser", "wasm32")
 	if err == nil {
 		t.Fatal("Resolve accepted an unsupported test platform")
@@ -192,7 +241,7 @@ func multiOutputFixture(t *testing.T) (string, string) {
 func materializeWithDestination(t *testing.T, workbench string) (string, error) {
 	t.Helper()
 	destination := filepath.Join(t.TempDir(), "runtime")
-	err := buildable.Materialize(context.Background(), workbench, "browser-module", "browser-wasm", destination)
+	_, err := buildable.Materialize(context.Background(), workbench, "browser-module", "browser-wasm", destination)
 	return destination, err
 }
 
@@ -219,7 +268,8 @@ func writeMultiOutputCandidate(t *testing.T, repository, root, label string) {
 	}
 	manifest := map[string]any{
 		"schemaVersion": 1, "kind": "browser-module-manifest", "contractId": "browser-module-v1",
-		"source": source, "producerInputs": map[string]any{"algorithm": "sha256", "digest": producerDigest(t, repository)},
+		"declarationIdentity": mustDeclarationIdentity(t, "browser-module", moduleDeclaration()),
+		"source":              source, "producerInputs": map[string]any{"algorithm": "sha256", "digest": producerDigest(t, repository)},
 		"capabilities": []string{"browser-wasm-v1"}, "outputs": outputs,
 	}
 	encoded, err := json.Marshal(manifest)

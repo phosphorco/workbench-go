@@ -20,6 +20,7 @@ import (
 	"github.com/phosphorco/workbench-go/internal/orphan"
 	"github.com/phosphorco/workbench-go/internal/repositoryclosure"
 	"github.com/phosphorco/workbench-go/internal/skills"
+	workbenchversion "github.com/phosphorco/workbench-go/internal/version"
 	"github.com/phosphorco/workbench-go/internal/workspace"
 )
 
@@ -46,6 +47,10 @@ const (
 	localV060PackageScopeURI      = "workbench-contract:/0.6.0/PackageScopeRepository.pkl"
 	localV060RepositoryURI        = "workbench-contract:/0.6.0/Repository.pkl"
 	localV060AgentInstructionsURI = "workbench-contract:/0.6.0/AgentInstructions.pkl"
+	localV061SubjectURI           = "workbench-contract:/0.6.1/WorkbenchSubject.pkl"
+	localV061PackageScopeURI      = "workbench-contract:/0.6.1/PackageScopeRepository.pkl"
+	localV061RepositoryURI        = "workbench-contract:/0.6.1/Repository.pkl"
+	localV061AgentInstructionsURI = "workbench-contract:/0.6.1/AgentInstructions.pkl"
 )
 
 var (
@@ -220,8 +225,8 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		return Result{}, err
 	}
 	projection, err := workspace.BuildWithOptions(packages, workspace.BuildOptions{
-		ReassembleRootDependencies: version == "0.6.0",
-		ProductionTypeScript:       version == "0.6.0",
+		ReassembleRootDependencies: version == "0.6.0" || version == "0.6.1",
+		ProductionTypeScript:       version == "0.6.0" || version == "0.6.1",
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("build workspace projection: %w", err)
@@ -340,7 +345,7 @@ func discoverResources(subject contract.Subject, source *discoverySource, versio
 }
 
 func isVersionedContract(version string) bool {
-	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0"
+	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1"
 }
 
 func reconcileDependencies(ctx context.Context, root, bun string) error {
@@ -579,7 +584,7 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	}
 	var declaration contract.Declaration
 	if filename == "PackageScopeRepository.pkl" {
-		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" {
+		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclarationV030(source.ctx, encoded, schema)
 		} else {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclaration(source.ctx, encoded, schema)
@@ -726,12 +731,35 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 	case localV060AgentInstructionsURI:
 		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
 		return value, "0.6.0", err
+	case localV061SubjectURI:
+		value, err := evaluate.LocalContract(uri, localSubjectContract)
+		return value, "0.6.1", err
+	case localV061PackageScopeURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		return value, "0.6.1", err
+	case localV061RepositoryURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryDeclarationContract)
+		return value, "0.6.1", err
+	case localV061AgentInstructionsURI:
+		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
+		return value, "0.6.1", err
 	default:
 		version := ""
-		for _, candidate := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0"} {
-			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate + "/workbench@" + candidate + "#/" + filename
+		for _, candidate := range []struct {
+			coordinate string
+			version    string
+		}{
+			{coordinate: "0.1.0", version: "0.1.0"},
+			{coordinate: "0.2.0", version: "0.2.0"},
+			{coordinate: "0.3.0", version: "0.3.0"},
+			{coordinate: "0.4.0", version: "0.4.0"},
+			{coordinate: "0.5.0", version: "0.5.0"},
+			{coordinate: "0.6.0", version: "0.6.0"},
+			{coordinate: workbenchversion.ReleaseCoordinate, version: workbenchversion.CurrentContractVersion},
+		} {
+			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate.coordinate + "/workbench@" + candidate.version + "#/" + filename
 			if uri == exact {
-				version = candidate
+				version = candidate.version
 			}
 		}
 		if version == "" {
@@ -761,8 +789,8 @@ func EvaluateCurrentDeclaration(ctx context.Context, evaluator evaluate.Evaluato
 	if err != nil {
 		return contract.Declaration{}, err
 	}
-	if version != "0.6.0" {
-		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires exact 0.6.0 declaration, got %s", version)
+	if version != "0.6.0" && version != workbenchversion.CurrentContractVersion {
+		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires exact 0.6.1 declaration, got %s", version)
 	}
 	if filename == "PackageScopeRepository.pkl" {
 		return evaluator.EvaluatePackageScopeDeclarationV030(ctx, source, schema)
@@ -823,7 +851,7 @@ func observePackagesAt(ctx context.Context, resources []Resource, contractVersio
 }
 
 func locatePackage(resourceRoot string, resource Resource, name, contractVersion string, allowRoot bool) (string, error) {
-	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0") && resource.Shape.Kind == contract.PackageScopeShape {
+	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0" || contractVersion == "0.6.1") && resource.Shape.Kind == contract.PackageScopeShape {
 		return locatePackageScopePackage(resourceRoot, resource.Shape.Scope, name)
 	}
 	return locateLegacyPackage(resourceRoot, name, allowRoot)

@@ -98,7 +98,7 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 		})
 	}
 	oldSource := []byte(fmt.Sprintf("amends %q\n", localV050RepositoryURI))
-	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires exact 0.6.0") {
+	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires exact 0.6.1") {
 		t.Fatalf("0.5 lifecycle declaration error = %v", err)
 	}
 }
@@ -220,6 +220,7 @@ func TestSchemaForSourceDiscriminatesReleasedAndCurrentPackageScopeContracts(t *
 		{uri: localV040PackageScopeURI, version: "0.4.0"},
 		{uri: localV050PackageScopeURI, version: "0.5.0"},
 		{uri: localV060PackageScopeURI, version: "0.6.0"},
+		{uri: localV061PackageScopeURI, version: "0.6.1"},
 	} {
 		source := []byte(fmt.Sprintf("amends %q\n", test.uri))
 		if _, version, err := schemaForSource(source, "PackageScopeRepository.pkl"); err != nil {
@@ -243,6 +244,11 @@ func TestSchemaForSourceDiscriminatesReleasedAndCurrentPackageScopeContracts(t *
 	} else if version != "0.5.0" {
 		t.Fatalf("released 0.5 package selected %q", version)
 	}
+	if _, version, err := schemaForSource([]byte(`amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/PackageScopeRepository.pkl"`), "PackageScopeRepository.pkl"); err != nil {
+		t.Fatal(err)
+	} else if version != "0.6.1" {
+		t.Fatalf("independent release coordinate selected %q", version)
+	}
 	if _, _, err := schemaForSource([]byte(`amends "package://example.invalid/releases/download/0.4.0/workbench@0.4.0#/PackageScopeRepository.pkl"`), "PackageScopeRepository.pkl"); err == nil {
 		t.Fatal("foreign package URI was accepted by release-shaped substring")
 	}
@@ -259,7 +265,7 @@ func TestObservePackagesV030AndLaterUseOneNestedLawForSingletonAndMultiplePackag
 	write(t, filepath.Join(resourceRoot, "app", "src", "index.ts"), "export const app = true\n")
 	write(t, filepath.Join(resourceRoot, "tool", "src", "index.ts"), "export const tool = true\n")
 
-	for _, version := range []string{"0.3.0", "0.4.0", "0.5.0", "0.6.0"} {
+	for _, version := range []string{"0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1"} {
 		resource := Resource{
 			Identity:      "@workbench-entry",
 			CanonicalPath: "pkg/@workbench-entry",

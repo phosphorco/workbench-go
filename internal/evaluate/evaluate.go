@@ -15,6 +15,7 @@ import (
 	"github.com/apple/pkl-go/pkl"
 	"github.com/phosphorco/workbench-go/internal/contract"
 	"github.com/phosphorco/workbench-go/internal/legacy/v020v030snapshot"
+	workbenchversion "github.com/phosphorco/workbench-go/internal/version"
 )
 
 var amendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
@@ -219,8 +220,12 @@ func packageResourceURLs(packageModule *url.URL) ([]string, error) {
 		return nil, fmt.Errorf("released contract URI %q does not have a capability-safe package authority", packageModule.String())
 	}
 	parts := strings.Split(packageModule.Path, "/")
-	if len(parts) != 7 || parts[0] != "" || parts[1] != "phosphorco" || parts[2] != "workbench-go" || parts[3] != "releases" || parts[4] != "download" || parts[5] == "" || parts[6] != "workbench@"+parts[5] {
+	if len(parts) != 7 || parts[0] != "" || parts[1] != "phosphorco" || parts[2] != "workbench-go" || parts[3] != "releases" || parts[4] != "download" || parts[5] == "" {
 		return nil, fmt.Errorf("released contract URI %q does not designate a phosphorco/workbench-go release", packageModule.String())
+	}
+	packageVersion := strings.TrimPrefix(parts[6], "workbench@")
+	if packageVersion == parts[6] || (packageVersion != parts[5] && !(parts[5] == workbenchversion.ReleaseCoordinate && packageVersion == workbenchversion.CurrentContractVersion)) {
+		return nil, fmt.Errorf("released contract URI %q does not designate a supported Workbench package coordinate", packageModule.String())
 	}
 
 	metadata := *packageModule

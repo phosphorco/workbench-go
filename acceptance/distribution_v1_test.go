@@ -108,7 +108,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 	}
 
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release-acceptance.yml"))
-	for _, marker := range []string{"mise install github:phosphorco/workbench-go@0.6.1", "workbench skills check", "GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\""} {
+	for _, marker := range []string{"mise install github:phosphorco/workbench-go@0.6.2", "workbench skills check", "workbench buildable resolve --name cold --platform linux-x86_64 --format json", `"digest":"[0-9a-f]{64}"`, "releases/download/0.6.2/workbench@0.6.1#/Repository.pkl", `root = ".local-build/cold"`, `root = ".ci-build/cold"`, `test ! -e "$MISE_DATA_DIR/installs"`, "published Workbench cold resolver=", "GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\"", "Verify and check freshness of an origin-shaped legacy manifest", "workbench buildable verify --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser", "workbench buildable check-fresh --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser --built-from HEAD --against origin/main", "origin-shaped fixture origin/main=", "origin-shaped legacy manifest verify exit=", "origin-shaped legacy manifest check-fresh exit=", "origin-shaped legacy manifest keys=", "origin-shaped legacy manifest source facts=synthetic fixture", "origin/main observed output identities=", "basindb_sql_browser.js", "basindb_sql_browser_bg.wasm", "basindb_sql_browser.d.ts", "basindb_sql_browser_bg.wasm.d.ts", "git clone --depth 1 --branch main https://github.com/phosphorco/monorepo.git", "Verify the published asset against the committed origin/main BasinDB browser candidate", "origin/main manifest output paths=", "origin/main producerInputs.algorithm=", "origin/main manifest declarationIdentity=absent", "bash acceptance/release_compatibility.sh", "command/scenario                  0.6.1 exit  0.6.2 exit", "python3 - \"$manifest\""} {
 		if !strings.Contains(workflow, marker) {
 			t.Errorf("final public acceptance workflow lacks marker %q", marker)
 		}
@@ -123,12 +123,12 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 func TestReleaseWorkflowBuildsCompleteCandidateBeforeTagOnlyPublication(t *testing.T) {
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release.yml"))
 	for _, marker := range []string{
-		`tags: ["0.6.1"]`,
+		`tags: ["0.6.2"]`,
 		"workflow_dispatch:",
 		"if: github.event_name == 'push' && github.ref_type == 'tag'",
 		"needs: [binaries, contracts]",
 		"subject-path: candidate/out/workbench-*.tar.gz",
-		"subject-path: contracts/workbench@0.6.0.zip",
+		"subject-path: contracts/workbench@0.6.1.zip",
 		"gh release create",
 	} {
 		if !strings.Contains(workflow, marker) {
@@ -170,6 +170,36 @@ func TestReleaseWorkflowBuildsCompleteCandidateBeforeTagOnlyPublication(t *testi
 	}
 	if attestations := len(platforms) + 1; attestations != 5 {
 		t.Fatalf("release attestation subjects = %d, want 5", attestations)
+	}
+}
+
+func TestPublishedCompatibilityMatrixOwnsIndependentOldAndNewExitChecks(t *testing.T) {
+	path := filepath.Join("..", "acceptance", "release_compatibility.sh")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("published compatibility matrix %s is not executable", path)
+	}
+	script := readFile(t, path)
+	for _, marker := range []string{
+		"mise install \"github:phosphorco/workbench-go@$version\"",
+		"amends \"package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl\"",
+		"command/scenario                  0.6.1 exit  0.6.2 exit",
+		"buildable build --name compat --platform linux-x86_64",
+		"buildable seal --name compat --candidate-root .local-build/compat",
+		"buildable verify --name compat --candidate-root .local-build/compat",
+		"buildable check-fresh --name compat --candidate-root .local-build/compat --built-from HEAD --against origin/main",
+		"buildable materialize --name compat --platform linux-x86_64 --destination materialized",
+		"test \"$old_status\" -eq 1",
+		"test \"$new_status\" -eq 1",
+		`grep -Eq '"digest":"[0-9a-f]{64}"'`,
+		`grep -Fq '"sha256"'`,
+	} {
+		if !strings.Contains(script, marker) {
+			t.Errorf("published compatibility matrix lacks marker %q", marker)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,7 +70,7 @@ func TestColdBuildableLifecycleEvaluatesLocalDeclarationWithoutProjection(t *tes
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	source := `amends "workbench-contract:/0.6.0/Repository.pkl"
+	source := `amends "workbench-contract:/0.6.1/Repository.pkl"
 buildables {
   ["hello"] = new Buildable {
     inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
@@ -120,9 +121,9 @@ func TestColdMaterializeEvaluatesLocalDeclarationAndPreservesRefusalSemantics(t 
 	})
 
 	for _, test := range []struct {
-		name string
+		name   string
 		mutate func(t *testing.T, root string)
-		code buildable.RefusalCode
+		code   buildable.RefusalCode
 		reason string
 	}{
 		{
@@ -145,7 +146,7 @@ func TestColdMaterializeEvaluatesLocalDeclarationAndPreservesRefusalSemantics(t 
 			test.mutate(t, root)
 			err := runColdMaterializeError(t, root, evaluator)
 			var refusal *buildable.Refusal
-			if !errors.As(err, &refusal) || refusal.Code != test.code || refusal.Candidate != ".local-build/hello" {
+			if !errors.As(err, &refusal) || refusal.Code != test.code || refusal.Candidate != "local" {
 				t.Fatalf("cold materialization error = %T %v, want %s refusal from local candidate", err, err, test.code)
 			}
 			if !strings.Contains(refusal.Reason, test.reason) || strings.Contains(err.Error(), ".ci-build/hello") {
@@ -171,6 +172,98 @@ func TestColdMaterializeEvaluatesLocalDeclarationAndPreservesRefusalSemantics(t 
 	})
 }
 
+func TestColdResolveEvaluatesCurrentDeclarationWithProjectionAbsentBeforeAndAfter(t *testing.T) {
+	root, evaluator, declaration := coldMaterializeFixture(t)
+	projectionPath := filepath.Join(root, buildable.ProjectionPath)
+	if _, err := os.Stat(projectionPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cold resolve fixture has projection before invocation: %v", err)
+	}
+	var output bytes.Buffer
+	if err := runWith(context.Background(), []string{
+		"buildable", "resolve", "--name", "hello", "--platform", "browser-wasm", "--format", "json",
+	}, func() (string, error) {
+		return root, nil
+	}, &output, io.Discard, applicationsForEnvironment(func() (commandEnvironment, error) {
+		return commandEnvironment{evaluator: evaluator}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var resolution buildable.Resolution
+	if err := json.Unmarshal(output.Bytes(), &resolution); err != nil {
+		t.Fatalf("cold resolve JSON = %q: %v", output.String(), err)
+	}
+	if resolution.Buildable != "hello" || resolution.Platform != "browser-wasm" || resolution.Candidate != "local" || len(resolution.Outputs) != len(declaration.Platforms["browser-wasm"].Outputs) {
+		t.Fatalf("cold resolution = %#v", resolution)
+	}
+	if _, err := os.Stat(projectionPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cold resolve acquired a projection: %v", err)
+	}
+}
+
+func TestResolveRejectsRelevantCurrentDeclarationWhenProjectionIsStale(t *testing.T) {
+	root, evaluator, declaration := coldMaterializeFixture(t)
+	source, err := os.ReadFile(filepath.Join(root, "workbench.pkl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := buildable.EncodeProjection([]buildable.ProjectionOwner{{
+		Identity: "example/hello", RepositoryPath: "repos/hello", Source: source,
+		Buildables: map[string]buildable.Buildable{"hello": declaration},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHandlerFile(t, filepath.Join(root, buildable.ProjectionPath), projected, 0o644)
+	changedSource := strings.Replace(string(source), `invalidRemedy = "Rebuild the local candidate."`, `invalidRemedy = "Use a changed local candidate."`, 1)
+	if changedSource == string(source) {
+		t.Fatal("relevant declaration fixture did not change")
+	}
+	writeHandlerFile(t, filepath.Join(root, "workbench.pkl"), []byte(changedSource), 0o644)
+
+	err = runWith(context.Background(), []string{
+		"buildable", "resolve", "--name", "hello", "--platform", "browser-wasm", "--format", "json",
+	}, func() (string, error) {
+		return root, nil
+	}, io.Discard, io.Discard, applicationsForEnvironment(func() (commandEnvironment, error) {
+		return commandEnvironment{evaluator: evaluator}, nil
+	}))
+	var refusal *buildable.Refusal
+	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalProjectionStale {
+		t.Fatalf("cold resolve error = %T %v, want stale projection refusal", err, err)
+	}
+	if refusal.Candidate != "" || strings.Contains(err.Error(), ".local-build/hello") || !strings.Contains(refusal.Reason, "declaration identity") {
+		t.Fatalf("stale projection refusal = %v", err)
+	}
+}
+
+func TestResolveAcceptsUnrelatedCurrentSourceEditWhenProjectionIdentityMatches(t *testing.T) {
+	root, evaluator, declaration := coldMaterializeFixture(t)
+	source, err := os.ReadFile(filepath.Join(root, "workbench.pkl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := buildable.EncodeProjection([]buildable.ProjectionOwner{{
+		Identity: "example/hello", RepositoryPath: "repos/hello", Source: source,
+		Buildables: map[string]buildable.Buildable{"hello": declaration},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHandlerFile(t, filepath.Join(root, buildable.ProjectionPath), projected, 0o644)
+	writeHandlerFile(t, filepath.Join(root, "workbench.pkl"), append(source, []byte("\n// unrelated source edit\n")...), 0o644)
+
+	err = runWith(context.Background(), []string{
+		"buildable", "resolve", "--name", "hello", "--platform", "browser-wasm", "--format", "json",
+	}, func() (string, error) {
+		return root, nil
+	}, io.Discard, io.Discard, applicationsForEnvironment(func() (commandEnvironment, error) {
+		return commandEnvironment{evaluator: evaluator}, nil
+	}))
+	if err != nil {
+		t.Fatalf("unrelated source edit refused: %v", err)
+	}
+}
+
 func coldMaterializeFixture(t *testing.T) (string, evaluate.Evaluator, buildable.Buildable) {
 	t.Helper()
 	pkl, err := exec.LookPath("pkl")
@@ -186,7 +279,7 @@ func coldMaterializeFixture(t *testing.T) (string, evaluate.Evaluator, buildable
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	source := `amends "workbench-contract:/0.6.0/Repository.pkl"
+	source := `amends "workbench-contract:/0.6.1/Repository.pkl"
 buildables {
   ["hello"] = new Buildable {
     inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
@@ -333,6 +426,18 @@ func TestCommitPlanContractsMatchTheExactSubjectRelease(t *testing.T) {
 	}
 	if _, err := releasedCommitPlanContract(v020, "0.1.0"); err == nil || !strings.Contains(err.Error(), "has no released WorkbenchCommitPlan.pkl") {
 		t.Fatalf("0.1 lifecycle error = %v", err)
+	}
+}
+
+func TestCurrentContractUsesIndependentReleaseCoordinate(t *testing.T) {
+	for _, filename := range []string{"Repository.pkl", "WorkbenchSubject.pkl"} {
+		want := "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/" + filename
+		if got := releasedContractURI(currentContractVersion, filename); got != want {
+			t.Fatalf("current %s URI = %q, want %q", filename, got, want)
+		}
+	}
+	if got := releasedContractURI("0.6.0", "Repository.pkl"); got != "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl" {
+		t.Fatalf("historical URI changed to %q", got)
 	}
 }
 

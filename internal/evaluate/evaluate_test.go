@@ -124,6 +124,14 @@ func TestReleasedContractRequiresImmutablePackageModule(t *testing.T) {
 	if _, err := evaluate.ReleasedContract(released); err != nil {
 		t.Fatalf("immutable released contract was rejected: %v", err)
 	}
+	const current = "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/WorkbenchSubject.pkl"
+	if _, err := evaluate.ReleasedContract(current); err != nil {
+		t.Fatalf("independent release/package coordinate was rejected: %v", err)
+	}
+	const unsupportedIndependent = "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.0#/WorkbenchSubject.pkl"
+	if _, err := evaluate.ReleasedContract(unsupportedIndependent); err == nil {
+		t.Fatal("unsupported release/package coordinate was accepted")
+	}
 	for _, uri := range []string{
 		"https://github.com/phosphorco/workbench-go/WorkbenchSubject.pkl",
 		"package://github.com/phosphorco/workbench-go/workbench@1.0.0",
