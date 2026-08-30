@@ -195,7 +195,17 @@ func applicationsForEnvironment(provider environmentProvider) applications {
 			}
 			return buildable.PromoteDeclared(ctx, root, name, declaration, candidate, committed)
 		},
-		materializeBuildable: buildable.Materialize,
+		materializeBuildable: func(ctx context.Context, root, name, platform, destination string) error {
+			projectionPath := filepath.Join(root, filepath.FromSlash(buildable.ProjectionPath))
+			if _, err := os.Lstat(projectionPath); err == nil || !errors.Is(err, os.ErrNotExist) {
+				return buildable.Materialize(ctx, root, name, platform, destination)
+			}
+			declaration, err := evaluateLocalBuildable(ctx, provider, root, name)
+			if err != nil {
+				return err
+			}
+			return buildable.MaterializeDeclared(ctx, root, name, declaration, platform, destination)
+		},
 		skillsCheck:          checkSkills,
 		version:              version.Current,
 	}
