@@ -290,10 +290,11 @@ jobs:
           root="$RUNNER_TEMP/public-legacy-consumer"
           candidate="$root/.local-build/compat"
           mkdir -p "$candidate"
+          printf 'public compatibility fixture: writing declaration and candidate\n'
           cat > "$root/workbench.pkl" <<'EOF'
           amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl"
-          # Public 0.6.1 bundles the historical 0.6.0 lifecycle contract;
-          # this URI is deliberate for the old-seal/new-consume compatibility proof.
+          // Public 0.6.1 bundles the historical 0.6.0 lifecycle contract;
+          // this URI is deliberate for the old-seal/new-consume compatibility proof.
           buildables {
             ["compat"] = new Buildable {
               inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
@@ -348,6 +349,7 @@ jobs:
           new_workbench() {
             (cd "$root" && HOME="$new_home" MISE_DATA_DIR="$new_data" MISE_CACHE_DIR="$new_cache" MISE_STATE_DIR="$new_state" MISE_CONFIG_DIR="$new_config" mise exec github:phosphorco/workbench-go@0.6.2 -- workbench "$@")
           }
+          printf 'public compatibility fixture: sealing with published 0.6.1\n'
           old_workbench buildable seal --name compat --candidate-root .local-build/compat
           test ! -e "$root/.workbench"
           manifest="$candidate/manifest.json"
