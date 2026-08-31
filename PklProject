@@ -15,6 +15,8 @@ package {
     "internal/**"
     "release/**"
     "README.md"
+    "ROADMAP.md"
+    "docs/**"
     "LICENSE"
     "go.mod"
     "go.sum"
