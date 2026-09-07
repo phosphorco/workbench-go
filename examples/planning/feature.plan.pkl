@@ -1,0 +1,25 @@
+amends "workbench:plan"
+
+meta {
+  title = "Portable planning"
+  goal = "Produce and independently verify an artifact, then record its review."
+}
+
+local api = new Action {
+  id = "api"
+  owner = "model"
+  outcome = "Write artifact.txt with the agreed contents."
+  grant { "artifact.txt" }
+  oracle = module.mechanical("test -s artifact.txt")
+}
+
+local review = new Guard {
+  id = "review"
+  owner = "reviewer"
+  outcome = "Review the produced artifact against the agreed outcome."
+  observes { "artifact.txt" }
+  needs { module.produced(api); module.verified(api) }
+  oracle = module.adjudicated("The artifact satisfies the agreed outcome.", "reviewer")
+}
+
+nodes { api; review }

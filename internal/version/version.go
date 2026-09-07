@@ -19,11 +19,23 @@ const (
 
 	// CurrentContractVersion is the semantic version of the Pkl contract
 	// package embedded by the current Workbench release.
-	CurrentContractVersion = "0.6.1"
+	CurrentContractVersion = "0.7.0"
 	// ReleaseCoordinate is the independent GitHub release coordinate that
 	// publishes CurrentContractVersion.
-	ReleaseCoordinate = "0.6.2"
+	ReleaseCoordinate = "0.7.0"
 )
+
+// PackageReleaseCoordinate preserves independently published package locations.
+// A package version and the binary release carrying it need not be equal.
+func PackageReleaseCoordinate(packageVersion string) string {
+	if packageVersion == "0.6.1" {
+		return "0.6.2"
+	}
+	if packageVersion == CurrentContractVersion {
+		return ReleaseCoordinate
+	}
+	return packageVersion
+}
 
 // Info identifies one released Workbench binary and its exact source revision.
 type Info struct {

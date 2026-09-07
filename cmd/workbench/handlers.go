@@ -385,11 +385,7 @@ func renderChangeProgress(progress change.Progress) string {
 }
 
 func releasedContractURI(contractVersion, filename string) string {
-	coordinate := contractVersion
-	if contractVersion == currentContractVersion {
-		coordinate = version.ReleaseCoordinate
-	}
-	return releasedContractURIAt(coordinate, contractVersion, filename)
+	return releasedContractURIAt(version.PackageReleaseCoordinate(contractVersion), contractVersion, filename)
 }
 
 func releasedContractURIAt(coordinate, packageVersion, filename string) string {
@@ -403,7 +399,7 @@ func releasedContractURIAt(coordinate, packageVersion, filename string) string {
 
 func lifecycleContractURI(contractVersion, filename string) (string, error) {
 	switch contractVersion {
-	case "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", currentContractVersion:
+	case "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", currentContractVersion:
 		return releasedContractURI(contractVersion, filename), nil
 	case "0.1.0":
 		return "", fmt.Errorf("Workbench 0.1.0 has no released %s contract", filename)
@@ -447,7 +443,7 @@ func releasedCommitPlanContract(source []byte, contractVersion string) (evaluate
 	if _, err := lifecycleContractURI(contractVersion, filename); err != nil {
 		return evaluate.Contract{}, err
 	}
-	return releasedContractForSubjectLine(source, filename, contractVersion, "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", currentContractVersion)
+	return releasedContractForSubjectLine(source, filename, contractVersion, "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", currentContractVersion)
 }
 
 type snapshotContractKind uint8
@@ -467,7 +463,7 @@ func releasedSnapshotContractFromSource(source []byte) (evaluate.Contract, snaps
 		schema, err := evaluate.ReleasedContract(current)
 		return schema, currentSnapshotContract, err
 	}
-	for _, contractVersion := range []string{"0.4.0", "0.5.0", "0.6.0"} {
+	for _, contractVersion := range []string{"0.4.0", "0.5.0", "0.6.0", "0.6.1"} {
 		previous := releasedContractURI(contractVersion, "WorkbenchSnapshot.pkl")
 		if got == previous {
 			schema, err := evaluate.ReleasedContract(previous)
@@ -495,7 +491,7 @@ func evaluateSubject(ctx context.Context, root string, evaluator evaluate.Evalua
 	if err != nil {
 		return contract.Subject{}, fmt.Errorf("read workbench-subject.pkl: %w", err)
 	}
-	schema, err := releasedContractForSubjectLine(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", currentContractVersion)
+	schema, err := releasedContractForSubjectLine(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", currentContractVersion)
 	if err != nil {
 		return contract.Subject{}, err
 	}

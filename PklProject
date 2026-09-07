@@ -1,13 +1,13 @@
 amends "pkl:Project"
 
-local releaseCoordinate = "0.6.2"
+local releaseCoordinate = "0.7.0"
 
 package {
   // releaseCoordinate identifies the executable release/tag. The package
   // version below identifies the independent schema contract.
   name = "workbench"
   baseUri = "package://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench"
-  version = "0.6.1"
+  version = "0.7.0"
   packageZipUrl =
     "https://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench@\(version).zip"
 
@@ -24,5 +24,9 @@ package {
     "go.sum"
     "mise.toml"
     "pkl-spike/**"
+    "pkl/*.go"
+    "examples/**"
+    "docs/**"
+    "skills/**"
   }
 }
