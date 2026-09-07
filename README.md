@@ -1,5 +1,13 @@
 # Workbench
 
+For local task dependency graphs, Pkl definitions, compact agent-readable ticks, and
+evidence recording, see [Task plans](docs/task-plans.md) and
+`workbench plan --help`.
+
+Two independent agent skills ship with the binary: export environment guidance
+with `workbench self skills export workbench`, or optional task planning guidance with
+`workbench self skills export workbench-plan`. See [skill installation](docs/skills.md).
+
 **Reconcile one local development environment. Preserve every repository as its own Git authority.**
 
 Workbench is Phosphor’s local desired-state reconciler for development environments.
@@ -27,12 +35,10 @@ components does not relicense them as Workbench code.
 The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
 terms together and is included unchanged in every platform archive.
 
-The commands below describe the `0.5.0` release candidate. They become a public
-installation path only after the matching tag, archives, contracts, checksums,
-attestations, and immutable GitHub release have been published.
+Install the pinned `0.7.0` release:
 
 ```sh
-mise use -g github:phosphorco/workbench-go@0.5.0
+mise use -g github:phosphorco/workbench-go@0.7.0
 workbench version
 ```
 
@@ -104,7 +110,7 @@ Workbench-owned generated files inside a resource repository must likewise be ex
 `workbench-subject.pkl` is the local request for what should exist:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/WorkbenchSubject.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/WorkbenchSubject.pkl"
 
 workLine {
   branch = "cole/example-work"
@@ -172,12 +178,12 @@ snapshot never changes the Subject’s branch policy and never resets or rewrite
 an existing checkout; a conflicting checkout stops reproduction in recoverable
 state.
 
-Workbench 0.5 records `WorkbenchSnapshot.pkl` at
-`.workbench/workbench-snapshot.pkl` by default. A 0.5 binary always writes that
-current contract, even when the Subject amends an older released contract.
-Explicit reproduction can still read the exact snapshot contracts released by
-Workbench 0.2.0, 0.3.0, and 0.4.0 through version-scoped compatibility adapters; it
-does not rename or delete a user-authored snapshot.
+`workbench snapshot record` writes the bundled `WorkbenchSnapshot.pkl` contract
+at `.workbench/workbench-snapshot.pkl` by default, even when the Subject amends
+an older supported release. Explicit reproduction uses version-scoped
+compatibility adapters for older supported snapshots; it does not rename or
+delete a user-authored snapshot. The executable contract tests under
+`internal/evaluate` define the supported version set.
 
 ### There is no second branch lock
 
@@ -199,7 +205,7 @@ A filesystem lock, watcher, or permission layer is outside this design.
 Each participating resource contains a root `workbench.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/PackageScopeRepository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/PackageScopeRepository.pkl"
 
 scope = "@workbench-entry"
 
@@ -278,7 +284,7 @@ A Repository-shaped `workbench.pkl` amends the released `Repository.pkl`
 contract and does not author a name, scope, or generic identity:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/Repository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl"
 
 includes {}
 packages {}
@@ -289,7 +295,7 @@ name supplies the `repos/<name>` placement. Repository package placement remains
 the distinct, versioned law of that shape.
 
 A PackageScope resource is different: its checkout is a namespace container,
-not a package root. Every `packages` key in the `0.5.0` contract is exactly
+not a package root. Every `packages` key in the current contract is exactly
 `<scope>/<leaf>`, and the leaf derives the only canonical child location:
 
 ```pkl
@@ -441,7 +447,7 @@ The governing rule is:
 
 > Source derives dependency adjacency. Pkl declares the dependency semantics that source cannot prove.
 
-The current `0.6.1` package policy expresses the package metadata needed by the
+The current package policy expresses the package metadata needed by the
 assembled TypeScript graph directly:
 
 ```pkl
@@ -555,15 +561,12 @@ The final Workbench implementation absorbs repository observation, planning, and
 
 ## Buildables make repository-owned tools explicit
 
-The `0.6.1` contract package adds the same `buildables` mapping to
-`PackageScopeRepository.pkl` and `Repository.pkl`. It is published as
-`workbench@0.6.1` under the independent Workbench `0.6.2` release coordinate;
-current declarations therefore amend, for example,
-`package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/Repository.pkl`.
-These version lines are intentionally independent: `0.6.1` is the schema contract identity,
-not the old executable release; the executable and GitHub release tag are `0.6.2`.
-This is a candidate schema identity paired with the Workbench 0.6.2 binary. The immutable
-`0.1.0` through `0.5.0` contracts retain their historical meanings.
+`PackageScopeRepository.pkl` and `Repository.pkl` expose the same `buildables`
+mapping. New declarations can amend the `0.7.0` contract, for example:
+`package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl`.
+Binary release and Pkl package versions are independent coordinates, even when
+both are `0.7.0`. Preserve existing declarations' supported contract versions;
+installing a new binary does not require rewriting those inputs.
 
 A buildable declaration owns the facts Workbench cannot infer: producer input
 paths, the build command, an optional verification command, manifest identity
@@ -612,7 +615,7 @@ records. Output paths in a resolution or receipt are invocation-scoped handles;
 consumers compare output digest and size and persist destinations, never paths.
 
 Lifecycle commands are deliberately cold. They evaluate the caller's current
-root `workbench.pkl` against the bundled `0.6.1` contract package, so a fresh
+root `workbench.pkl` against the bundled contract package, so a fresh
 repository checkout can build before an assembled projection exists:
 
 ```sh
@@ -741,12 +744,12 @@ subtrees and their explicit composition dependencies.
 
 ## `AGENTS.pkl` turns current Workbench state into agent orientation
 
-Workbench `0.5.0` retains the constrained `AgentInstructions.pkl` contract.
+The constrained `AgentInstructions.pkl` contract governs generated instructions.
 
 The context template tracks `AGENTS.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/AgentInstructions.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/AgentInstructions.pkl"
 
 prose = """
 # Agent instructions
@@ -788,7 +791,7 @@ Workbench must make it difficult for agents to lose work, commit unrelated edits
 `commit-plan.pkl` describes one **Workbench Change Set**:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.5.0/workbench@0.5.0#/WorkbenchCommitPlan.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/WorkbenchCommitPlan.pkl"
 
 changeId = "fixture-cross-repository"
 summary = "Exercise a cross-repository fixture change"

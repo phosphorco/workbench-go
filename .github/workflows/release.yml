@@ -1,13 +1,13 @@
-name: Release 0.6.2
+name: Release 0.7.0
 
 on:
   push:
-    tags: ["0.6.2"]
+    tags: ["0.7.0"]
   workflow_dispatch:
 
 env:
-  WORKBENCH_VERSION: 0.6.2
-  WORKBENCH_CONTRACT_VERSION: 0.6.1
+  WORKBENCH_VERSION: 0.7.0
+  WORKBENCH_CONTRACT_VERSION: 0.7.0
 
 permissions:
   contents: read
@@ -153,21 +153,18 @@ jobs:
           archive=$(find candidate/out -name '*.tar.gz' -type f)
           mkdir candidate/installed
           tar -xzf "$archive" --strip-components=1 -C candidate/installed
-          test "$(candidate/installed/bin/workbench version)" = "workbench 0.6.2 (${{ github.sha }})"
+          test "$(candidate/installed/bin/workbench version)" = "workbench 0.7.0 (${{ github.sha }})"
           candidate/installed/libexec/workbench/pkl --version | grep -F '0.32.1'
           test "$(candidate/installed/libexec/workbench/bun --version)" = '1.3.14'
-          mkdir -p candidate/catalog/.agents/skills/release-smoke
-          cat > candidate/catalog/.agents/skills/release-smoke/SKILL.md <<'EOF'
-          ---
-          name: release-smoke
-          description: Verify the released Workbench can parse a self-contained skill catalog.
-          metadata:
-            domain: general
-          ---
-
-          # Release smoke
-          EOF
+          mkdir -p candidate/catalog/.agents/skills
+          for skill in workbench workbench-plan; do
+            PATH=/nonexistent candidate/installed/bin/workbench self skills export "$skill" --skills-dir candidate/catalog/.agents/skills
+            diff -r "candidate/catalog/.agents/skills/$skill" "candidate/installed/share/workbench/skills/$skill"
+          done
+          candidate/installed/bin/workbench plan schema > candidate/plan-schema.pkl
+          cmp candidate/plan-schema.pkl candidate/installed/share/workbench/pkl/Plan.pkl
           (cd candidate/catalog && ../installed/bin/workbench skills check)
+          bash acceptance/planner_release.sh "$PWD/candidate/installed/bin/workbench" "$PWD/candidate/planner"
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: candidate/out/workbench-*.tar.gz
@@ -195,12 +192,12 @@ jobs:
           test "$(sed -n 's/^  version = "\([^"]*\)"$/\1/p' PklProject)" = "$WORKBENCH_CONTRACT_VERSION"
           mkdir contracts
           mise exec -- pkl project package --skip-publish-check --output-path contracts .
-          for artifact in contracts/workbench@0.6.1 contracts/workbench@0.6.1.zip; do
+          for artifact in contracts/workbench@0.7.0 contracts/workbench@0.7.0.zip; do
             shasum -a 256 "$artifact" | awk '{print $1}' > "$artifact.sha256"
           done
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: contracts/workbench@0.6.1.zip
+          subject-path: contracts/workbench@0.7.0.zip
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: workbench-contracts

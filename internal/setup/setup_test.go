@@ -84,6 +84,8 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 	}{
 		{name: "package scope", uri: localV060PackageScopeURI, prefix: `scope = "@fixture"`},
 		{name: "repository", uri: localV060RepositoryURI},
+		{name: "historical 0.6.1 package scope", uri: localV061PackageScopeURI, prefix: `scope = "@fixture"`},
+		{name: "historical 0.6.1 repository", uri: localV061RepositoryURI},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source := []byte(fmt.Sprintf("amends %q\n%s\n%s", test.uri, test.prefix, buildablePklFixture))
@@ -98,7 +100,7 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 		})
 	}
 	oldSource := []byte(fmt.Sprintf("amends %q\n", localV050RepositoryURI))
-	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires exact 0.6.1") {
+	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, or 0.7.0") {
 		t.Fatalf("0.5 lifecycle declaration error = %v", err)
 	}
 }

@@ -22,8 +22,34 @@ import (
 const (
 	defaultCommitPlan = "commit-plan.pkl"
 	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
-	usage             = "usage: workbench setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable resolve|check|build|seal|verify|check-fresh|promote|materialize ... | skills check | version"
+	usage             = "usage: workbench plan <verb> <file.plan.pkl> | setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable resolve|check|build|seal|verify|check-fresh|promote|materialize ... | skills check | self skills list|export | version"
 )
+
+const rootHelp = `workbench <command>
+
+Environment operations:
+  setup                         Reconcile the Subject's environment.
+  check                         Run setup, then typecheck and tests.
+  commit [commit-plan.pkl]       Deliver the exact declared source change.
+  snapshot record [file]         Write an exact resource revision snapshot.
+  snapshot reproduce <file>      Acquire a snapshot's resource revisions.
+  prune <identity>...            Remove named managed orphans after checks.
+  run <buildable> -- <args>       Execute a declared tool.
+  buildable <operation>          Resolve, check, build, seal, verify, check-fresh,
+                                promote, or materialize a declared buildable.
+  skills check                  Validate the project's local skill catalog.
+
+Bundled agent skills:
+  self skills list              List the skills bundled with this binary (JSON).
+  self skills export <name>      Export a complete folder (default: .agents/skills).
+  self skills export --help      Destination and Pkl package reference options.
+
+Optional task graphs:
+  plan --help                   Author, inspect, and operate Pkl task graphs.
+
+Tool identity:
+  version                       Print the binary's release and source revision.
+`
 
 type setupApplication func(context.Context, string) (setup.Result, error)
 type checkApplication func(context.Context, string) (setup.Result, error)
@@ -112,13 +138,34 @@ func main() {
 		if !errors.As(err, &reported) {
 			fmt.Fprintf(os.Stderr, "workbench: %v\n", err)
 		}
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
 func run(ctx context.Context, arguments []string, workingDirectory func() (string, error), output, diagnostics io.Writer) error {
+	if len(arguments) == 0 || len(arguments) == 1 && (arguments[0] == "--help" || arguments[0] == "-h" || arguments[0] == "help") {
+		_, err := io.WriteString(output, rootHelp)
+		return err
+	}
+	if len(arguments) > 0 && arguments[0] == "plan" {
+		return runPlanCommand(ctx, arguments[1:], workingDirectory, output, diagnostics)
+	}
+	if len(arguments) > 0 && arguments[0] == "self" {
+		return runSelfCommand(arguments[1:], workingDirectory, output)
+	}
 	application := chooseApplications(version.IsDevelopment(), developmentApplications, releasedApplications)
 	return runWith(ctx, arguments, workingDirectory, output, diagnostics, application)
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var classified interface{ ExitCode() int }
+	if errors.As(err, &classified) {
+		return classified.ExitCode()
+	}
+	return 1
 }
 
 func chooseApplications(development bool, developmentFactory, releasedFactory func() applications) applications {

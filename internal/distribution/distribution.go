@@ -9,10 +9,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"time"
+
+	"github.com/phosphorco/workbench-go/internal/contract"
+	"github.com/phosphorco/workbench-go/internal/skills"
+	contracts "github.com/phosphorco/workbench-go/pkl"
+	bundledskills "github.com/phosphorco/workbench-go/skills"
 )
 
 var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -22,7 +28,8 @@ type Platform struct {
 	Arch string
 }
 
-// ArchiveInputs designates every byte allowed into a Workbench archive.
+// ArchiveInputs designates external payloads; contracts and skills are embedded
+// from the packager's source revision.
 type ArchiveInputs struct {
 	Version             string
 	Revision            string
@@ -110,6 +117,30 @@ func WriteArchive(output string, inputs ArchiveInputs) error {
 		directory(root + "/share/workbench/"),
 		contentsFile(root+"/share/workbench/build.json", buildMetadata, 0o644),
 		file(root+"/share/workbench/runtime-lock.json", inputs.RuntimeLock, 0o644),
+		directory(root + "/share/workbench/pkl/"),
+		contentsFile(root+"/share/workbench/pkl/Plan.pkl", []byte(contracts.Plan), 0o644),
+	}
+	catalog, err := bundledskills.Render(bundledskills.Parameters{})
+	if err != nil {
+		return err
+	}
+	selected, err := skills.Select(catalog, contract.SkillSelection{All: true})
+	if err != nil {
+		return err
+	}
+	directories := map[string]bool{}
+	base := root + "/share/workbench/skills"
+	for _, skill := range selected {
+		for relative, contents := range skill.Files {
+			name := base + "/" + skill.Name + "/" + filepath.ToSlash(relative)
+			entries = append(entries, contentsFile(name, contents, 0o644))
+			for parent := path.Dir(name); parent != root+"/share/workbench"; parent = path.Dir(parent) {
+				if !directories[parent] {
+					directories[parent] = true
+					entries = append(entries, directory(parent+"/"))
+				}
+			}
+		}
 	}
 	sort.Slice(entries, func(left, right int) bool { return entries[left].name < entries[right].name })
 	for index := range entries {

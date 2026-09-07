@@ -224,7 +224,7 @@ func packageResourceURLs(packageModule *url.URL) ([]string, error) {
 		return nil, fmt.Errorf("released contract URI %q does not designate a phosphorco/workbench-go release", packageModule.String())
 	}
 	packageVersion := strings.TrimPrefix(parts[6], "workbench@")
-	if packageVersion == parts[6] || (packageVersion != parts[5] && !(parts[5] == workbenchversion.ReleaseCoordinate && packageVersion == workbenchversion.CurrentContractVersion)) {
+	if packageVersion == parts[6] || parts[5] != workbenchversion.PackageReleaseCoordinate(packageVersion) {
 		return nil, fmt.Errorf("released contract URI %q does not designate a supported Workbench package coordinate", packageModule.String())
 	}
 

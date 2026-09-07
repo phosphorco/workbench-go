@@ -408,7 +408,7 @@ func TestGeneratedProjectionPolicyRefusesWorkbenchOwnedPathsBeforeRefAdvance(t *
 
 func TestCommitPlanContractsMatchTheExactSubjectRelease(t *testing.T) {
 	t.Parallel()
-	for _, contractVersion := range []string{"0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion} {
+	for _, contractVersion := range []string{"0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", currentContractVersion} {
 		contractVersion := contractVersion
 		t.Run(contractVersion, func(t *testing.T) {
 			t.Parallel()
@@ -429,15 +429,16 @@ func TestCommitPlanContractsMatchTheExactSubjectRelease(t *testing.T) {
 	}
 }
 
-func TestCurrentContractUsesIndependentReleaseCoordinate(t *testing.T) {
-	for _, filename := range []string{"Repository.pkl", "WorkbenchSubject.pkl"} {
-		want := "package://github.com/phosphorco/workbench-go/releases/download/0.6.2/workbench@0.6.1#/" + filename
-		if got := releasedContractURI(currentContractVersion, filename); got != want {
-			t.Fatalf("current %s URI = %q, want %q", filename, got, want)
+func TestContractReleaseCoordinatesPreserveHistoricalIdentities(t *testing.T) {
+	for _, fixture := range []struct{ packageVersion, release string }{
+		{currentContractVersion, "0.7.0"}, {"0.6.1", "0.6.2"}, {"0.6.0", "0.6.0"},
+	} {
+		for _, filename := range []string{"Repository.pkl", "WorkbenchSubject.pkl", "WorkbenchCommitPlan.pkl", "WorkbenchSnapshot.pkl"} {
+			want := "package://github.com/phosphorco/workbench-go/releases/download/" + fixture.release + "/workbench@" + fixture.packageVersion + "#/" + filename
+			if got := releasedContractURI(fixture.packageVersion, filename); got != want {
+				t.Fatalf("%s %s URI = %q, want %q", fixture.packageVersion, filename, got, want)
+			}
 		}
-	}
-	if got := releasedContractURI("0.6.0", "Repository.pkl"); got != "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl" {
-		t.Fatalf("historical URI changed to %q", got)
 	}
 }
 
@@ -460,7 +461,7 @@ func TestSnapshotContractSelectionDistinguishesCurrentAndExactLegacyIdentities(t
 			t.Fatalf("%s snapshot kind = %v", contractVersion, kind)
 		}
 	}
-	for _, version := range []string{"0.4.0", "0.5.0"} {
+	for _, version := range []string{"0.4.0", "0.5.0", "0.6.0", "0.6.1"} {
 		previousURI := releasedContractURI(version, "WorkbenchSnapshot.pkl")
 		if _, kind, err := releasedSnapshotContractFromSource([]byte("amends \"" + previousURI + "\"\n")); err != nil {
 			t.Fatalf("%s snapshot contract: %v", version, err)
@@ -484,9 +485,9 @@ func TestSnapshotContractSelectionDistinguishesCurrentAndExactLegacyIdentities(t
 
 func TestReleasedSubjectContractRetainsAllSupportedSubjectLines(t *testing.T) {
 	t.Parallel()
-	for _, contractVersion := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion} {
+	for _, contractVersion := range []string{"0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", currentContractVersion} {
 		uri := releasedContractURI(contractVersion, "WorkbenchSubject.pkl")
-		if _, err := releasedContractForSubjectLine([]byte("amends \""+uri+"\"\n"), "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", currentContractVersion); err != nil {
+		if _, err := releasedContractForSubjectLine([]byte("amends \""+uri+"\"\n"), "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", currentContractVersion); err != nil {
 			t.Fatalf("%s Subject contract: %v", contractVersion, err)
 		}
 	}
