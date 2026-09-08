@@ -1,0 +1,3 @@
+module phosphor.workbench.Plan
+
+amends "pkl/Plan.pkl"

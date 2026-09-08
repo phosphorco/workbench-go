@@ -27,7 +27,7 @@ const (
 	ProjectionPath = ".workbench/buildables.json"
 	// ProjectionSchemaDigest binds the projection to the released Pkl schema
 	// interpreted by this binary. A schema edit must update this digest.
-	ProjectionSchemaDigest  = "e66e5b5997e5730fe026ed45aa1776c9ceae99e62095b18cf0f6584bd24d931d"
+	ProjectionSchemaDigest  = "59f87f6155ed72e5bec0f9226330e84b0419f4df1c35f9baa85b0af2a925399d"
 	projectionSchemaVersion = 1
 )
 
@@ -68,12 +68,35 @@ func (refusal *Refusal) Error() string {
 	return fmt.Sprintf("%s refused: %s\nNext action: %s", subject, refusal.Reason, refusal.Remedy)
 }
 
-// Resolution is one completely validated candidate and selected host output.
+// Resolution is one completely validated candidate and the complete output
+// set for one declared platform. Candidate is an opaque declaration identity;
+// candidate roots and manifest details are deliberately absent from this
+// value.
 type Resolution struct {
-	Buildable string `json:"buildable"`
-	Candidate string `json:"candidate"`
-	Platform  string `json:"platform"`
-	Path      string `json:"path"`
+	SchemaVersion int               `json:"schemaVersion"`
+	Buildable     string            `json:"buildable"`
+	Candidate     string            `json:"candidate"`
+	Platform      string            `json:"platform"`
+	Outputs       []ResolvedOutput  `json:"outputs"`
+	Capabilities  []string          `json:"capabilities"`
+	Source        map[string]string `json:"source"`
+
+	// Path is retained for source compatibility with pre-seam Go callers. It
+	// is not serialized and is populated only for the single executable output.
+	Path string `json:"-"`
+}
+
+// ResolvedOutput is a verified output handle.
+// path is invocation-scoped and non-comparable; do not compare paths, compare digest and size; do not persist paths, persist destination.
+// Path is already resolved to the bytes selected by Workbench; consumers must
+// not reconstruct it from roots.
+type ResolvedOutput struct {
+	Path        string `json:"path"`
+	Destination string `json:"destination"`
+	Kind        string `json:"kind"`
+	Digest      string `json:"digest"`
+	Size        int64  `json:"size"`
+	Executable  bool   `json:"executable"`
 }
 
 // CheckReport is the stable JSON result of the no-exec check command.
@@ -101,9 +124,10 @@ type ProjectedBuildable struct {
 
 // OwnerReference is the least authority needed to find and revalidate an owner.
 type OwnerReference struct {
-	Identity       string `json:"identity"`
-	RepositoryPath string `json:"repositoryPath"`
-	SourceDigest   string `json:"sourceDigest"`
+	Identity            string `json:"identity"`
+	RepositoryPath      string `json:"repositoryPath"`
+	SourceDigest        string `json:"sourceDigest,omitempty"`
+	DeclarationIdentity string `json:"declarationIdentity"`
 }
 
 // ProjectionOwner is setup's pure input for one participating repository.
@@ -145,6 +169,7 @@ type ManifestContract struct {
 
 type Candidate struct {
 	Root          string `json:"root"`
+	Identity      string `json:"identity,omitempty"`
 	InputStrategy string `json:"inputStrategy"`
 	InvalidRemedy string `json:"invalidRemedy"`
 }
@@ -169,11 +194,12 @@ type Output struct {
 }
 
 type artifactManifest struct {
-	SchemaVersion  int               `json:"schemaVersion"`
-	Kind           string            `json:"kind"`
-	ContractID     string            `json:"contractId"`
-	Source         map[string]string `json:"source"`
-	ProducerInputs struct {
+	SchemaVersion       int               `json:"schemaVersion"`
+	Kind                string            `json:"kind"`
+	ContractID          string            `json:"contractId"`
+	DeclarationIdentity string            `json:"declarationIdentity,omitempty"`
+	Source              map[string]string `json:"source"`
+	ProducerInputs      struct {
 		Algorithm string `json:"algorithm"`
 		Digest    string `json:"digest"`
 	} `json:"producerInputs"`
@@ -192,8 +218,9 @@ type artifactOutput struct {
 }
 
 type candidateVerification struct {
-	Root    string
-	Outputs map[string][]artifactOutput
+	Root     string
+	Manifest artifactManifest
+	Outputs  map[string][]artifactOutput
 }
 
 // EncodeProjection validates and deterministically encodes all owner declarations.
@@ -233,9 +260,10 @@ func EncodeProjection(owners []ProjectionOwner) ([]byte, error) {
 			}
 			projection.Buildables[name] = ProjectedBuildable{
 				Owner: OwnerReference{
-					Identity:       owner.Identity,
-					RepositoryPath: owner.RepositoryPath,
-					SourceDigest:   hex.EncodeToString(sourceDigest[:]),
+					Identity:            owner.Identity,
+					RepositoryPath:      owner.RepositoryPath,
+					SourceDigest:        hex.EncodeToString(sourceDigest[:]),
+					DeclarationIdentity: mustDeclarationIdentity(name, declaration),
 				},
 				Declaration: declaration,
 			}
@@ -256,16 +284,126 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// DeclarationIdentity returns the semantic identity of one buildable
+// declaration. It intentionally excludes the raw workbench.pkl bytes so an
+// unrelated declaration in the same file cannot stale this buildable.
+func DeclarationIdentity(name string, declaration Buildable) (string, error) {
+	if err := declaration.ValidateForName(name); err != nil {
+		return "", err
+	}
+	normalized := normalizeDeclaration(name, declaration)
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("encode buildable %q declaration identity: %w", name, err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+type declarationIdentityInput struct {
+	Name        string    `json:"name"`
+	Declaration Buildable `json:"declaration"`
+}
+
+func normalizeDeclaration(name string, declaration Buildable) declarationIdentityInput {
+	normalized := declaration
+	normalized.InputDetection.Paths = normalizePaths(declaration.InputDetection.Paths)
+	normalized.Manifest.ExpectedSource = cloneStringMap(declaration.Manifest.ExpectedSource)
+	normalized.Manifest.RequiredSourceFields = sortedStrings(declaration.Manifest.RequiredSourceFields)
+	normalized.Manifest.RequiredCapabilities = sortedStrings(declaration.Manifest.RequiredCapabilities)
+	normalized.Candidates = append([]Candidate(nil), declaration.Candidates...)
+	for index := range normalized.Candidates {
+		normalized.Candidates[index].Root = normalizePath(normalized.Candidates[index].Root)
+	}
+	normalized.Platforms = make(map[string]Platform, len(declaration.Platforms))
+	for name, platform := range declaration.Platforms {
+		platform.OS = sortedStrings(platform.OS)
+		platform.Arch = sortedStrings(platform.Arch)
+		platform.Path = normalizePath(platform.Path)
+		platform.Outputs = append([]Output(nil), platform.Outputs...)
+		for index := range platform.Outputs {
+			platform.Outputs[index].Path = normalizePath(platform.Outputs[index].Path)
+			platform.Outputs[index].Destination = normalizePath(platform.Outputs[index].Destination)
+		}
+		sort.Slice(platform.Outputs, func(left, right int) bool {
+			if platform.Outputs[left].Path != platform.Outputs[right].Path {
+				return platform.Outputs[left].Path < platform.Outputs[right].Path
+			}
+			return platform.Outputs[left].Destination < platform.Outputs[right].Destination
+		})
+		normalized.Platforms[name] = platform
+	}
+	return declarationIdentityInput{Name: name, Declaration: normalized}
+}
+
+func normalizePaths(paths []string) []string {
+	normalized := make([]string, len(paths))
+	for index, path := range paths {
+		normalized[index] = normalizePath(path)
+	}
+	slicesSortStrings(normalized)
+	return normalized
+}
+
+func normalizePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(path)))
+}
+
+func sortedStrings(values []string) []string {
+	result := append([]string(nil), values...)
+	slicesSortStrings(result)
+	return result
+}
+
+func slicesSortStrings(values []string) {
+	sort.Strings(values)
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
+}
+
 // Resolve returns the first present, valid candidate in declared order.
 func Resolve(ctx context.Context, workbenchRoot, name, hostOS, hostArch string) (Resolution, error) {
 	ownerRoot, declaration, err := loadProjectedDeclaration(workbenchRoot, name)
 	if err != nil {
 		return Resolution{}, err
 	}
-	return resolveDeclared(ctx, ownerRoot, name, declaration, hostOS, hostArch)
+	platformName, _, err := declaration.platform(hostOS, hostArch)
+	if err != nil {
+		return Resolution{}, &Refusal{
+			Code: RefusalUnsupportedPlatform, Buildable: name, Reason: err.Error(),
+			Remedy: "Run this buildable on one of its declared host platforms.",
+		}
+	}
+	return resolveDeclaredPlatform(ctx, ownerRoot, name, declaration, platformName)
+}
+
+// ResolvePlatform resolves one exact declared platform from the generated
+// projection. It is the hot-path counterpart to ResolveDeclaredPlatform.
+func ResolvePlatform(ctx context.Context, workbenchRoot, name, platformName string) (Resolution, error) {
+	ownerRoot, declaration, err := loadProjectedDeclaration(workbenchRoot, name)
+	if err != nil {
+		return Resolution{}, err
+	}
+	return resolveDeclaredPlatform(ctx, ownerRoot, name, declaration, platformName)
 }
 
 func loadProjectedDeclaration(workbenchRoot, name string) (string, Buildable, error) {
+	// This loader is deliberately projection-only. Callers that have evaluated
+	// the current workbench.pkl must run ValidateProjectedDeclaration first;
+	// this package cannot evaluate Pkl and must never compare a projection's
+	// declaration identity with the same projected declaration.
 	root, err := filepath.Abs(workbenchRoot)
 	if err != nil {
 		return "", Buildable{}, fmt.Errorf("resolve workbench root: %w", err)
@@ -303,7 +441,7 @@ func loadProjectedDeclaration(workbenchRoot, name string) (string, Buildable, er
 	}
 	sourceDigest := sha256.Sum256(source)
 	currentSourceDigest := hex.EncodeToString(sourceDigest[:])
-	if currentSourceDigest != projected.Owner.SourceDigest {
+	if projected.Owner.DeclarationIdentity == "" && currentSourceDigest != projected.Owner.SourceDigest {
 		return "", Buildable{}, &Refusal{
 			Code: RefusalProjectionStale, Buildable: name,
 			Reason: fmt.Sprintf("generated declaration digest is %s, current %s", projected.Owner.SourceDigest, currentSourceDigest),
@@ -311,6 +449,85 @@ func loadProjectedDeclaration(workbenchRoot, name string) (string, Buildable, er
 		}
 	}
 	return ownerRoot, projected.Declaration, nil
+}
+
+// ValidateProjectedDeclaration compares a current, semantically evaluated
+// declaration with the optional setup projection. A missing projection is the
+// cold state and succeeds; a present projection is only an optimization when
+// its per-buildable identity still matches the current declaration.
+func ValidateProjectedDeclaration(workbenchRoot, name string, declaration Buildable) error {
+	root, err := filepath.Abs(workbenchRoot)
+	if err != nil {
+		return fmt.Errorf("resolve workbench root: %w", err)
+	}
+	projectionPath := filepath.Join(root, filepath.FromSlash(ProjectionPath))
+	if _, err := os.Lstat(projectionPath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return &Refusal{
+			Code: RefusalProjectionInvalid, Buildable: name,
+			Reason: "observe generated buildable projection: " + err.Error(),
+			Remedy: "Run 'workbench setup' to regenerate the buildable projection.",
+		}
+	}
+	projection, err := loadProjection(root)
+	if err != nil {
+		return &Refusal{
+			Code: RefusalProjectionInvalid, Buildable: name, Reason: err.Error(),
+			Remedy: "Run 'workbench setup' to regenerate the buildable projection.",
+		}
+	}
+	projected, exists := projection.Buildables[name]
+	if !exists {
+		return &Refusal{
+			Code: RefusalProjectionStale, Buildable: name,
+			Reason: "generated projection does not contain the current buildable declaration",
+			Remedy: "Run 'workbench setup' to regenerate the buildable projection.",
+		}
+	}
+	identity, err := DeclarationIdentity(name, declaration)
+	if err != nil {
+		return &Refusal{
+			Code: RefusalProjectionStale, Buildable: name, Reason: err.Error(),
+			Remedy: "Run 'workbench setup' to regenerate the buildable projection.",
+		}
+	}
+	if projected.Owner.DeclarationIdentity == "" {
+		ownerRoot, ownerErr := existingPathWithin(root, projected.Owner.RepositoryPath)
+		if ownerErr != nil {
+			return &Refusal{
+				Code: RefusalProjectionStale, Buildable: name,
+				Reason: fmt.Sprintf("projected owner %q is unavailable: %v", projected.Owner.Identity, ownerErr),
+				Remedy: "Run 'workbench setup' to reconcile the owning checkout and regenerate the projection.",
+			}
+		}
+		source, sourceErr := os.ReadFile(filepath.Join(ownerRoot, "workbench.pkl"))
+		if sourceErr != nil {
+			return &Refusal{
+				Code: RefusalProjectionStale, Buildable: name,
+				Reason: fmt.Sprintf("read projected owner %q workbench.pkl: %v", projected.Owner.Identity, sourceErr),
+				Remedy: "Run 'workbench setup' to reconcile the owning checkout and regenerate the projection.",
+			}
+		}
+		sourceDigest := sha256.Sum256(source)
+		currentSourceDigest := hex.EncodeToString(sourceDigest[:])
+		if currentSourceDigest != projected.Owner.SourceDigest {
+			return &Refusal{
+				Code: RefusalProjectionStale, Buildable: name,
+				Reason: fmt.Sprintf("generated declaration digest is %s, current %s", projected.Owner.SourceDigest, currentSourceDigest),
+				Remedy: "Run 'workbench setup' to regenerate the buildable projection from the current workbench.pkl.",
+			}
+		}
+		return nil
+	}
+	if projected.Owner.DeclarationIdentity != identity {
+		return &Refusal{
+			Code: RefusalProjectionStale, Buildable: name,
+			Reason: fmt.Sprintf("generated declaration identity is %s, current %s", projected.Owner.DeclarationIdentity, identity),
+			Remedy: "Run 'workbench setup' to regenerate the buildable projection from the current workbench.pkl.",
+		}
+	}
+	return nil
 }
 
 // ResolveDeclared is the projection-independent seam for producer contract proofs.
@@ -323,30 +540,82 @@ func ResolveDeclared(ctx context.Context, repositoryRoot, name string, declarati
 }
 
 func resolveDeclared(ctx context.Context, root, name string, declaration Buildable, hostOS, hostArch string) (Resolution, error) {
-	if err := ValidateName(name); err != nil {
-		return Resolution{}, err
-	}
-	if err := declaration.ValidateForName(name); err != nil {
-		return Resolution{}, fmt.Errorf("buildable %q configuration: %w", name, err)
-	}
-	platformName, platform, err := declaration.platform(hostOS, hostArch)
+	platformName, _, err := declaration.platform(hostOS, hostArch)
 	if err != nil {
 		return Resolution{}, &Refusal{
 			Code: RefusalUnsupportedPlatform, Buildable: name, Reason: err.Error(),
 			Remedy: "Run this buildable on one of its declared host platforms.",
 		}
 	}
+	return resolveDeclaredPlatform(ctx, root, name, declaration, platformName)
+}
+
+// ResolveDeclaredPlatform resolves one exact platform from a directly
+// evaluated declaration. This is the projection-independent cold seam.
+func ResolveDeclaredPlatform(ctx context.Context, repositoryRoot, name string, declaration Buildable, platformName string) (Resolution, error) {
+	root, err := filepath.Abs(repositoryRoot)
+	if err != nil {
+		return Resolution{}, fmt.Errorf("resolve repository root: %w", err)
+	}
+	return resolveDeclaredPlatform(ctx, root, name, declaration, platformName)
+}
+
+func resolveDeclaredPlatform(ctx context.Context, root, name string, declaration Buildable, platformName string) (Resolution, error) {
+	if err := ValidateName(name); err != nil {
+		return Resolution{}, err
+	}
+	if err := declaration.ValidateForName(name); err != nil {
+		return Resolution{}, fmt.Errorf("buildable %q configuration: %w", name, err)
+	}
+	platform, exists := declaration.Platforms[platformName]
+	if !exists {
+		return Resolution{}, &Refusal{
+			Code: RefusalUnsupportedPlatform, Buildable: name,
+			Reason: fmt.Sprintf("platform %q is not declared", platformName),
+			Remedy: "Choose one of the platform names declared by the owning workbench.pkl.",
+		}
+	}
 	candidate, verified, err := resolveCandidate(ctx, root, name, declaration, platformName)
 	if err != nil {
 		return Resolution{}, err
 	}
-	resolution := Resolution{Buildable: name, Candidate: candidate.Root, Platform: platformName}
+	resolution := Resolution{
+		SchemaVersion: 1, Buildable: name, Candidate: candidate.Identity, Platform: platformName,
+		Capabilities: append([]string(nil), verified.Manifest.Capabilities...),
+		Source:       cloneStringMap(verified.Manifest.Source),
+		Outputs:      make([]ResolvedOutput, 0, len(verified.Outputs[platformName])),
+	}
+	for _, output := range verified.Outputs[platformName] {
+		resolvedPath, pathErr := existingPathWithin(verified.Root, output.Path)
+		if pathErr != nil {
+			return Resolution{}, &Refusal{
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
+				Reason: fmt.Sprintf("selected output %q is missing or escapes the candidate", output.Path),
+				Remedy: candidate.InvalidRemedy,
+			}
+		}
+		kind, destination := output.Kind, output.Destination
+		if kind == "" || destination == "" {
+			if declared, declaredExists := declaredOutput(platform, output.Path); declaredExists {
+				if kind == "" {
+					kind = declared.Kind
+				}
+				if destination == "" && len(platform.Outputs) > 0 {
+					destination = declared.Destination
+				}
+			}
+		}
+		resolution.Outputs = append(resolution.Outputs, ResolvedOutput{
+			Path: resolvedPath, Destination: destination, Kind: kind,
+			Digest: output.SHA256, Size: output.Size, Executable: output.Executable,
+		})
+	}
 	if output, exists := executableOutput(platform); exists {
 		resolution.Path, err = existingPathWithin(verified.Root, output.Path)
 		if err != nil {
 			return Resolution{}, &Refusal{
-				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
-				Reason: fmt.Sprintf("selected executable output %q is missing or escapes the candidate: %v", output.Path, err),
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
+				Reason: fmt.Sprintf("selected executable output %q is missing or escapes the candidate", output.Path),
 				Remedy: candidate.InvalidRemedy,
 			}
 		}
@@ -355,21 +624,22 @@ func resolveDeclared(ctx context.Context, root, name string, declaration Buildab
 }
 
 func resolveCandidate(ctx context.Context, root, name string, declaration Buildable, selectedPlatform string) (Candidate, candidateVerification, error) {
-	for _, candidate := range declaration.Candidates {
+	for index, candidate := range declaration.Candidates {
+		candidate.Identity = candidateIdentity(candidate, index)
 		present, err := candidatePresent(root, candidate, declaration.Platforms)
 		if err != nil {
-			return Candidate{}, candidateVerification{}, fmt.Errorf("observe buildable %q candidate %q: %w", name, candidate.Root, err)
+			return Candidate{}, candidateVerification{}, fmt.Errorf("observe buildable %q candidate %q: %w", name, candidate.Identity, err)
 		}
 		if !present {
 			continue
 		}
-		verified, code, err := verifyCandidate(ctx, root, declaration, candidate)
+		verified, code, err := verifyCandidate(ctx, root, name, declaration, candidate)
 		if err != nil {
-			return Candidate{}, candidateVerification{}, &Refusal{Code: code, Buildable: name, Candidate: candidate.Root, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
+			return Candidate{}, candidateVerification{}, &Refusal{Code: code, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 		}
 		if _, exists := verified.Outputs[selectedPlatform]; !exists {
 			return Candidate{}, candidateVerification{}, &Refusal{
-				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
 				Reason: fmt.Sprintf("candidate has no validated outputs for platform %q", selectedPlatform), Remedy: candidate.InvalidRemedy,
 			}
 		}
@@ -409,16 +679,31 @@ func Run(ctx context.Context, workbenchRoot, name string, arguments []string) er
 	if err != nil {
 		return err
 	}
-	if resolution.Path == "" {
+	return RunResolved(resolution, name, arguments)
+}
+
+// RunResolved executes the executable output selected by a verified
+// resolution. It performs no candidate selection or artifact verification.
+func RunResolved(resolution Resolution, name string, arguments []string) error {
+	path := resolution.Path
+	if path == "" {
+		for _, output := range resolution.Outputs {
+			if output.Executable {
+				path = output.Path
+				break
+			}
+		}
+	}
+	if path == "" {
 		return &Refusal{
 			Code: RefusalNotExecutable, Buildable: name, Candidate: resolution.Candidate,
 			Reason: fmt.Sprintf("platform %q declares no executable output; run is only for executable buildables", resolution.Platform),
 			Remedy: "Use 'workbench buildable materialize' with an explicit destination for this module.",
 		}
 	}
-	argv := append([]string{resolution.Path}, arguments...)
-	if err := syscall.Exec(resolution.Path, argv, os.Environ()); err != nil {
-		return fmt.Errorf("exec buildable %q at %q: %w", name, resolution.Path, err)
+	argv := append([]string{path}, arguments...)
+	if err := syscall.Exec(path, argv, os.Environ()); err != nil {
+		return fmt.Errorf("exec buildable %q at %q: %w", name, path, err)
 	}
 	return nil
 }
@@ -457,6 +742,9 @@ func loadProjection(root string) (Projection, error) {
 		}
 		if strings.TrimSpace(projected.Owner.Identity) == "" || !sha256Pattern.MatchString(projected.Owner.SourceDigest) {
 			return Projection{}, fmt.Errorf("buildable %q owner reference is incomplete", name)
+		}
+		if projected.Owner.DeclarationIdentity != "" && !sha256Pattern.MatchString(projected.Owner.DeclarationIdentity) {
+			return Projection{}, fmt.Errorf("buildable %q declaration identity is incomplete", name)
 		}
 		if err := validateRelativePath(projected.Owner.RepositoryPath); err != nil {
 			return Projection{}, fmt.Errorf("buildable %q owner repository path: %w", name, err)
@@ -527,6 +815,9 @@ func (buildable Buildable) Validate() error {
 		}
 		if strings.TrimSpace(candidate.InvalidRemedy) == "" {
 			return fmt.Errorf("candidate %q invalid remedy is empty", candidate.Root)
+		}
+		if candidate.Identity != "" && !namePattern.MatchString(candidate.Identity) {
+			return fmt.Errorf("candidate %q identity is invalid", candidate.Root)
 		}
 		if candidate.InputStrategy != "gitWorktree" && candidate.InputStrategy != "gitHeadTree" {
 			return fmt.Errorf("candidate %q has unsupported input strategy %q", candidate.Root, candidate.InputStrategy)
@@ -628,6 +919,19 @@ func executableOutput(platform Platform) (Output, bool) {
 	return Output{}, false
 }
 
+func declaredOutput(platform Platform, path string) (Output, bool) {
+	outputs, err := platform.outputs()
+	if err != nil {
+		return Output{}, false
+	}
+	for _, output := range outputs {
+		if filepath.ToSlash(filepath.Clean(output.Path)) == filepath.ToSlash(filepath.Clean(path)) {
+			return output, true
+		}
+	}
+	return Output{}, false
+}
+
 // ValidateForName adds the fixed local-then-CI candidate topology.
 func (buildable Buildable) ValidateForName(name string) error {
 	if err := ValidateName(name); err != nil {
@@ -650,6 +954,30 @@ func (buildable Buildable) ValidateForName(name string) error {
 		}
 	}
 	return nil
+}
+
+func candidateIdentity(candidate Candidate, index int) string {
+	if candidate.Identity != "" {
+		return candidate.Identity
+	}
+	// The 0.6 declaration has no authored identity field. This compatibility
+	// mapping stays inside Workbench; the mapping is never exposed as a root.
+	switch index {
+	case 0:
+		return "local"
+	case 1:
+		return "committed"
+	default:
+		return fmt.Sprintf("candidate-%d", index+1)
+	}
+}
+
+func mustDeclarationIdentity(name string, declaration Buildable) string {
+	identity, err := DeclarationIdentity(name, declaration)
+	if err != nil {
+		panic(err)
+	}
+	return identity
 }
 
 func (buildable Buildable) platform(hostOS, hostArch string) (string, Platform, error) {
@@ -675,23 +1003,23 @@ func candidatePresent(root string, candidate Candidate, _ map[string]Platform) (
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	return false, err
+	return false, errors.New("observe declared candidate path")
 }
 
-func verifyCandidate(ctx context.Context, root string, buildable Buildable, candidate Candidate) (candidateVerification, RefusalCode, error) {
+func verifyCandidate(ctx context.Context, root, name string, buildable Buildable, candidate Candidate) (candidateVerification, RefusalCode, error) {
 	candidateRoot, err := existingPathWithin(root, candidate.Root)
 	if err != nil {
-		return candidateVerification{}, RefusalCandidateInvalid, fmt.Errorf("candidate root is not confined to the repository: %w", err)
+		return candidateVerification{}, RefusalCandidateInvalid, errors.New("candidate root is not confined to the repository")
 	}
 	manifestPath, err := existingPathWithin(candidateRoot, "manifest.json")
 	if err != nil {
-		return candidateVerification{}, RefusalCandidateInvalid, fmt.Errorf("manifest is missing or escapes the candidate root: %w", err)
+		return candidateVerification{}, RefusalCandidateInvalid, errors.New("manifest is missing or escapes the candidate root")
 	}
 	manifest, err := readManifest(manifestPath)
 	if err != nil {
 		return candidateVerification{}, RefusalCandidateInvalid, err
 	}
-	if err := validateManifest(buildable, manifest); err != nil {
+	if err := validateManifest(name, buildable, manifest); err != nil {
 		return candidateVerification{}, RefusalCandidateInvalid, err
 	}
 	currentDigest, err := candidateInputDigest(ctx, root, candidate, buildable.InputDetection.Paths)
@@ -705,38 +1033,47 @@ func verifyCandidate(ctx context.Context, root string, buildable Buildable, cand
 	for _, output := range manifest.Outputs {
 		artifactPath, err := existingPathWithin(candidateRoot, output.Path)
 		if err != nil {
-			return candidateVerification{}, RefusalCandidateInvalid, fmt.Errorf("output %s is missing or escapes the candidate root: %w", output.Path, err)
+			return candidateVerification{}, RefusalCandidateInvalid, fmt.Errorf("output %s is missing or escapes the candidate root", output.Path)
 		}
 		if err := verifyOutput(artifactPath, output); err != nil {
 			return candidateVerification{}, RefusalCandidateInvalid, fmt.Errorf("output %s: %w", output.Path, err)
 		}
 		outputs[output.Platform] = append(outputs[output.Platform], output)
 	}
-	return candidateVerification{Root: candidateRoot, Outputs: outputs}, "", nil
+	return candidateVerification{Root: candidateRoot, Manifest: manifest, Outputs: outputs}, "", nil
 }
 
 func readManifest(path string) (artifactManifest, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return artifactManifest{}, fmt.Errorf("read manifest %q: %w", path, err)
+		return artifactManifest{}, fmt.Errorf("read candidate manifest: %w", err)
 	}
 	defer file.Close()
 	decoder := json.NewDecoder(bufio.NewReader(file))
 	decoder.DisallowUnknownFields()
 	var manifest artifactManifest
 	if err := decoder.Decode(&manifest); err != nil {
-		return artifactManifest{}, fmt.Errorf("decode manifest %q: %w", path, err)
+		return artifactManifest{}, fmt.Errorf("decode candidate manifest: %w", err)
 	}
 	if err := requireJSONEOF(decoder); err != nil {
-		return artifactManifest{}, fmt.Errorf("decode manifest %q: %w", path, err)
+		return artifactManifest{}, fmt.Errorf("decode candidate manifest: %w", err)
 	}
 	return manifest, nil
 }
 
-func validateManifest(buildable Buildable, manifest artifactManifest) error {
+func validateManifest(name string, buildable Buildable, manifest artifactManifest) error {
 	contract := buildable.Manifest
 	if manifest.SchemaVersion != contract.SchemaVersion || manifest.Kind != contract.Kind || manifest.ContractID != contract.ContractID {
 		return fmt.Errorf("manifest contract identity is %d/%s/%s, want %d/%s/%s", manifest.SchemaVersion, manifest.Kind, manifest.ContractID, contract.SchemaVersion, contract.Kind, contract.ContractID)
+	}
+	if name != "" {
+		identity, err := DeclarationIdentity(name, buildable)
+		if err != nil {
+			return err
+		}
+		if manifest.DeclarationIdentity != "" && manifest.DeclarationIdentity != identity {
+			return fmt.Errorf("manifest declaration identity is %q, want %q", manifest.DeclarationIdentity, identity)
+		}
 	}
 	for field, expected := range contract.ExpectedSource {
 		if manifest.Source[field] != expected {
@@ -834,6 +1171,10 @@ func gitWorktreeStatus(ctx context.Context, root string, paths []string) ([]byte
 }
 
 func candidateInputDigest(ctx context.Context, root string, candidate Candidate, paths []string) (string, error) {
+	paths = meaningfulProducerInputPaths(paths)
+	if len(paths) == 0 {
+		return "", errors.New("meaningful producer input inventory is empty")
+	}
 	switch candidate.InputStrategy {
 	case "gitHeadTree":
 		return gitHeadTreeDigest(ctx, root, paths)
@@ -842,6 +1183,26 @@ func candidateInputDigest(ctx context.Context, root string, candidate Candidate,
 	default:
 		return "", fmt.Errorf("unsupported candidate input strategy %q", candidate.InputStrategy)
 	}
+}
+
+func meaningfulProducerInputPaths(paths []string) []string {
+	result := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		normalized := normalizePath(path)
+		// The declaration's semantic identity represents workbench.pkl. Its
+		// raw bytes must never also participate in producer freshness.
+		if normalized == "workbench.pkl" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func gitWorktreeDigest(ctx context.Context, root string, paths []string) (string, error) {
@@ -1110,7 +1471,7 @@ func gitHeadTreeDigest(ctx context.Context, root string, paths []string) (string
 func verifyOutput(path string, output artifactOutput) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return errors.New("read output bytes")
 	}
 	hash := sha256.New()
 	size, copyErr := io.Copy(hash, file)
@@ -1130,7 +1491,7 @@ func verifyOutput(path string, output artifactOutput) error {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("inspect mode: %w", err)
+		return errors.New("inspect output mode")
 	}
 	if output.Executable && info.Mode().Perm()&0o111 == 0 {
 		return errors.New("executable mode is absent")

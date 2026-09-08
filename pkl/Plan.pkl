@@ -1,0 +1,84 @@
+module phosphor.workbench.Plan
+
+typealias Text = String(length > 0)
+typealias NodeId = String(matches(Regex(#"[A-Za-z0-9][A-Za-z0-9_./-]*"#)))
+
+class Meta {
+  title: Text
+  goal: Text
+}
+
+class Mechanical {
+  fixed kind: "Mechanical" = "Mechanical"
+  run: Text
+  once: Boolean = false
+}
+
+class Adjudicated {
+  fixed kind: "Adjudicated" = "Adjudicated"
+  rubric: Text
+  owner: Text
+}
+
+class Need {
+  kind: "Artifact" | "Evidence" | "Fork" | "Grant"
+  node: NodeId
+}
+
+abstract class Node {
+  id: NodeId
+  owner: Text
+  outcome: String = ""
+  needs: Listing<Need> = new {}
+}
+
+class Action extends Node {
+  fixed kind: "Action" = "Action"
+  grant: Listing<Text> = new {}
+  oracle: Mechanical | Adjudicated
+}
+
+class Guard extends Node {
+  fixed kind: "Guard" = "Guard"
+  observes: Listing<Text> = new {}
+  oracle: Mechanical | Adjudicated
+}
+
+class Selector extends Node {
+  fixed kind: "Selector" = "Selector"
+  question: String = ""
+  options: Listing<Text>(length >= 2)
+  probe: Guard? = null
+}
+
+function mechanical(command: Text): Mechanical = new {
+  run = command
+}
+
+function adjudicated(criteria: Text, judge: Text): Adjudicated = new {
+  rubric = criteria
+  owner = judge
+}
+
+function produced(producer: Action): Need = new {
+  kind = "Artifact"
+  node = producer.id
+}
+
+function verified(producer: Action | Guard): Need = new {
+  kind = "Evidence"
+  node = producer.id
+}
+
+function ruled(producer: Selector): Need = new {
+  kind = "Fork"
+  node = producer.id
+}
+
+function granted(producer: Action): Need = new {
+  kind = "Grant"
+  node = producer.id
+}
+
+meta: Meta
+nodes: Listing<Action | Guard | Selector>

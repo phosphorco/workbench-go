@@ -1,0 +1,15 @@
+amends "workbench:plan"
+import "campaign.pkl" as Campaign
+
+// Use this expansion only after the owner actually chooses CSV.
+// A ruled Selector does not automatically choose a downstream branch.
+meta {
+  title = "Deliver compatible exports"
+  goal = "Deliver downloadable CSV records accepted by the existing reader, with a rollout suited to measured export sizes."
+}
+
+nodes {
+  Campaign.probeBuild; Campaign.compatibility; Campaign.format
+  Campaign.contract; Campaign.red; Campaign.writer; Campaign.reader
+  Campaign.integrationTests; Campaign.roundtrip; Campaign.releaseReview
+}

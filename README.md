@@ -1,5 +1,13 @@
 # Workbench
 
+For local task dependency graphs, Pkl definitions, compact agent-readable ticks, and
+evidence recording, see [Task plans](docs/task-plans.md) and
+`workbench plan --help`.
+
+Two independent agent skills ship with the binary: export environment guidance
+with `workbench self skills export workbench`, or optional task planning guidance with
+`workbench self skills export workbench-plan`. See [skill installation](docs/skills.md).
+
 **Reconcile one local development environment. Preserve every repository as its own Git authority.**
 
 Workbench is Phosphor’s local desired-state reconciler for development environments.
@@ -38,7 +46,7 @@ agents through a versioned control protocol.
 
 | Surface | Status |
 | --- | --- |
-| Binary `0.6.1`; Pkl resource contracts `0.6.0` | Released |
+| Binary `0.7.1`; Pkl resource contracts `0.7.0` | Released |
 | `setup`, `check`, commit saga, snapshots, prune, skills, and buildables described below | Released |
 | Structured status, Environment Index, explain/ownership queries, explicit reconciliation plans, receipts, and scoped verification | Proposed and sequenced |
 
@@ -70,12 +78,11 @@ components does not relicense them as Workbench code.
 The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
 terms together and is included unchanged in every platform archive.
 
-The latest binary is `0.6.1`. It intentionally consumes the immutable `0.6.0`
-Pkl contract line; a binary patch release and a resource-contract release have
-independent identities.
+Install the pinned `0.7.1` release. Its Pkl package remains `0.7.0`; binary
+and resource-contract releases have independent identities.
 
 ```sh
-mise use -g github:phosphorco/workbench-go@0.6.1
+mise use -g github:phosphorco/workbench-go@0.7.1
 workbench version
 ```
 
@@ -147,7 +154,7 @@ Workbench-owned generated files inside a resource repository must likewise be ex
 `workbench-subject.pkl` is the local request for what should exist:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/WorkbenchSubject.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/WorkbenchSubject.pkl"
 
 workLine {
   branch = "cole/example-work"
@@ -215,13 +222,12 @@ snapshot never changes the Subject’s branch policy and never resets or rewrite
 an existing checkout; a conflicting checkout stops reproduction in recoverable
 state.
 
-Workbench 0.6 records `WorkbenchSnapshot.pkl` at
-`.workbench/workbench-snapshot.pkl` by default. A current binary always writes
-the `0.6.0` contract, even when the Subject amends an older released contract.
-Explicit reproduction can still read the exact snapshot contracts released by
-Workbench 0.2.0 and 0.3.0 through version-scoped adapters and the compatible
-0.4.0 and 0.5.0 shapes directly; it does not rename or delete a user-authored
-snapshot.
+`workbench snapshot record` writes the bundled `WorkbenchSnapshot.pkl` contract
+at `.workbench/workbench-snapshot.pkl` by default, even when the Subject amends
+an older supported release. Explicit reproduction uses version-scoped
+compatibility adapters for older supported snapshots; it does not rename or
+delete a user-authored snapshot. The executable contract tests under
+`internal/evaluate` define the supported version set.
 
 ### There is no second branch lock
 
@@ -243,7 +249,7 @@ A filesystem lock, watcher, or permission layer is outside this design.
 Each participating resource contains a root `workbench.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/PackageScopeRepository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/PackageScopeRepository.pkl"
 
 scope = "@workbench-entry"
 
@@ -322,7 +328,7 @@ A Repository-shaped `workbench.pkl` amends the released `Repository.pkl`
 contract and does not author a name, scope, or generic identity:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl"
 
 includes {}
 packages {}
@@ -410,16 +416,11 @@ exactly proven legacy receipt may be retired. Malformed, ambiguous, foreign, or
 disagreeing state causes a zero-change refusal, leaving a reachable manual
 repair path instead of guessing ownership.
 
-The released reconciliation workflow remains centered on `setup`. Observation,
-planning, and comparison are internal machinery in `0.6.1`. The proposed
-agent-control protocol exposes read-only observation and deterministic plan
-artifacts while retaining the Subject as the sole desired-state authority;
-`setup` remains their one-command composition.
-
-Released `0.6.1` therefore provides Terraform-like desired state without
-requiring a separate public plan-and-apply lifecycle. The target interface adds
-optional plan inspection and exact apply for agents; the derived plan remains
-disposable and can never override the Subject.
+The released reconciliation workflow remains centered on `setup`. Workbench
+0.7 additionally exposes portable task-plan operations through `workbench plan`;
+those task graphs and their evidence remain disposable and can never override
+the Subject. The proposed environment reconciliation plans have a separate
+semantic contract, as described in the [agent control protocol](docs/agent-protocol.md).
 
 `workbench check` is the one-command checkout-to-test loop. It runs setup first,
 prints the setup result as its own outcome, then invokes the generated root
@@ -491,7 +492,7 @@ The governing rule is:
 
 > Source derives dependency adjacency. Pkl declares the dependency semantics that source cannot prove.
 
-The current `0.6.0` package policy expresses the package metadata needed by the
+The current package policy expresses the package metadata needed by the
 assembled TypeScript graph directly:
 
 ```pkl
@@ -605,11 +606,12 @@ The final Workbench implementation absorbs repository observation, planning, and
 
 ## Buildables make repository-owned tools explicit
 
-The released `0.6.0` contract adds the same `buildables` mapping to
-`PackageScopeRepository.pkl` and `Repository.pkl`. The immutable `0.1.0` through
-`0.5.0` contracts retain their historical meanings. Binary `0.6.1` adds cold
-materialization from a local `0.6.0` declaration when no assembled buildable
-projection exists.
+`PackageScopeRepository.pkl` and `Repository.pkl` expose the same `buildables`
+mapping. New declarations can amend the `0.7.0` contract, for example:
+`package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl`.
+Binary release and Pkl package versions are independent coordinates: binary
+`0.7.1` uses the `0.7.0` contract. Preserve existing declarations' supported contract versions;
+installing a new binary does not require rewriting those inputs.
 
 A buildable declaration owns the facts Workbench cannot infer: producer input
 paths, the build command, an optional verification command, manifest identity
@@ -632,10 +634,10 @@ case normalization.
 
 Setup writes the strict `.workbench/buildables.json` registry for the assembled
 repository closure. Each projected declaration is bound to the exact owning
-`workbench.pkl`, its owner-relative checkout path, and the `0.6.0` schema
-digest. Duplicate names across the closure are rejected with both owners. Hot
-commands consume only that projection and never evaluate Pkl or mutate a
-candidate:
+`workbench.pkl`, its owner-relative checkout path, and a per-buildable semantic
+declaration identity. Duplicate names across the closure are rejected with
+both owners. Hot commands consume only that projection and never evaluate Pkl
+or mutate a candidate:
 
 ```sh
 workbench buildable check --name <name>  # machine-readable JSON; does not execute
@@ -644,8 +646,21 @@ workbench buildable materialize --name <name> --platform <platform> \
   --destination <directory>             # installs the validated output set
 ```
 
+The generic cold admission operation evaluates the caller's local declaration
+when no projection exists and returns JSON containing the opaque candidate
+identity, requested platform, complete verified output set, capabilities, and
+producer source facts:
+
+```sh
+workbench buildable resolve --name <name> --platform <platform> --format json
+```
+
+`materialize` writes a JSON receipt with the installed destination and output
+records. Output paths in a resolution or receipt are invocation-scoped handles;
+consumers compare output digest and size and persist destinations, never paths.
+
 Lifecycle commands are deliberately cold. They evaluate the caller's current
-root `workbench.pkl` against the bundled `0.6.0` schema, so a fresh
+root `workbench.pkl` against the bundled contract package, so a fresh
 repository checkout can build before an assembled projection exists:
 
 ```sh
@@ -774,12 +789,12 @@ subtrees and their explicit composition dependencies.
 
 ## `AGENTS.pkl` turns current Workbench state into agent orientation
 
-Workbench `0.6.0` retains the constrained `AgentInstructions.pkl` contract.
+The constrained `AgentInstructions.pkl` contract governs generated instructions.
 
 The context template tracks `AGENTS.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/AgentInstructions.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/AgentInstructions.pkl"
 
 prose = """
 # Agent instructions
@@ -821,7 +836,7 @@ Workbench must make it difficult for agents to lose work, commit unrelated edits
 `commit-plan.pkl` describes one **Workbench Change Set**:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/WorkbenchCommitPlan.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/WorkbenchCommitPlan.pkl"
 
 changeId = "fixture-cross-repository"
 summary = "Exercise a cross-repository fixture change"
@@ -1027,11 +1042,10 @@ rather than rewriting or blessing them. Contract, snapshot, and declaration
 compatibility remain independently covered; current positive setup proof uses
 current resource declarations.
 
-The immutable `0.6.0` line adds exact package metadata authority, production
-TypeScript projection, external dependency reassembly, and declared buildables.
-Binary `0.6.1` retains those contracts and adds cold buildable materialization
-from a local declaration. The binary release and Pkl contract version are
-therefore intentionally distinct.
+The `0.7.0` package retains the existing package metadata, TypeScript
+projection, external dependency reassembly, and declared buildable contracts,
+and adds the Plan contract. Binary `0.7.1` is a planning-skill patch on that
+contract line.
 
 Adopting BasinDB and `phosphorco/community-packages` is a separate future
 promise. Their Workbench declarations, repository split, migration, and history

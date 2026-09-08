@@ -1,5 +1,9 @@
 # Agent control protocol
 
+The implemented `workbench plan <verb>` task graph interface is documented in
+[Task plans](task-plans.md). The reconciliation plans proposed below describe
+environment changes and must retain a separate semantic contract.
+
 Status: proposed protocol for the target architecture in
 [agent-system.md](agent-system.md). It is deliberately concrete enough to drive
 implementation and acceptance tests, but none of the commands in this document

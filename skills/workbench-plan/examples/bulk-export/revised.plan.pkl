@@ -1,0 +1,39 @@
+amends "workbench:plan"
+import "campaign.pkl" as Campaign
+
+meta {
+  title = "Deliver compatible streaming exports"
+  goal = "Deliver compatible CSV exports within the owner's confirmed 32 MiB working-memory budget, with a rollout suited to measured export sizes."
+}
+
+local memoryTests = new Action {
+  id = "streaming-tests"
+  owner = "test-author"
+  outcome = "Build bounded-memory and large streamed round-trip acceptance instruments."
+  grant { "tests/test_bounded_memory.py"; "tests/test_streaming_roundtrip.py" }
+  needs { module.produced(Campaign.contract); module.verified(Campaign.contract) }
+  oracle = module.adjudicated("The memory test measures the agreed working-memory boundary and fails above 32 MiB on representative large input; the streaming integration test rejects truncation and incorrect records. Inspect positive and negative cases.", "reviewer")
+}
+
+local writer = (Campaign.writer) {
+  outcome = "Preserve CSV correctness while streaming within 32 MiB of working memory."
+  needs {
+    module.produced(memoryTests); module.verified(memoryTests)
+  }
+  oracle = module.mechanical("python3 -m unittest tests.test_writer tests.test_bounded_memory")
+}
+
+local roundtrip = (Campaign.roundtrip) {
+  needs { module.produced(memoryTests); module.verified(memoryTests) }
+  oracle = module.mechanical("python3 -m unittest tests.test_roundtrip tests.test_streaming_roundtrip")
+}
+
+local releaseReview = (Campaign.releaseReview) {
+  oracle = module.adjudicated("Compatible exports and the 32 MiB working-memory budget are proven on measured large input through the public download and reader path. Rollout fits these measurements. Every agreed condition and previously unspecified in-scope obligation has evidence.", "product-owner")
+}
+
+nodes {
+  Campaign.probeBuild; Campaign.compatibility; Campaign.format
+  Campaign.contract; Campaign.red; memoryTests; writer; Campaign.reader
+  Campaign.integrationTests; roundtrip; releaseReview
+}

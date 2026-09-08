@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 		{"prune", []string{"prune", "@scope", "owner/repository"}, call{name: "prune", root: "/workbench", values: []string{"@scope", "owner/repository"}}},
 		{"run without arguments", []string{"run", "tsgo", "--"}, call{name: "run", root: "/workbench", values: []string{"tsgo"}}},
 		{"run with arguments", []string{"run", "tsgo", "--", "-b", "."}, call{name: "run", root: "/workbench", values: []string{"tsgo", "-b", "."}}},
+		{"resolve buildable", []string{"buildable", "resolve", "--platform", "linux-x86_64", "--name", "tsgo", "--format", "json"}, call{name: "buildable resolve", root: "/workbench", values: []string{"tsgo", "linux-x86_64"}}},
 		{"check buildable", []string{"buildable", "check", "--name", "tsgo"}, call{name: "buildable check", root: "/workbench", values: []string{"tsgo"}}},
 		{"build buildable", []string{"buildable", "build", "--platform", "linux-x86_64", "--name", "tsgo"}, call{name: "buildable build", root: "/workbench", values: []string{"tsgo", "linux-x86_64"}}},
 		{"seal buildable", []string{"buildable", "seal", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"}, call{name: "buildable seal", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo"}}},
@@ -74,7 +76,7 @@ func TestInvalidCommandsAcquireNoAuthority(t *testing.T) {
 		nil, {"inspect"}, {"setup", "extra"}, {"check", "extra"}, {"commit", "a", "b"},
 		{"snapshot"}, {"snapshot", "record", "a", "b"}, {"snapshot", "reproduce"},
 		{"prune"}, {"prune", ""}, {"run"}, {"run", "tsgo"}, {"run", "", "--"}, {"run", "tsgo", "-b", "."},
-		{"buildable"}, {"buildable", "check"}, {"buildable", "check", "--name", "tsgo", "--extra", "value"},
+		{"buildable"}, {"buildable", "check"}, {"buildable", "check", "--name", "tsgo", "--extra", "value"}, {"buildable", "resolve", "--name", "tsgo", "--platform", "linux-x86_64"},
 		{"buildable", "build", "--name", "tsgo"}, {"buildable", "seal", "--name", "tsgo", "--candidate-root"},
 		{"buildable", "verify", "--name", "tsgo", "--run-declared-verification", "--run-declared-verification", "--candidate-root", ".local-build/tsgo"},
 		{"buildable", "check-fresh", "--name", "tsgo", "--candidate-root", ".local-build/tsgo", "--built-from", "a"},
@@ -118,7 +120,7 @@ func TestVersionDoesNotObserveWorkingDirectory(t *testing.T) {
 func TestBuildableCheckWritesOneMachineReadableRefusal(t *testing.T) {
 	t.Parallel()
 	refusal := &buildable.Refusal{
-		Code: buildable.RefusalCandidateInvalid, Buildable: "tsgo", Candidate: ".local-build/tsgo",
+		Code: buildable.RefusalCandidateInvalid, Buildable: "tsgo", Candidate: "local",
 		Reason: "manifest hash mismatch", Remedy: "Rebuild the local candidate.",
 	}
 	application := applications{
@@ -138,6 +140,67 @@ func TestBuildableCheckWritesOneMachineReadableRefusal(t *testing.T) {
 		if !strings.Contains(output.String(), fact) {
 			t.Fatalf("machine check output %q omits %q", output.String(), fact)
 		}
+	}
+}
+
+func TestBuildableResolveAndMaterializeWriteTypedJSONWithoutChangingSuccessExit(t *testing.T) {
+	resolution := buildable.Resolution{
+		SchemaVersion: 1, Buildable: "tsgo", Candidate: "local", Platform: "linux-x86_64",
+		Outputs:      []buildable.ResolvedOutput{{Path: "/invocation/local/tsgo", Destination: "bin/tsgo", Kind: "executable", Digest: strings.Repeat("a", 64), Size: 7, Executable: true}},
+		Capabilities: []string{"diagnostics-v1"}, Source: map[string]string{"repository": "https://example.test/tsgo"},
+	}
+	application := applications{
+		resolveBuildable: func(context.Context, string, string, string) (buildable.Resolution, error) { return resolution, nil },
+		materializeBuildable: func(context.Context, string, string, string, string) (buildable.MaterializeReceipt, error) {
+			return buildable.MaterializeReceipt{
+				SchemaVersion: 1, Status: "materialized", Buildable: "tsgo", Candidate: "local", Platform: "linux-x86_64", Destination: "/invocation/destination",
+				Outputs: []buildable.MaterializedOutput{{Path: "/invocation/destination/bin/tsgo", Destination: "bin/tsgo", Kind: "executable", Digest: strings.Repeat("a", 64), Size: 7, Executable: true}},
+			}, nil
+		},
+	}
+	var resolvedOutput bytes.Buffer
+	if err := runWith(context.Background(), []string{"buildable", "resolve", "--name", "tsgo", "--platform", "linux-x86_64", "--format", "json"}, func() (string, error) { return t.TempDir(), nil }, &resolvedOutput, io.Discard, application); err != nil {
+		t.Fatalf("resolve exit = %v", err)
+	}
+	var decoded buildable.Resolution
+	if err := json.Unmarshal(resolvedOutput.Bytes(), &decoded); err != nil {
+		t.Fatalf("resolve JSON = %q: %v", resolvedOutput.String(), err)
+	}
+	if decoded.Candidate != "local" || len(decoded.Outputs) != 1 || decoded.Outputs[0].Destination != "bin/tsgo" {
+		t.Fatalf("decoded resolution = %#v", decoded)
+	}
+	if decoded.Outputs[0].Digest != strings.Repeat("a", 64) {
+		t.Fatalf("decoded generic digest = %q", decoded.Outputs[0].Digest)
+	}
+	if strings.Contains(resolvedOutput.String(), `"sha256"`) {
+		t.Fatalf("public resolution boundary leaked sealed-manifest sha256: %s", resolvedOutput.String())
+	}
+	var receiptOutput bytes.Buffer
+	if err := runWith(context.Background(), []string{"buildable", "materialize", "--name", "tsgo", "--platform", "linux-x86_64", "--destination", "dist"}, func() (string, error) { return t.TempDir(), nil }, &receiptOutput, io.Discard, application); err != nil {
+		t.Fatalf("materialize exit = %v", err)
+	}
+	var receipt buildable.MaterializeReceipt
+	if err := json.Unmarshal(receiptOutput.Bytes(), &receipt); err != nil {
+		t.Fatalf("receipt JSON = %q: %v", receiptOutput.String(), err)
+	}
+	if receipt.Status != "materialized" || receipt.Candidate != "local" || receipt.Outputs[0].Destination != "bin/tsgo" {
+		t.Fatalf("decoded receipt = %#v", receipt)
+	}
+	if receipt.Outputs[0].Digest != strings.Repeat("a", 64) {
+		t.Fatalf("decoded receipt generic digest = %q", receipt.Outputs[0].Digest)
+	}
+	if strings.Contains(receiptOutput.String(), `"sha256"`) {
+		t.Fatalf("public materialize receipt boundary leaked sealed-manifest sha256: %s", receiptOutput.String())
+	}
+}
+
+func TestResolutionJSONRejectsAlgorithmSpecificSHA256Field(t *testing.T) {
+	payload := `{"schemaVersion":1,"buildable":"tsgo","candidate":"local","platform":"linux-x86_64","outputs":[{"path":"/invocation/local/tsgo","destination":"bin/tsgo","kind":"executable","sha256":"` + strings.Repeat("a", 64) + `","size":7,"executable":true}]}`
+	var resolution buildable.Resolution
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&resolution); err == nil {
+		t.Fatalf("accepted algorithm-specific resolution evidence: %s", payload)
 	}
 }
 
@@ -470,6 +533,10 @@ func recordingApplications(calls *[]call) applications {
 			*calls = append(*calls, call{name: "run", root: root, values: values})
 			return nil
 		},
+		resolveBuildable: func(_ context.Context, root, name, platform string) (buildable.Resolution, error) {
+			*calls = append(*calls, call{name: "buildable resolve", root: root, values: []string{name, platform}})
+			return buildable.Resolution{SchemaVersion: 1, Buildable: name, Candidate: "local", Platform: platform}, nil
+		},
 		checkBuildable: func(_ context.Context, root, name string) (buildable.CheckReport, error) {
 			*calls = append(*calls, call{name: "buildable check", root: root, values: []string{name}})
 			return buildable.CheckReport{SchemaVersion: 1, Status: "valid", Buildable: name}, nil
@@ -494,9 +561,9 @@ func recordingApplications(calls *[]call) applications {
 			*calls = append(*calls, call{name: "buildable promote", root: root, values: []string{name, candidate, committed}})
 			return nil
 		},
-		materializeBuildable: func(_ context.Context, root, name, platform, destination string) error {
+		materializeBuildable: func(_ context.Context, root, name, platform, destination string) (buildable.MaterializeReceipt, error) {
 			*calls = append(*calls, call{name: "buildable materialize", root: root, values: []string{name, platform, destination}})
-			return nil
+			return buildable.MaterializeReceipt{SchemaVersion: 1, Status: "materialized", Buildable: name, Candidate: "local", Platform: platform, Destination: destination}, nil
 		},
 		skillsCheck: func(_ context.Context, root string) (skills.Report, error) {
 			*calls = append(*calls, call{name: "skills check", root: root})

@@ -26,8 +26,47 @@ func TestResolvePrefersTheFirstValidCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := filepath.Join(repository, ".local-build/hello/bin/hello")
-	if resolved.Path != want || resolved.Candidate != ".local-build/hello" {
+	if resolved.Path != want || resolved.Candidate != "local" {
 		t.Fatalf("resolved = %#v, want path %q", resolved, want)
+	}
+}
+
+func TestResolveDeclaredPlatformReturnsCompleteOpaqueVerifiedResolution(t *testing.T) {
+	_, repository := fixtureRepository(t)
+	writeCandidate(t, repository, ".local-build/hello", "local")
+
+	resolution, err := buildable.ResolveDeclaredPlatform(context.Background(), repository, "hello", helloDeclaration(), "linux-x86_64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.SchemaVersion != 1 || resolution.Buildable != "hello" || resolution.Candidate != "local" || resolution.Platform != "linux-x86_64" {
+		t.Fatalf("resolution identity = %#v", resolution)
+	}
+	if resolution.Candidate == ".local-build/hello" || resolution.Candidate == ".ci-build/hello" {
+		t.Fatalf("resolution leaked candidate root: %#v", resolution)
+	}
+	if len(resolution.Outputs) != 1 {
+		t.Fatalf("resolution outputs = %#v, want complete one-output set", resolution.Outputs)
+	}
+	output := resolution.Outputs[0]
+	if output.Path != filepath.Join(repository, ".local-build/hello/bin/hello") || output.Kind != "executable" || !output.Executable || output.Size <= 0 || len(output.Digest) != 64 {
+		t.Fatalf("resolved output = %#v", output)
+	}
+	if resolution.Source["repository"] != "https://example.test/hello" || !containsString(resolution.Capabilities, "greeting-v1") {
+		t.Fatalf("producer facts = source %#v capabilities %#v", resolution.Source, resolution.Capabilities)
+	}
+	encoded, err := json.Marshal(resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"candidate":".local-build/hello"`) {
+		t.Fatalf("resolution JSON leaked candidate root: %s", encoded)
+	}
+	if strings.Contains(string(encoded), `"sha256"`) {
+		t.Fatalf("public resolution boundary leaked sealed-manifest sha256: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"digest":"`) || !strings.Contains(string(encoded), `"outputs"`) {
+		t.Fatalf("resolution JSON = %s", encoded)
 	}
 }
 
@@ -42,7 +81,7 @@ func TestResolveRefusesAnInvalidPreferredCandidateWithoutFallingThrough(t *testi
 	if !errors.As(err, &refusal) {
 		t.Fatalf("Resolve error = %T %v, want typed refusal", err, err)
 	}
-	if refusal.Candidate != ".local-build/hello" || !strings.Contains(refusal.Reason, "hash mismatch") {
+	if refusal.Candidate != "local" || !strings.Contains(refusal.Reason, "hash mismatch") {
 		t.Fatalf("refusal = %#v", refusal)
 	}
 	if !strings.Contains(refusal.Remedy, "mise run hello:build-local") {
@@ -50,6 +89,20 @@ func TestResolveRefusesAnInvalidPreferredCandidateWithoutFallingThrough(t *testi
 	}
 	if strings.Contains(err.Error(), ".ci-build/hello/bin/hello") {
 		t.Fatalf("refusal fell through to committed candidate: %v", err)
+	}
+}
+
+func TestResolveRefusalKeepsCandidateIdentityOpaque(t *testing.T) {
+	workbench, repository := fixtureRepository(t)
+	write(t, filepath.Join(repository, ".local-build/hello/manifest.json"), "not json\n", 0o644)
+
+	_, err := buildable.Resolve(context.Background(), workbench, "hello", "linux", "amd64")
+	var refusal *buildable.Refusal
+	if !errors.As(err, &refusal) || refusal.Candidate != "local" {
+		t.Fatalf("Resolve error = %T %v, want opaque local refusal", err, err)
+	}
+	if strings.Contains(err.Error(), ".local-build/hello") || strings.Contains(err.Error(), repository) {
+		t.Fatalf("candidate root leaked through public refusal: %v", err)
 	}
 }
 
@@ -74,7 +127,7 @@ func TestResolveTreatsAnyCandidateRootAsPresent(t *testing.T) {
 
 			_, err := buildable.Resolve(context.Background(), workbench, "hello", "linux", "amd64")
 			var refusal *buildable.Refusal
-			if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid || refusal.Candidate != ".local-build/hello" {
+			if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid || refusal.Candidate != "local" {
 				t.Fatalf("Resolve error = %T %v, want invalid local candidate", err, err)
 			}
 			if !strings.Contains(refusal.Reason, "manifest is missing") {
@@ -99,7 +152,7 @@ func TestResolveRefusesAStaleManifestWithTheRecordedAndCurrentDigests(t *testing
 	if !strings.Contains(refusal.Reason, "stale") || !strings.Contains(refusal.Reason, "current inputs require") {
 		t.Fatalf("refusal reason = %q", refusal.Reason)
 	}
-	if refusal.Candidate != ".ci-build/hello" {
+	if refusal.Candidate != "committed" {
 		t.Fatalf("refusal candidate = %q", refusal.Candidate)
 	}
 }
@@ -128,12 +181,37 @@ func TestSealMakesADirtyLocalBuildUsableWithoutBlessingItAsCommitted(t *testing.
 	if err := buildable.Seal(context.Background(), workbench, "hello", ".local-build/hello"); err != nil {
 		t.Fatal(err)
 	}
+	sealedManifest, err := os.ReadFile(filepath.Join(repository, ".local-build/hello/manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sealedManifest), `"declarationIdentity"`) {
+		t.Fatalf("sealed manifest omitted declaration identity: %s", sealedManifest)
+	}
+	var sealed struct {
+		Outputs []struct {
+			SHA256 string `json:"sha256"`
+		} `json:"outputs"`
+	}
+	if err := json.Unmarshal(sealedManifest, &sealed); err != nil {
+		t.Fatalf("decode sealed manifest: %v", err)
+	}
+	if len(sealed.Outputs) != 1 || len(sealed.Outputs[0].SHA256) != 64 {
+		t.Fatalf("sealed manifest omitted internal outputs[].sha256 evidence: %s", sealedManifest)
+	}
 	resolution, err := buildable.Resolve(context.Background(), workbench, "hello", "linux", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolution.Candidate != ".local-build/hello" {
+	if resolution.Candidate != "local" {
 		t.Fatalf("resolution = %#v", resolution)
+	}
+	publicResolution, err := json.Marshal(resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(publicResolution), `"sha256"`) {
+		t.Fatalf("public resolution boundary leaked sealed-manifest sha256; sealed evidence must remain Workbench-internal: %s", publicResolution)
 	}
 	head := gitOutput(t, repository, "rev-parse", "HEAD")
 	checkErr := buildable.CheckFresh(context.Background(), workbench, "hello", ".local-build/hello", head, head)
@@ -178,18 +256,162 @@ func TestDirtyIndexWithHEADWorktreeBytesMatchesCleanGitTreeDigest(t *testing.T) 
 	}
 }
 
-func TestProjectionBindingRefusesChangedWorkbenchSource(t *testing.T) {
+func TestProjectionBindingIgnoresUnrelatedWorkbenchSource(t *testing.T) {
 	workbench, repository := fixtureRepository(t)
 	writeCandidate(t, repository, ".ci-build/hello", "committed")
 	write(t, filepath.Join(repository, "workbench.pkl"), "changed declaration\n", 0o644)
 
-	_, err := buildable.Resolve(context.Background(), workbench, "hello", "linux", "amd64")
+	if _, err := buildable.Resolve(context.Background(), workbench, "hello", "linux", "amd64"); err != nil {
+		t.Fatalf("Resolve rejected an unrelated workbench.pkl edit: %v", err)
+	}
+}
+
+func TestDeclarationIdentityIsolatedPerBuildable(t *testing.T) {
+	first := helloDeclaration()
+	second := helloDeclaration()
+	first.Candidates[0].Root = ".local-build/first"
+	first.Candidates[1].Root = ".ci-build/first"
+	second.Candidates[0].Root = ".local-build/second"
+	second.Candidates[1].Root = ".ci-build/second"
+	firstID, err := buildable.DeclarationIdentity("first", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondID, err := buildable.DeclarationIdentity("second", second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Manifest.ContractID = "first-changed"
+	changedFirstID, err := buildable.DeclarationIdentity("first", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchangedSecondID, err := buildable.DeclarationIdentity("second", second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedFirstID == firstID {
+		t.Fatal("target declaration identity did not change")
+	}
+	if unchangedSecondID != secondID {
+		t.Fatal("unrelated buildable declaration identity changed")
+	}
+}
+
+func TestCheckFreshComposesIntegrityVerificationBeforeFreshness(t *testing.T) {
+	workbench, repository := fixtureRepository(t)
+	writeUnsealedCandidate(t, repository, ".local-build/hello", "local")
+	if err := buildable.Seal(context.Background(), workbench, "hello", ".local-build/hello"); err != nil {
+		t.Fatal(err)
+	}
+	head := gitOutput(t, repository, "rev-parse", "HEAD")
+	write(t, filepath.Join(repository, ".local-build/hello/bin/hello"), "corrupted\n", 0o755)
+	err := buildable.CheckFresh(context.Background(), workbench, "hello", ".local-build/hello", head, head)
+	var refusal *buildable.Refusal
+	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid {
+		t.Fatalf("CheckFresh error = %T %v, want integrity refusal", err, err)
+	}
+	if !strings.Contains(refusal.Reason, "hash mismatch") {
+		t.Fatalf("CheckFresh refusal = %v", err)
+	}
+}
+
+func TestOriginManifestWithoutDeclarationIdentityPassesVerifyAndCheckFreshAgainstOriginMain(t *testing.T) {
+	workbench, repository := fixtureRepository(t)
+	writeCandidate(t, repository, ".local-build/hello", "local")
+	manifestPath := filepath.Join(repository, ".local-build/hello/manifest.json")
+	encoded, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(encoded, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	delete(manifest, "declarationIdentity")
+	legacy, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, manifestPath, string(legacy), 0o644)
+	if err := buildable.Verify(context.Background(), workbench, "hello", ".local-build/hello", false); err != nil {
+		t.Fatalf("origin-shaped manifest verify = %v", err)
+	}
+	head := gitOutput(t, repository, "rev-parse", "HEAD")
+	git(t, repository, "update-ref", "refs/remotes/origin/main", head)
+	if err := buildable.CheckFresh(context.Background(), workbench, "hello", ".local-build/hello", head, "origin/main"); err != nil {
+		t.Fatalf("origin-shaped manifest check-fresh = %v", err)
+	}
+}
+
+func TestCheckFreshIgnoresAnUnrelatedWorkbenchEdit(t *testing.T) {
+	workbench, repository := fixtureRepository(t)
+	writeUnsealedCandidate(t, repository, ".local-build/hello", "local")
+	if err := buildable.Seal(context.Background(), workbench, "hello", ".local-build/hello"); err != nil {
+		t.Fatal(err)
+	}
+	head := gitOutput(t, repository, "rev-parse", "HEAD")
+	write(t, filepath.Join(repository, "workbench.pkl"), "unrelated semantic source edit\n", 0o644)
+	if err := buildable.CheckFresh(context.Background(), workbench, "hello", ".local-build/hello", head, head); err != nil {
+		t.Fatalf("CheckFresh rejected unrelated workbench edit: %v", err)
+	}
+}
+
+func TestProjectedDeclarationIdentityRefusesRelevantDeclarationChange(t *testing.T) {
+	workbench, repository := fixtureRepository(t)
+	declaration := helloDeclaration()
+	projectFixture(t, workbench, repository, declaration)
+	current := declaration
+	current.BuildCommand.Arguments = []string{"changed-declaration"}
+
+	err := buildable.ValidateProjectedDeclaration(workbench, "hello", current)
 	var refusal *buildable.Refusal
 	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalProjectionStale {
-		t.Fatalf("Resolve error = %T %v, want projection-stale refusal", err, err)
+		t.Fatalf("projected declaration validation = %T %v, want stale projection refusal", err, err)
 	}
-	if !strings.Contains(refusal.Remedy, "workbench setup") {
-		t.Fatalf("remedy = %q", refusal.Remedy)
+	if !strings.Contains(refusal.Reason, "declaration identity") {
+		t.Fatalf("refusal = %#v", refusal)
+	}
+}
+
+func TestLegacyProjectionWithoutDeclarationIdentityUsesSourceDigestFallback(t *testing.T) {
+	workbench, repository := fixtureRepository(t)
+	writeCandidate(t, repository, ".local-build/hello", "local")
+	projectionPath := filepath.Join(workbench, buildable.ProjectionPath)
+	encoded, err := os.ReadFile(projectionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var projection map[string]any
+	if err := json.Unmarshal(encoded, &projection); err != nil {
+		t.Fatal(err)
+	}
+	buildables, ok := projection["buildables"].(map[string]any)
+	if !ok {
+		t.Fatalf("projection buildables = %#v", projection["buildables"])
+	}
+	entry, ok := buildables["hello"].(map[string]any)
+	if !ok {
+		t.Fatalf("projection hello entry = %#v", buildables["hello"])
+	}
+	owner, ok := entry["owner"].(map[string]any)
+	if !ok {
+		t.Fatalf("projection owner = %#v", entry["owner"])
+	}
+	delete(owner, "declarationIdentity")
+	legacy, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, projectionPath, string(legacy), 0o644)
+	if _, err := buildable.Resolve(context.Background(), workbench, "hello", "linux", "amd64"); err != nil {
+		t.Fatalf("legacy projection refused while source was unchanged: %v", err)
+	}
+	write(t, filepath.Join(repository, "workbench.pkl"), "changed workbench source\n", 0o644)
+	_, err = buildable.Resolve(context.Background(), workbench, "hello", "linux", "amd64")
+	var refusal *buildable.Refusal
+	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalProjectionStale {
+		t.Fatalf("legacy projection change error = %T %v, want stale projection refusal", err, err)
 	}
 }
 
@@ -395,10 +617,11 @@ func writeCandidate(t *testing.T, repository, root, label string) {
 	write(t, filepath.Join(repository, root, "bin/hello"), contents, 0o755)
 	digest := sha256.Sum256([]byte(contents))
 	manifest := map[string]any{
-		"schemaVersion": 2,
-		"kind":          "hello-artifact-manifest",
-		"contractId":    "hello-v2",
-		"source":        map[string]any{"repository": "https://example.test/hello", "revision": "fixture", "channel": "latest", "version": "1.0.0", "nestedRevision": "fixture"},
+		"schemaVersion":       2,
+		"kind":                "hello-artifact-manifest",
+		"contractId":          "hello-v2",
+		"declarationIdentity": mustDeclarationIdentity(t, "hello", helloDeclaration()),
+		"source":              map[string]any{"repository": "https://example.test/hello", "revision": "fixture", "channel": "latest", "version": "1.0.0", "nestedRevision": "fixture"},
 		"producerInputs": map[string]any{
 			"algorithm": "sha256", "digest": producerDigest(t, repository),
 		},
@@ -452,6 +675,24 @@ func write(t *testing.T, path, contents string, mode os.FileMode) {
 	if err := os.WriteFile(path, []byte(contents), mode); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func mustDeclarationIdentity(t *testing.T, name string, declaration buildable.Buildable) string {
+	t.Helper()
+	identity, err := buildable.DeclarationIdentity(name, declaration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func git(t *testing.T, repository string, arguments ...string) {

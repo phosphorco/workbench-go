@@ -3,6 +3,7 @@ package skills
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,10 +17,12 @@ var skillNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // Source grants the catalog loader read authority to one exact flat skill
 // directory. Name is stable provenance (normally a repository identity); Root
-// is never inferred from it.
+// is never inferred from it. With FS, Root is relative to that read capability;
+// otherwise Root designates a local filesystem directory.
 type Source struct {
 	Name string
 	Root string
+	FS   fs.FS
 }
 
 type Skill struct {
@@ -127,14 +130,14 @@ func Load(sources []Source) (Catalog, error) {
 	knownSkillNames := make([]string, 0)
 
 	for _, source := range orderedSources {
-		info, err := os.Lstat(source.Root)
+		info, err := source.lstat(source.Root)
 		if err != nil {
 			return Catalog{}, fmt.Errorf("inspect skill catalog %q: %w", source.Root, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return Catalog{}, fmt.Errorf("skill catalog %q is not a real directory", source.Root)
 		}
-		entries, err := os.ReadDir(source.Root)
+		entries, err := source.readDir(source.Root)
 		if err != nil {
 			return Catalog{}, fmt.Errorf("read skill catalog %q: %w", source.Root, err)
 		}
@@ -144,7 +147,7 @@ func Load(sources []Source) (Catalog, error) {
 			}
 			skillRoot := filepath.Join(source.Root, entry.Name())
 			skillFile := filepath.Join(skillRoot, "SKILL.md")
-			fileInfo, err := os.Lstat(skillFile)
+			fileInfo, err := source.lstat(skillFile)
 			if os.IsNotExist(err) {
 				report.Issues = append(report.Issues, Diagnostic{Source: source.Name, Path: entry.Name(), Message: "skill directory has no SKILL.md"})
 				continue
@@ -263,7 +266,7 @@ func Load(sources []Source) (Catalog, error) {
 				_, sameSource := skillSourceRoots[targetName][document.source.Root]
 				crossSourcePeer = targetName != document.skillName && knownPeer && !sameSource
 			}
-			if _, err := os.Stat(resolved); os.IsNotExist(err) && !crossSourcePeer {
+			if _, err := document.source.stat(resolved); os.IsNotExist(err) && !crossSourcePeer {
 				report.Issues = append(report.Issues, Diagnostic{Source: document.source.Name, Path: document.relativePath, Line: link.line, Message: fmt.Sprintf("missing link target %s", link.target)})
 			} else if err != nil && !os.IsNotExist(err) {
 				return Catalog{}, fmt.Errorf("inspect skill link target %q: %w", resolved, err)
@@ -378,7 +381,7 @@ func Select(catalog Catalog, selection contract.SkillSelection) ([]Skill, error)
 func readSkillTree(source Source, root string, skillName string) (map[string][]byte, []catalogDocument, error) {
 	files := make(map[string][]byte)
 	documents := make([]catalogDocument, 0)
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	err := source.walkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -395,7 +398,7 @@ func readSkillTree(source Source, root string, skillName string) (map[string][]b
 		if err != nil {
 			return err
 		}
-		contents, err := os.ReadFile(path)
+		contents, err := source.readFile(path)
 		if err != nil {
 			return err
 		}

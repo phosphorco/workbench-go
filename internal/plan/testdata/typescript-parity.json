@@ -1,0 +1,2590 @@
+{
+  "source": "phosphorco/monorepo @repo-plan/service",
+  "sourceRevision": "62bae08589c4b479a4ccd7db2a17766962eb2664",
+  "sourcePaths": ["pkg/@repo-plan/service/src/internal/Plan.ts", "pkg/@repo-plan/service/src/internal/Ledger.ts", "pkg/@repo-plan/service/src/internal/Frontier.ts"],
+  "scenarios": [
+    {
+      "name": "empty",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [
+          "probe"
+        ],
+        "complete": [],
+        "blocked": [
+          {
+            "id": "choice",
+            "missing": [
+              "verified(probe)"
+            ],
+            "stale": []
+          },
+          {
+            "id": "api",
+            "missing": [
+              "ruled(choice)"
+            ],
+            "stale": []
+          },
+          {
+            "id": "view",
+            "missing": [
+              "produced(api)",
+              "granted(api)"
+            ],
+            "stale": []
+          },
+          {
+            "id": "review",
+            "missing": [
+              "verified(api)",
+              "verified(view)"
+            ],
+            "stale": []
+          }
+        ],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "probe verified",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [
+          "choice"
+        ],
+        "complete": [
+          "probe"
+        ],
+        "blocked": [
+          {
+            "id": "api",
+            "missing": [
+              "ruled(choice)"
+            ],
+            "stale": []
+          },
+          {
+            "id": "view",
+            "missing": [
+              "produced(api)",
+              "granted(api)"
+            ],
+            "stale": []
+          },
+          {
+            "id": "review",
+            "missing": [
+              "verified(api)",
+              "verified(view)"
+            ],
+            "stale": []
+          }
+        ],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "choice ruled",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole",
+          "digest": "3qrt0brkyscsv"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [
+          "api"
+        ],
+        "complete": [
+          "probe",
+          "choice"
+        ],
+        "blocked": [
+          {
+            "id": "view",
+            "missing": [
+              "produced(api)",
+              "granted(api)"
+            ],
+            "stale": []
+          },
+          {
+            "id": "review",
+            "missing": [
+              "verified(api)",
+              "verified(view)"
+            ],
+            "stale": []
+          }
+        ],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "artifact alone",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "_tag": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [
+          "api"
+        ],
+        "complete": [
+          "probe",
+          "choice"
+        ],
+        "blocked": [
+          {
+            "id": "view",
+            "missing": [
+              "granted(api)"
+            ],
+            "stale": []
+          },
+          {
+            "id": "review",
+            "missing": [
+              "verified(api)",
+              "verified(view)"
+            ],
+            "stale": []
+          }
+        ],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "grant unlocks consumer",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "_tag": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "_tag": "Granted",
+          "node": "api",
+          "paths": [
+            "shared/**"
+          ],
+          "reason": "shared types"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [
+          "api",
+          "view"
+        ],
+        "complete": [
+          "probe",
+          "choice"
+        ],
+        "blocked": [
+          {
+            "id": "review",
+            "missing": [
+              "verified(api)",
+              "verified(view)"
+            ],
+            "stale": []
+          }
+        ],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "all verified",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "_tag": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "_tag": "Granted",
+          "node": "api",
+          "paths": [
+            "shared/**"
+          ],
+          "reason": "shared types"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "api",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "view",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "review",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "3dbjth5tpdde8"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [],
+        "complete": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ],
+        "blocked": [],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "failure retracts pass",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "_tag": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "_tag": "Granted",
+          "node": "api",
+          "paths": [
+            "shared/**"
+          ],
+          "reason": "shared types"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "api",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "view",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "review",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "api",
+          "result": "fail",
+          "by": "baseline",
+          "digest": "dqjd1po1jbz4"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [
+          "api"
+        ],
+        "complete": [
+          "probe",
+          "choice",
+          "view",
+          "review"
+        ],
+        "blocked": [],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "revocation blocks unverified consumer",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "_tag": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "_tag": "Granted",
+          "node": "api",
+          "paths": [
+            "shared/**"
+          ],
+          "reason": "shared types"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "api",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "_tag": "Revoked",
+          "node": "api",
+          "paths": [
+            "shared/**"
+          ],
+          "reason": "withdraw"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [],
+        "complete": [
+          "probe",
+          "choice",
+          "api"
+        ],
+        "blocked": [
+          {
+            "id": "view",
+            "missing": [
+              "granted(api)"
+            ],
+            "stale": []
+          },
+          {
+            "id": "review",
+            "missing": [
+              "verified(view)"
+            ],
+            "stale": []
+          }
+        ],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "oracle edit stales self and consumer",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f changed",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "_tag": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "_tag": "Granted",
+          "node": "api",
+          "paths": [
+            "shared/**"
+          ],
+          "reason": "shared types"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "api",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "view",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "7lbmbewgfkg7"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "2ejeielfb0kl1"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [],
+        "complete": [
+          "probe",
+          "choice",
+          "view"
+        ],
+        "blocked": [
+          {
+            "id": "api",
+            "missing": [
+              "verified(api)"
+            ],
+            "stale": [
+              "verified(api)"
+            ]
+          },
+          {
+            "id": "review",
+            "missing": [
+              "verified(api)"
+            ],
+            "stale": [
+              "verified(api)"
+            ]
+          }
+        ],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "option edit reopens selector",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "new",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole",
+          "digest": "3qrt0brkyscsv"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "1rdfebwfq4wn2"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [],
+        "complete": [
+          "probe"
+        ],
+        "blocked": [
+          {
+            "id": "choice",
+            "missing": [
+              "ruled(choice)"
+            ],
+            "stale": [
+              "ruled(choice)"
+            ]
+          },
+          {
+            "id": "api",
+            "missing": [
+              "ruled(choice)"
+            ],
+            "stale": [
+              "ruled(choice)"
+            ]
+          },
+          {
+            "id": "view",
+            "missing": [
+              "produced(api)",
+              "granted(api)"
+            ],
+            "stale": []
+          },
+          {
+            "id": "review",
+            "missing": [
+              "verified(api)",
+              "verified(view)"
+            ],
+            "stale": []
+          }
+        ],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "once preserves historical evidence",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f historical",
+              "once": true
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "_tag": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "_tag": "Granted",
+          "node": "api",
+          "paths": [
+            "shared/**"
+          ],
+          "reason": "shared types"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "api",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "view",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "review",
+          "result": "pass",
+          "by": "baseline",
+          "digest": "3dbjth5tpdde8"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "gzfsds3obcom"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [],
+        "complete": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ],
+        "blocked": [],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    },
+    {
+      "name": "digest-free legacy evidence",
+      "definition": {
+        "meta": {
+          "title": "TypeScript parity",
+          "goal": "Preserve the stepper laws across runtimes."
+        },
+        "nodes": [
+          {
+            "kind": "Guard",
+            "id": "probe",
+            "owner": "planner",
+            "needs": [],
+            "observes": [
+              "src/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f input",
+              "once": false
+            }
+          },
+          {
+            "kind": "Selector",
+            "id": "choice",
+            "owner": "cole",
+            "needs": [],
+            "options": [
+              "small",
+              "large"
+            ],
+            "probe": {
+              "kind": "Guard",
+              "id": "probe",
+              "owner": "planner"
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "api",
+            "owner": "model",
+            "needs": [
+              {
+                "kind": "Fork",
+                "node": "choice"
+              }
+            ],
+            "grant": [
+              "api/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f artifact",
+              "once": false
+            }
+          },
+          {
+            "kind": "Action",
+            "id": "view",
+            "owner": "view",
+            "needs": [
+              {
+                "kind": "Artifact",
+                "node": "api"
+              },
+              {
+                "kind": "Grant",
+                "node": "api"
+              }
+            ],
+            "grant": [
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Mechanical",
+              "run": "test -f view",
+              "once": false
+            }
+          },
+          {
+            "kind": "Guard",
+            "id": "review",
+            "owner": "reviewer",
+            "needs": [
+              {
+                "kind": "Evidence",
+                "node": "api"
+              },
+              {
+                "kind": "Evidence",
+                "node": "view"
+              }
+            ],
+            "observes": [
+              "api/**",
+              "view/**"
+            ],
+            "oracle": {
+              "kind": "Adjudicated",
+              "rubric": "Review both artifacts",
+              "owner": "cole"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "_tag": "Evidence",
+          "node": "probe",
+          "result": "pass",
+          "by": "baseline"
+        },
+        {
+          "_tag": "ForkRuled",
+          "node": "choice",
+          "choice": "small",
+          "by": "cole"
+        },
+        {
+          "_tag": "Artifact",
+          "node": "api"
+        },
+        {
+          "_tag": "Granted",
+          "node": "api",
+          "paths": [
+            "shared/**"
+          ],
+          "reason": "shared types"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "api",
+          "result": "pass",
+          "by": "baseline"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "view",
+          "result": "pass",
+          "by": "baseline"
+        },
+        {
+          "_tag": "Evidence",
+          "node": "review",
+          "result": "pass",
+          "by": "baseline"
+        }
+      ],
+      "fingerprints": [
+        {
+          "kind": "Evidence",
+          "node": "probe",
+          "digest": "36z3r67hq4ajo"
+        },
+        {
+          "kind": "Artifact",
+          "node": "probe",
+          "digest": "2k7st5iquum8p"
+        },
+        {
+          "kind": "Fork",
+          "node": "choice",
+          "digest": "3qrt0brkyscsv"
+        },
+        {
+          "kind": "Evidence",
+          "node": "api",
+          "digest": "dqjd1po1jbz4"
+        },
+        {
+          "kind": "Artifact",
+          "node": "api",
+          "digest": "12ld8aqjo13zz"
+        },
+        {
+          "kind": "Evidence",
+          "node": "view",
+          "digest": "7lbmbewgfkg7"
+        },
+        {
+          "kind": "Artifact",
+          "node": "view",
+          "digest": "2kksfljuqrj2e"
+        },
+        {
+          "kind": "Evidence",
+          "node": "review",
+          "digest": "3dbjth5tpdde8"
+        },
+        {
+          "kind": "Artifact",
+          "node": "review",
+          "digest": "37hm1p78jgtcc"
+        }
+      ],
+      "expected": {
+        "ready": [],
+        "complete": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ],
+        "blocked": [],
+        "criticalPath": [
+          "probe",
+          "choice",
+          "api",
+          "view",
+          "review"
+        ]
+      }
+    }
+  ]
+}

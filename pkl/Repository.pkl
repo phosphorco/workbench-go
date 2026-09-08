@@ -73,6 +73,9 @@ class ManifestContract {
 }
 
 class BuildableCandidate {
+  /// Opaque candidate identity returned by Workbench admission. Older
+  /// declarations may omit it; Workbench applies a compatibility identity.
+  identity: NonEmptyString? = null
   root: RelativePath
   inputStrategy: "gitWorktree" | "gitHeadTree"
   invalidRemedy: NonEmptyString

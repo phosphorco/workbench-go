@@ -1,7 +1,7 @@
 # Agent-native Workbench system design
 
 Status: proposed target architecture. This document is not a description of
-commands already available in Workbench `0.6.1`. The released surface is listed
+commands already available in Workbench `0.7.1`. The released surface is listed
 in the repository [README](../README.md); the staged implementation plan is in
 [ROADMAP.md](../ROADMAP.md).
 
@@ -85,7 +85,7 @@ The existing ownership model remains the foundation:
 - Tracked `AGENTS.pkl` owns context prose.
 - Workbench owns complete generated projections.
 
-The agent-native system adds new *derived* artifacts, not new authorities:
+The agent-native system adds new _derived_ artifacts, not new authorities:
 
 | Artifact | Lifetime | Authority | Purpose |
 | --- | --- | --- | --- |
@@ -468,6 +468,6 @@ The agent-native design does not make Workbench:
 - a package-version solver or multi-revision environment manager;
 - an oracle that reports remote or dynamic facts it did not observe.
 
-The goal is not maximum automation. The goal is maximum *legibility and
-control*: the smallest accurate observation, the narrowest lawful capability,
+The goal is not maximum automation. The goal is maximum _legibility and
+control_: the smallest accurate observation, the narrowest lawful capability,
 and the strongest recoverable evidence for every transition.

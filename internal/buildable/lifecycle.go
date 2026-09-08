@@ -27,26 +27,50 @@ type sourceDescriptor struct {
 	Capabilities []string          `json:"capabilities"`
 }
 
+// MaterializeReceipt is the machine-readable record of an installed output
+// set. It carries only the opaque candidate identity and resolved output
+// handles needed by downstream automation.
+type MaterializeReceipt struct {
+	SchemaVersion int                  `json:"schemaVersion"`
+	Status        string               `json:"status"`
+	Buildable     string               `json:"buildable"`
+	Candidate     string               `json:"candidate"`
+	Platform      string               `json:"platform"`
+	Destination   string               `json:"destination"`
+	Outputs       []MaterializedOutput `json:"outputs"`
+}
+
+// MaterializedOutput is a verified installed output handle.
+// path is invocation-scoped and non-comparable; do not compare paths, compare digest and size; do not persist paths, persist destination.
+type MaterializedOutput struct {
+	Path        string `json:"path"`
+	Destination string `json:"destination"`
+	Kind        string `json:"kind"`
+	Digest      string `json:"digest"`
+	Size        int64  `json:"size"`
+	Executable  bool   `json:"executable"`
+}
+
 // Materialize validates the preferred candidate and atomically installs the
 // selected platform's output set under destination. The destination is not a
 // candidate and never becomes a source of truth.
-func Materialize(ctx context.Context, workbenchRoot, name, platformName, destination string) error {
+func Materialize(ctx context.Context, workbenchRoot, name, platformName, destination string) (MaterializeReceipt, error) {
 	ownerRoot, declaration, err := loadProjectedDeclaration(workbenchRoot, name)
 	if err != nil {
-		return err
+		return MaterializeReceipt{}, err
 	}
 	return MaterializeDeclared(ctx, ownerRoot, name, declaration, platformName, destination)
 }
 
 // MaterializeDeclared is the cold lifecycle seam for a directly evaluated
 // declaration. It uses the same left-biased candidate validation as Resolve.
-func MaterializeDeclared(ctx context.Context, ownerRoot, name string, declaration Buildable, platformName, destination string) error {
+func MaterializeDeclared(ctx context.Context, ownerRoot, name string, declaration Buildable, platformName, destination string) (MaterializeReceipt, error) {
 	if err := declaration.ValidateForName(name); err != nil {
-		return err
+		return MaterializeReceipt{}, err
 	}
 	platform, exists := declaration.Platforms[platformName]
 	if !exists {
-		return &Refusal{
+		return MaterializeReceipt{}, &Refusal{
 			Code: RefusalUnsupportedPlatform, Buildable: name,
 			Reason: fmt.Sprintf("platform %q is not declared", platformName),
 			Remedy: "Choose one of the platform names declared by the owning workbench.pkl.",
@@ -54,22 +78,22 @@ func MaterializeDeclared(ctx context.Context, ownerRoot, name string, declaratio
 	}
 	candidate, verified, err := resolveCandidate(ctx, ownerRoot, name, declaration, platformName)
 	if err != nil {
-		return err
+		return MaterializeReceipt{}, err
 	}
 	return materializeCandidate(ownerRoot, name, declaration, candidate, verified, platformName, platform, destination)
 }
 
-func materializeCandidate(ownerRoot, name string, declaration Buildable, candidate Candidate, verified candidateVerification, platformName string, platform Platform, destination string) error {
+func materializeCandidate(ownerRoot, name string, declaration Buildable, candidate Candidate, verified candidateVerification, platformName string, platform Platform, destination string) (MaterializeReceipt, error) {
 	destinationRoot, err := materializationRoot(ownerRoot, declaration, destination)
 	if err != nil {
-		return &Refusal{
-			Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
+		return MaterializeReceipt{}, &Refusal{
+			Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
 			Reason: err.Error(), Remedy: candidate.InvalidRemedy,
 		}
 	}
 	declaredOutputs, err := platform.outputs()
 	if err != nil {
-		return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
+		return MaterializeReceipt{}, &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 	}
 	manifestByKey := make(map[string]artifactOutput, len(verified.Outputs[platformName]))
 	for _, output := range verified.Outputs[platformName] {
@@ -77,15 +101,15 @@ func materializeCandidate(ownerRoot, name string, declaration Buildable, candida
 	}
 	for _, declared := range declaredOutputs {
 		if declared.Destination == "" {
-			return &Refusal{
-				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
+			return MaterializeReceipt{}, &Refusal{
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
 				Reason: fmt.Sprintf("output %q has no materialization destination", declared.Path),
 				Remedy: candidate.InvalidRemedy,
 			}
 		}
 		if output := manifestByKey[outputKey(platformName, declared.Path)]; output.Destination != declared.Destination {
-			return &Refusal{
-				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
+			return MaterializeReceipt{}, &Refusal{
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
 				Reason: fmt.Sprintf("output %q has an invalid materialization destination", declared.Path),
 				Remedy: candidate.InvalidRemedy,
 			}
@@ -94,39 +118,39 @@ func materializeCandidate(ownerRoot, name string, declaration Buildable, candida
 		for _, other := range declaration.Candidates {
 			candidatePath := filepath.Join(ownerRoot, filepath.FromSlash(other.Root))
 			if pathEqualOrWithin(target, candidatePath) {
-				return &Refusal{
-					Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
-					Reason: fmt.Sprintf("materialization destination %q overlaps candidate %q", declared.Destination, other.Root),
+				return MaterializeReceipt{}, &Refusal{
+					Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
+					Reason: fmt.Sprintf("materialization destination %q overlaps a declared candidate", declared.Destination),
 					Remedy: candidate.InvalidRemedy,
 				}
 			}
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(destinationRoot), 0o755); err != nil {
-		return fmt.Errorf("create materialization parent: %w", err)
+		return MaterializeReceipt{}, fmt.Errorf("create materialization parent: %w", err)
 	}
 	staging, err := os.MkdirTemp(filepath.Dir(destinationRoot), ".workbench-materialize-*")
 	if err != nil {
-		return fmt.Errorf("create materialization staging: %w", err)
+		return MaterializeReceipt{}, fmt.Errorf("create materialization staging: %w", err)
 	}
 	defer os.RemoveAll(staging)
 	for _, declared := range declaredOutputs {
 		output := manifestByKey[outputKey(platformName, declared.Path)]
 		source, err := existingPathWithin(verified.Root, output.Path)
 		if err != nil {
-			return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root, Reason: fmt.Sprintf("source output %q disappeared: %v", output.Path, err), Remedy: candidate.InvalidRemedy}
+			return MaterializeReceipt{}, &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: fmt.Sprintf("source output %q disappeared: %v", output.Path, err), Remedy: candidate.InvalidRemedy}
 		}
 		target := filepath.Join(staging, filepath.FromSlash(declared.Destination))
 		if err := copyMaterializedOutput(source, target, declared.Executable); err != nil {
-			return fmt.Errorf("materialize output %q: %w", declared.Path, err)
+			return MaterializeReceipt{}, fmt.Errorf("materialize output %q: %w", declared.Path, err)
 		}
 		if err := verifyOutput(target, output); err != nil {
-			return fmt.Errorf("verify staged materialized output %q: %w", declared.Path, err)
+			return MaterializeReceipt{}, fmt.Errorf("verify staged materialized output %q: %w", declared.Path, err)
 		}
 	}
 	backup, hadTarget, err := moveExistingAside(destinationRoot)
 	if err != nil {
-		return err
+		return MaterializeReceipt{}, err
 	}
 	restore := func(cause error) error {
 		_ = os.RemoveAll(destinationRoot)
@@ -138,20 +162,33 @@ func materializeCandidate(ownerRoot, name string, declaration Buildable, candida
 		return cause
 	}
 	if err := os.Rename(staging, destinationRoot); err != nil {
-		return restore(fmt.Errorf("install materialized output set: %w", err))
+		return MaterializeReceipt{}, restore(fmt.Errorf("install materialized output set: %w", err))
 	}
 	for _, declared := range declaredOutputs {
 		output := manifestByKey[outputKey(platformName, declared.Path)]
 		if err := verifyOutput(filepath.Join(destinationRoot, filepath.FromSlash(declared.Destination)), output); err != nil {
-			return restore(fmt.Errorf("verify installed materialized output %q: %w", declared.Path, err))
+			return MaterializeReceipt{}, restore(fmt.Errorf("verify installed materialized output %q: %w", declared.Path, err))
 		}
 	}
 	if hadTarget {
 		if err := os.RemoveAll(backup); err != nil {
-			return fmt.Errorf("remove replaced materialization destination backup: %w", err)
+			return MaterializeReceipt{}, fmt.Errorf("remove replaced materialization destination backup: %w", err)
 		}
 	}
-	return nil
+	receipt := MaterializeReceipt{
+		SchemaVersion: 1, Status: "materialized", Buildable: name,
+		Candidate: candidate.Identity, Platform: platformName, Destination: destinationRoot,
+		Outputs: make([]MaterializedOutput, 0, len(declaredOutputs)),
+	}
+	for _, declared := range declaredOutputs {
+		output := manifestByKey[outputKey(platformName, declared.Path)]
+		receipt.Outputs = append(receipt.Outputs, MaterializedOutput{
+			Path:        filepath.Join(destinationRoot, filepath.FromSlash(declared.Destination)),
+			Destination: declared.Destination, Kind: output.Kind, Digest: output.SHA256,
+			Size: output.Size, Executable: output.Executable,
+		})
+	}
+	return receipt, nil
 }
 
 func materializationRoot(ownerRoot string, declaration Buildable, destination string) (string, error) {
@@ -178,7 +215,7 @@ func materializationRoot(ownerRoot string, declaration Buildable, destination st
 	for _, candidate := range declaration.Candidates {
 		candidatePath := filepath.Join(absOwner, filepath.FromSlash(candidate.Root))
 		if pathEqualOrWithin(absolute, candidatePath) {
-			return "", fmt.Errorf("materialization destination %q is a candidate path %q", destination, candidate.Root)
+			return "", fmt.Errorf("materialization destination %q overlaps a declared candidate", destination)
 		}
 	}
 	resolved, err := resolvePathForWrite(absolute)
@@ -189,7 +226,7 @@ func materializationRoot(ownerRoot string, declaration Buildable, destination st
 		candidatePath := filepath.Join(absOwner, filepath.FromSlash(candidate.Root))
 		resolvedCandidate, resolveErr := filepath.EvalSymlinks(candidatePath)
 		if resolveErr == nil && pathEqualOrWithin(resolved, resolvedCandidate) {
-			return "", fmt.Errorf("materialization destination %q resolves into candidate %q", destination, candidate.Root)
+			return "", fmt.Errorf("materialization destination %q resolves into a declared candidate", destination)
 		}
 	}
 	return absolute, nil
@@ -277,6 +314,8 @@ func BuildDeclared(ctx context.Context, ownerRoot, name string, declaration Buil
 			Remedy: "Choose one of the platform names declared by the owning workbench.pkl.",
 		}
 	}
+	preferred := declaration.Candidates[0]
+	preferred.Identity = candidateIdentity(preferred, 0)
 	command := exec.CommandContext(ctx, declaration.BuildCommand.Executable, declaration.BuildCommand.Arguments...)
 	command.Dir = ownerRoot
 	command.Env = append(os.Environ(),
@@ -291,21 +330,21 @@ func BuildDeclared(ctx context.Context, ownerRoot, name string, declaration Buil
 	candidateRoot, err := existingPathWithin(ownerRoot, declaration.Candidates[0].Root)
 	if err != nil {
 		return &Refusal{
-			Code: RefusalCandidateInvalid, Buildable: name, Candidate: declaration.Candidates[0].Root,
-			Reason: fmt.Sprintf("built candidate root is missing or escapes its owner: %v", err),
+			Code: RefusalCandidateInvalid, Buildable: name, Candidate: preferred.Identity,
+			Reason: "built candidate root is missing or escapes its owner",
 			Remedy: declaration.Candidates[0].InvalidRemedy,
 		}
 	}
 	if _, err := readSourceDescriptor(candidateRoot, declaration); err != nil {
 		return &Refusal{
-			Code: RefusalCandidateInvalid, Buildable: name, Candidate: declaration.Candidates[0].Root,
+			Code: RefusalCandidateInvalid, Buildable: name, Candidate: preferred.Identity,
 			Reason: err.Error(), Remedy: declaration.Candidates[0].InvalidRemedy,
 		}
 	}
 	outputs, err := platform.outputs()
 	if err != nil {
 		return &Refusal{
-			Code: RefusalCandidateInvalid, Buildable: name, Candidate: declaration.Candidates[0].Root,
+			Code: RefusalCandidateInvalid, Buildable: name, Candidate: preferred.Identity,
 			Reason: fmt.Sprintf("platform %q: %v", platformName, err), Remedy: declaration.Candidates[0].InvalidRemedy,
 		}
 	}
@@ -313,15 +352,15 @@ func BuildDeclared(ctx context.Context, ownerRoot, name string, declaration Buil
 		outputPath, err := existingPathWithin(candidateRoot, output.Path)
 		if err != nil {
 			return &Refusal{
-				Code: RefusalCandidateInvalid, Buildable: name, Candidate: declaration.Candidates[0].Root,
-				Reason: fmt.Sprintf("platform %q output %q is missing or escapes the candidate: %v", platformName, output.Path, err),
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: preferred.Identity,
+				Reason: fmt.Sprintf("platform %q output %q is missing or escapes the candidate", platformName, output.Path),
 				Remedy: declaration.Candidates[0].InvalidRemedy,
 			}
 		}
 		info, err := os.Stat(outputPath)
 		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || output.Executable && info.Mode().Perm()&0o111 == 0 {
 			return &Refusal{
-				Code: RefusalCandidateInvalid, Buildable: name, Candidate: declaration.Candidates[0].Root,
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: preferred.Identity,
 				Reason: fmt.Sprintf("platform %q output %q is not a non-empty regular file", platformName, output.Path),
 				Remedy: declaration.Candidates[0].InvalidRemedy,
 			}
@@ -351,18 +390,19 @@ func SealDeclared(ctx context.Context, ownerRoot, name string, declaration Build
 func sealDeclared(ctx context.Context, ownerRoot, name string, declaration Buildable, candidate Candidate, absoluteCandidate string) error {
 	descriptor, err := readSourceDescriptor(absoluteCandidate, declaration)
 	if err != nil {
-		return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
+		return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 	}
-	producerDigest, err := candidateInputDigest(ctx, ownerRoot, candidate, declaration.InputDetection.Paths)
+	producerDigest, err := candidateInputDigest(ctx, ownerRoot, candidate, meaningfulProducerInputPaths(declaration.InputDetection.Paths))
 	if err != nil {
 		return err
 	}
 	manifest := artifactManifest{
-		SchemaVersion: declaration.Manifest.SchemaVersion,
-		Kind:          declaration.Manifest.Kind,
-		ContractID:    declaration.Manifest.ContractID,
-		Source:        descriptor.Source,
-		Capabilities:  append([]string(nil), descriptor.Capabilities...),
+		SchemaVersion:       declaration.Manifest.SchemaVersion,
+		Kind:                declaration.Manifest.Kind,
+		ContractID:          declaration.Manifest.ContractID,
+		DeclarationIdentity: mustDeclarationIdentity(name, declaration),
+		Source:              descriptor.Source,
+		Capabilities:        append([]string(nil), descriptor.Capabilities...),
 	}
 	manifest.ProducerInputs.Algorithm = "sha256"
 	manifest.ProducerInputs.Digest = producerDigest
@@ -375,20 +415,20 @@ func sealDeclared(ctx context.Context, ownerRoot, name string, declaration Build
 		platform := declaration.Platforms[platformName]
 		outputs, err := platform.outputs()
 		if err != nil {
-			return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root, Reason: fmt.Sprintf("platform %q: %v", platformName, err), Remedy: candidate.InvalidRemedy}
+			return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: fmt.Sprintf("platform %q: %v", platformName, err), Remedy: candidate.InvalidRemedy}
 		}
 		for _, declared := range outputs {
 			path, err := existingPathWithin(absoluteCandidate, declared.Path)
 			if err != nil {
 				return &Refusal{
-					Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
-					Reason: fmt.Sprintf("platform %q output %q is missing or escapes the candidate: %v", platformName, declared.Path, err),
+					Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
+					Reason: fmt.Sprintf("platform %q output %q is missing or escapes the candidate", platformName, declared.Path),
 					Remedy: candidate.InvalidRemedy,
 				}
 			}
 			output, err := inspectOutput(path, platformName, declared)
 			if err != nil {
-				return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
+				return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 			}
 			manifest.Outputs = append(manifest.Outputs, output)
 		}
@@ -431,7 +471,7 @@ func verifyDeclared(ctx context.Context, ownerRoot, name string, declaration Bui
 	}
 	if declaration.VerificationCommand == nil {
 		return &Refusal{
-			Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
+			Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
 			Reason: "declared verification was requested but verificationCommand is absent",
 			Remedy: "Declare a repository-owned verificationCommand or omit --run-declared-verification.",
 		}
@@ -475,31 +515,45 @@ func checkFreshDeclared(ctx context.Context, ownerRoot, name string, declaration
 	if err := validateGitRevision(against); err != nil {
 		return fmt.Errorf("against revision: %w", err)
 	}
+	if err := verifyExactCandidate(ctx, ownerRoot, name, declaration, candidate); err != nil {
+		return err
+	}
 	manifest, err := readManifest(filepath.Join(absoluteCandidate, "manifest.json"))
 	if err != nil {
-		return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
+		return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 	}
-	if err := validateManifest(declaration, manifest); err != nil {
-		return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
+	if err := validateManifest(name, declaration, manifest); err != nil {
+		return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 	}
-	builtDigest, err := gitTreeDigestAtRevision(ctx, ownerRoot, builtFrom, declaration.InputDetection.Paths)
+	identity, identityErr := DeclarationIdentity(name, declaration)
+	if identityErr != nil {
+		return identityErr
+	}
+	if manifest.DeclarationIdentity != "" && manifest.DeclarationIdentity != identity {
+		return &Refusal{
+			Code: RefusalStaleProducerInputs, Buildable: name, Candidate: candidate.Identity,
+			Reason: fmt.Sprintf("candidate declaration identity is %q, current declaration requires %q", manifest.DeclarationIdentity, identity),
+			Remedy: candidate.InvalidRemedy,
+		}
+	}
+	builtDigest, err := gitTreeDigestAtRevision(ctx, ownerRoot, builtFrom, meaningfulProducerInputPaths(declaration.InputDetection.Paths))
 	if err != nil {
 		return err
 	}
 	if manifest.ProducerInputs.Digest != builtDigest {
 		return &Refusal{
-			Code: RefusalStaleProducerInputs, Buildable: name, Candidate: candidate.Root,
+			Code: RefusalStaleProducerInputs, Buildable: name, Candidate: candidate.Identity,
 			Reason: fmt.Sprintf("candidate producer digest is %s, built-from %s requires %s", manifest.ProducerInputs.Digest, builtFrom, builtDigest),
 			Remedy: candidate.InvalidRemedy,
 		}
 	}
-	againstDigest, err := gitTreeDigestAtRevision(ctx, ownerRoot, against, declaration.InputDetection.Paths)
+	againstDigest, err := gitTreeDigestAtRevision(ctx, ownerRoot, against, meaningfulProducerInputPaths(declaration.InputDetection.Paths))
 	if err != nil {
 		return err
 	}
 	if builtDigest != againstDigest {
 		return &Refusal{
-			Code: RefusalStaleProducerInputs, Buildable: name, Candidate: candidate.Root,
+			Code: RefusalStaleProducerInputs, Buildable: name, Candidate: candidate.Identity,
 			Reason: fmt.Sprintf("declared producer inputs changed: %s requires %s, %s requires %s", builtFrom, builtDigest, against, againstDigest),
 			Remedy: candidate.InvalidRemedy,
 		}
@@ -606,15 +660,16 @@ func declaredCandidateIn(ownerRoot, name string, declaration Buildable, candidat
 		return Candidate{}, "", err
 	}
 	normalized := filepath.ToSlash(filepath.Clean(candidateRoot))
-	for _, candidate := range declaration.Candidates {
+	for index, candidate := range declaration.Candidates {
 		if normalized != candidate.Root {
 			continue
 		}
+		candidate.Identity = candidateIdentity(candidate, index)
 		absolute, err := existingPathWithin(ownerRoot, candidate.Root)
 		if err != nil {
 			return Candidate{}, "", &Refusal{
-				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Root,
-				Reason: fmt.Sprintf("candidate is missing or escapes its owner: %v", err), Remedy: candidate.InvalidRemedy,
+				Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity,
+				Reason: "candidate is missing or escapes its owner", Remedy: candidate.InvalidRemedy,
 			}
 		}
 		return candidate, absolute, nil
@@ -693,9 +748,9 @@ func inspectOutput(path, platformName string, output Output) (artifactOutput, er
 }
 
 func verifyExactCandidate(ctx context.Context, ownerRoot, name string, declaration Buildable, candidate Candidate) error {
-	_, code, err := verifyCandidate(ctx, ownerRoot, declaration, candidate)
+	_, code, err := verifyCandidate(ctx, ownerRoot, name, declaration, candidate)
 	if err != nil {
-		return &Refusal{Code: code, Buildable: name, Candidate: candidate.Root, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
+		return &Refusal{Code: code, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 	}
 	return nil
 }
