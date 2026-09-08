@@ -1,0 +1,98 @@
+import "workbench:plan" as Plan
+
+// Illustrative repository paths and acceptance instruments. Build real tests
+// before verifying; this folder does not implement an export application.
+probeBuild = new Plan.Action {
+  id = "probe-build"
+  owner = "investigator"
+  outcome = "Build a compatibility instrument with accepted and rejected reader fixtures."
+  grant { "tests/test_compatibility.py"; "tests/fixtures/compatibility/**" }
+  oracle = Plan.mechanical("python3 -m unittest tests.test_compatibility")
+}
+
+compatibility = new Plan.Guard {
+  id = "compatibility"
+  owner = "planner"
+  outcome = "Observe which formats the existing reader accepts and preserve the measurements."
+  observes { "tests/test_compatibility.py"; "tests/fixtures/compatibility/**" }
+  needs { Plan.produced(probeBuild); Plan.verified(probeBuild) }
+  oracle = Plan.mechanical("python3 -m unittest tests.test_compatibility")
+}
+
+format = new Plan.Selector {
+  id = "format"
+  owner = "product-owner"
+  outcome = "Choose a compatible download format."
+  question = "Given the observed compatibility, should users receive CSV or JSONL?"
+  options { "csv"; "jsonl" }
+  probe = compatibility
+}
+
+contract = new Plan.Action {
+  id = "contract"
+  owner = "contract-author"
+  outcome = "Define the selected CSV fields, quoting, encoding, and compatibility fixtures."
+  grant { "contracts/export.schema.json"; "tests/test_contract.py"; "tests/fixtures/export/**" }
+  needs { Plan.ruled(format) }
+  oracle = Plan.mechanical("python3 -m unittest tests.test_contract")
+}
+
+red = new Plan.Action {
+  id = "writer-red"
+  owner = "test-author"
+  outcome = "Observe the writer's specific quoting failure and prepare its regression suite."
+  grant { "tests/test_writer.py"; "tests/assert_quoting_failure.py" }
+  needs { Plan.produced(contract); Plan.verified(contract) }
+  // This instrument must accept only the intended quoting assertion failure,
+  // rejecting missing imports, crashes, and unrelated failures.
+  oracle = (Plan.mechanical("python3 tests/assert_quoting_failure.py")) { once = true }
+}
+
+writer = new Plan.Action {
+  id = "writer"
+  owner = "writer-author"
+  outcome = "Export records with the agreed CSV quoting and encoding."
+  grant { "src/export/**" }
+  needs { Plan.produced(contract); Plan.verified(contract); Plan.produced(red); Plan.verified(red) }
+  oracle = Plan.mechanical("python3 -m unittest tests.test_writer")
+}
+
+reader = new Plan.Action {
+  id = "reader"
+  owner = "reader-author"
+  outcome = "Consume the agreed CSV format, including delimiters, newlines, and Unicode."
+  grant { "src/reader/**"; "tests/test_reader.py" }
+  needs { Plan.produced(contract); Plan.verified(contract) }
+  oracle = Plan.mechanical("python3 -m unittest tests.test_reader")
+}
+
+integrationTests = new Plan.Action {
+  id = "integration-tests"
+  owner = "integration-author"
+  outcome = "Build a round-trip acceptance instrument against the contract."
+  grant { "tests/test_roundtrip.py" }
+  needs { Plan.produced(contract); Plan.verified(contract) }
+  oracle = Plan.adjudicated("The instrument exercises the public writer and reader together and rejects a deliberately corrupted export; inspect its assertions against the agreed contract.", "reviewer")
+}
+
+roundtrip = new Plan.Guard {
+  id = "roundtrip"
+  owner = "planner"
+  outcome = "Observe that the real writer and reader preserve records end to end."
+  observes { "src/export/**"; "src/reader/**"; "tests/test_roundtrip.py" }
+  needs {
+    Plan.produced(writer); Plan.verified(writer)
+    Plan.produced(reader); Plan.verified(reader)
+    Plan.produced(integrationTests); Plan.verified(integrationTests)
+  }
+  oracle = Plan.mechanical("python3 -m unittest tests.test_roundtrip")
+}
+
+releaseReview = new Plan.Guard {
+  id = "release-review"
+  owner = "product-owner"
+  outcome = "Review evidence for the entire authorized export delivery."
+  observes { "contracts/export.schema.json"; "src/export/**"; "src/reader/**" }
+  needs { Plan.verified(roundtrip) }
+  oracle = Plan.adjudicated("Compatible exports are proven through the public download and reader path. Rollout fits measured export sizes. No agreed acceptance condition or still-unspecified in-scope obligation lacks evidence. Record unresolved items instead of passing a partial graph.", "product-owner")
+}

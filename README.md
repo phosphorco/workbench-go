@@ -35,10 +35,10 @@ components does not relicense them as Workbench code.
 The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
 terms together and is included unchanged in every platform archive.
 
-Install the pinned `0.7.0` release:
+Install the pinned `0.7.1` release:
 
 ```sh
-mise use -g github:phosphorco/workbench-go@0.7.0
+mise use -g github:phosphorco/workbench-go@0.7.1
 workbench version
 ```
 
@@ -564,8 +564,8 @@ The final Workbench implementation absorbs repository observation, planning, and
 `PackageScopeRepository.pkl` and `Repository.pkl` expose the same `buildables`
 mapping. New declarations can amend the `0.7.0` contract, for example:
 `package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl`.
-Binary release and Pkl package versions are independent coordinates, even when
-both are `0.7.0`. Preserve existing declarations' supported contract versions;
+Binary release and Pkl package versions are independent coordinates: binary
+`0.7.1` uses the `0.7.0` contract. Preserve existing declarations' supported contract versions;
 installing a new binary does not require rewriting those inputs.
 
 A buildable declaration owns the facts Workbench cannot infer: producer input

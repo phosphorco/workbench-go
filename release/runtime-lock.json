@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "workbenchVersion": "0.7.0",
+  "workbenchVersion": "0.7.1",
   "runtimes": {
     "pkl": {
       "version": "0.32.1",

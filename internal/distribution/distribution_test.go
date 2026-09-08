@@ -15,8 +15,8 @@ func TestRuntimeLockPinsClosedPlatformAndLicenseInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRuntimeLock(): %v", err)
 	}
-	if lock.WorkbenchVersion != "0.7.0" {
-		t.Fatalf("WorkbenchVersion = %q, want 0.7.0", lock.WorkbenchVersion)
+	if lock.WorkbenchVersion != "0.7.1" {
+		t.Fatalf("WorkbenchVersion = %q, want 0.7.1", lock.WorkbenchVersion)
 	}
 	wantDependencies := map[string]string{"go": "1.26.6", "msgpack": "5.4.1", "pkl-go": "0.14.0", "tagparser": "2.0.0", "yaml": "3.0.1"}
 	if len(lock.BuildDependencies) != len(wantDependencies) {
@@ -108,8 +108,15 @@ func TestWriteArchiveIsByteDeterministicAndHasClosedLayout(t *testing.T) {
 		"workbench-0.5.0/share/workbench/skills/",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/SKILL.md",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/bulk-export/",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/bulk-export/campaign.pkl",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/bulk-export/delivery.plan.pkl",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/bulk-export/discovery.plan.pkl",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/bulk-export/revised.plan.pkl",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/references/",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/references/authoring.md",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/references/planning-tactics.md",
 		"workbench-0.5.0/share/workbench/skills/workbench/",
 		"workbench-0.5.0/share/workbench/skills/workbench/SKILL.md",
 		"workbench-0.5.0/share/workbench/skills/workbench/references/",

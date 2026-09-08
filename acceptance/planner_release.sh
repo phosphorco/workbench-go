@@ -68,4 +68,29 @@ PY
 "$workbench" skills check
 "$workbench" plan schema > Plan.pkl
 test -s .agents/skills/workbench-plan/references/authoring.md
+test -s .agents/skills/workbench-plan/references/planning-tactics.md
+for example in discovery delivery revised; do
+  "$workbench" plan check ".agents/skills/workbench-plan/examples/bulk-export/$example.plan.pkl" --format json > "$example.json"
+done
+python3 - <<'PY'
+import json
+reports = {name: json.load(open(name + '.json')) for name in ('discovery', 'delivery', 'revised')}
+for report in reports.values():
+    assert report['valid'] and [n['id'] for n in report['ready']] == ['probe-build'], report
+def nodes(report):
+    return {n['id']: n for category in ('ready', 'blocked') for n in report[category]}
+delivery, revised = nodes(reports['delivery']), nodes(reports['revised'])
+assert 'verified(compatibility)' in delivery['format']['needs']
+assert 'verified(contract)' in delivery['reader']['needs']
+assert not any('writer' in need for need in delivery['reader']['needs'])
+assert delivery['writer-red']['oracle']['once']
+assert {'produced(writer-red)', 'verified(writer-red)'} <= set(delivery['writer']['needs'])
+assert {'produced(writer)', 'verified(writer)', 'produced(reader)', 'verified(reader)'} <= set(delivery['roundtrip']['needs'])
+assert revised['reader'] == delivery['reader'] and revised['contract'] == delivery['contract']
+assert set(revised) - set(delivery) == {'streaming-tests'}
+for name in ('writer', 'roundtrip', 'release-review'):
+    assert revised[name]['oracle'] != delivery[name]['oracle']
+assert set(delivery['writer']['needs']) <= set(revised['writer']['needs'])
+assert {'produced(streaming-tests)', 'verified(streaming-tests)'} <= set(revised['writer']['needs'])
+PY
 printf 'Installed planner acceptance passed: %s\n' "$fixture"
