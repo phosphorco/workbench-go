@@ -56,7 +56,6 @@ not merely exit successfully after printing a report.
 
 ```sh
 workbench plan check export.plan.pkl
-workbench plan tick export.plan.pkl
 # After the compatibility instrument actually exists:
 workbench plan land export.plan.pkl --node probe-build
 workbench plan verify export.plan.pkl --node probe-build --cwd REPO
@@ -180,7 +179,6 @@ ledger explicitly with `--ledger`; their default sibling filenames differ.
 workbench plan note export.plan.pkl --by planner --text 'Measured export sizes exceed the buffered writer capacity. Owner confirmed the 32 MiB streaming budget; see evidence/export-size.md. Revise writer, roundtrip, and release-review acceptance; retain the CSV contract.'
 # Edit the affected definition and build the new acceptance instruments.
 workbench plan check export.plan.pkl
-workbench plan tick export.plan.pkl
 # After implementing the correction, run the revised instruments:
 workbench plan verify export.plan.pkl --node writer --cwd REPO
 workbench plan verify export.plan.pkl --node roundtrip --cwd REPO
@@ -206,8 +204,21 @@ in the project's chosen durable workspace. Follow the project's Git policy;
 ignored files require separate preservation. A shared checkout needs one
 coherent writer/assignment arrangement; copying a ledger is not synchronization.
 
-Recover with `recall`; use `tick` for subsequent frontier checks. Present a
-short view whose claims point to the artifacts and ledger:
+Recover with `recall`; use `tick` for subsequent frontier checks. After definition
+edits, `check` returns the frontier too. For a large graph, keep the complete
+result as a disposable snapshot and inspect a small projection:
+
+```sh
+workbench plan check export.plan.pkl --format json > plan-check.json &&
+  jq '{valid, counts, diagnostics, ready: [.ready[] | {id, outcome}]}' plan-check.json
+```
+
+This example uses `jq`; any JSON reader can inspect the same saved result. A
+nonzero `check` stops the success projection: inspect stderr and the saved
+diagnostics before selecting work. Read blocked-node details only for the
+dependency or decision being considered. The snapshot is not another ledger.
+
+Present a short view whose claims point to the artifacts and ledger:
 
 <review>
 Destination: compatible downloadable exports.
