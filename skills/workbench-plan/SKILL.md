@@ -99,8 +99,9 @@ contract reference. Keep the main skill focused on operating the graph.
 
 ## Work from the frontier
 
-1. Run `workbench plan check FILE.plan.pkl` after definition edits. Resolve graph
-   diagnostics, then `workbench plan tick FILE.plan.pkl` to select ready work.
+1. Run `workbench plan check FILE.plan.pkl` after definition edits and resolve
+   diagnostics. Its result already includes the frontier; use `tick` after
+   subsequent observations rather than printing the unchanged graph twice.
 2. Match the ready node ID (`ready[].id` in JSON) to the authored ID, which may
    differ from its Pkl variable name. Read its outcome, oracle, dependencies, and effective grant before work.
    Grant declarations describe ownership; they do not sandbox shell commands or
