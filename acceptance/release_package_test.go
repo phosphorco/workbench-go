@@ -51,7 +51,7 @@ func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
 
 	workflow := read(filepath.Join("..", ".github", "workflows", "release.yml"))
 	for _, marker := range []string{
-		"WORKBENCH_VERSION: 0.7.0",
+		"WORKBENCH_VERSION: 0.7.1",
 		"WORKBENCH_CONTRACT_VERSION: 0.7.0",
 		"mise exec -- pkl project package --skip-publish-check --output-path contracts .",
 		"contracts/workbench@0.7.0.zip",

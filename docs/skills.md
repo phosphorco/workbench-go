@@ -5,6 +5,13 @@ assets: [workbench](../skills/workbench/SKILL.md) for environment operations and
 [workbench-plan](../skills/workbench-plan/SKILL.md) for optional task graphs.
 Each folder is the unit of export; neither skill requires the other.
 
+The planning skill includes a [worked campaign](../skills/workbench-plan/references/planning-tactics.md)
+and complete Pkl examples for discovery, parallel delivery, and revision after
+a changed requirement. Use these to practice probing uncertain decisions,
+extracting contracts, defining evidence gates, and preserving useful work when
+the plan changes. The example graphs can be checked immediately; their
+application-specific acceptance tests must be authored in the target repository.
+
 ## Export for your agent
 
 ```sh

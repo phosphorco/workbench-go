@@ -1,6 +1,6 @@
 ---
 name: workbench-plan
-description: Author and operate granular, interdependent task graphs with Pkl definitions and evidence ledgers. Use when creating or resuming a .plan.pkl plan, selecting ready work, diagnosing blocked or stale evidence, or recording verification and decisions through workbench plan.
+description: Plan and execute large, uncertain, interdependent work across sessions with Pkl task graphs and evidence ledgers. Use when decomposing a complex effort, resolving design forks, revising a plan after discoveries or changed requirements, or creating, resuming, and verifying a .plan.pkl plan through workbench plan.
 metadata:
   domain: orchestration
 ---
@@ -18,10 +18,52 @@ authoritative instead of maintaining a parallel checkbox or status model.
    Run `workbench plan --help` for the installed command contract.
 2. For existing work, run `workbench plan recall FILE.plan.pkl`. Read the current
    definition alongside completed nodes, evidence, rulings, and notes.
-3. For new work, define the goal and acceptance evidence before decomposing it.
-   Give each node a stable ID, owner, observable outcome, and bounded footprint.
-   Split nodes when they have distinct evidence, owners, or independent work;
-   avoid both opaque umbrella tasks and a node for every shell command.
+3. Establish the destination, acceptance evidence, scope, and decision owners.
+   Distinguish a request to discover a route from authorization to deliver it.
+   Resolve implementation choices within the existing grant; ask the owner
+   about choices that change the promised outcome. Continue independent work.
+
+For large, uncertain, or changing work, read [planning tactics](references/planning-tactics.md)
+before authoring or revising the graph. It walks one effort from discovery to
+parallel delivery to a changed requirement, with complete Pkl definitions.
+
+## Find a better graph
+
+Work backward from the observable outcome: what consumes what? Inspect the
+actual contracts, callers, tests, and write footprints before drawing edges.
+Separate decisions from implementation and evidence from artifact availability.
+
+```text
+Unexamined plan: implement exporter → implement reader → test everything
+
+Recovered inputs:
+consumer probe → format decision → contract ─┬→ exporter ─┐
+                                           └→ reader ───┴→ round-trip proof
+```
+
+The reader can start from the agreed contract when it needs only the shape.
+The round-trip proof still needs both real implementations. Extracting the
+contract removes a wait without removing a dependency.
+
+Before taking the next frontier, make this short pass:
+
+- **What could invalidate the most work?** Resolve the uncertain fork with the
+  largest downstream impact; buy a small probe or prototype before its subtree.
+- **What is sharp enough to specify?** Make a precise unanswered question a
+  Selector, even when blocked. Keep still-vague in-scope work in a ledger note
+  with a trigger for revisiting it. Do not invent downstream tasks to fill it in.
+  Keep excluded work separate, with the owner's scope decision.
+- **What can overlap?** Split contracts from implementations, narrow colliding
+  footprints, and remove waits without real consumers. A useful work unit has
+  its own outcome, grant, and proof; neither an entire department nor each command.
+- **What can disappear?** Use a mechanical transform plus inspection for
+  repetitive edits instead of assigning one worker per file. Choose increments
+  that can be reviewed and landed independently; put irreversible effects
+  behind evidence and the user's actual authorization.
+- **What proves the destination?** Map every acceptance condition to an oracle.
+  Where appropriate, gate a fix on an observed failing witness, then verify the
+  same behavior passes. A final outcome review must also account for unresolved
+  in-scope work that has not yet become nodes.
 
 ## Shape the graph
 
@@ -75,9 +117,30 @@ contract reference. Keep the main skill focused on operating the graph.
    `--reason TEXT`. For a choice, use `workbench plan rule FILE.plan.pkl` with
    `--node ID`, `--choice OPTION`, and `--by OWNER`.
    `--by` records attribution; it does not authenticate or obtain that judgment.
-6. Re-tick after evidence, rulings, grants, or definition edits. When delegating
-   authorized work, pass the exact plan, ledger, node ID, footprint, and oracle;
-   the CLI does not dispatch agents or synchronize across machines.
+6. Re-tick after evidence, rulings, grants, or definition edits. Select work by
+   dependencies, uncertainty, and available capacity. A blocked decision holds
+   its dependent subtree; keep independent authorized work moving.
+
+When delegating, read the [delegation example](references/planning-tactics.md#delegate-a-bounded-node).
+Pass the exact plan, ledger, node ID, footprint, accepted contract, and oracle.
+Confirm that the recipient started; an assignment is not active work. Inspect
+the returned artifact and independently run its acceptance checks before
+accepting it. Use the harness's real assignment mechanism to avoid duplicate
+work: `tick` reports readiness, not worker claims, and a ledger write lock does
+not reserve a node. The CLI does not dispatch agents or synchronize machines.
+
+## Revise when reality changes
+
+Read the [worked revision](references/planning-tactics.md#revise-after-a-discovery)
+when a probe fails, a premise changes, or acceptance expands. Record the finding
+and its evidence; identify affected consumers; revise their nodes and oracles;
+then check and re-tick. Keep stable IDs for the same obligation and preserve the
+ledger. Add new nodes only as new obligations become concrete.
+
+Changing prose or source files alone does not reliably retract a green status.
+Rerun affected checks, and change the acceptance instrument when its meaning
+changes. Explicitly gate final acceptance on the revised evidence. Never erase
+failed observations or weaken proof to make the frontier advance.
 
 ## Interpret and recover
 
@@ -108,8 +171,15 @@ contract reference. Keep the main skill focused on operating the graph.
   `export`; the legacy TypeScript page needs its original definition and ledger.
   There is no portable web server, watcher, or automatic source converter.
 
-Finish when the authorized outcome has its required evidence. Return the plan
-and ledger paths, observed result, and unresolved blockers or decisions. Use
-`recall` for a complete handoff. When a needed judgment belongs to someone else,
-surface the specific decision while continuing any independent authorized work.
+Keep human review compact: destination, established evidence, named decisions,
+next available work, and blockers with their release condition. Link details
+instead of pasting the whole ledger each turn. Use meaningful outcome names in
+prose and stable IDs in commands. For large graphs, use `tick` for routine work
+and `recall` for recovery; read relevant artifacts in detail on demand.
+
+Finish when the authorized outcome has its required evidence, including any
+in-scope work previously too vague to specify. An empty frontier or an entirely
+green partial graph is insufficient. Return the plan and ledger paths, observed
+result, and unresolved blockers or decisions. For discovery-only work, hand off
+the resolved route and its remaining limits; do not silently begin delivery.
 [/AGENT]

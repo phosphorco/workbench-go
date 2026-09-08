@@ -35,6 +35,15 @@ helper signatures. For reusable fragments, import `workbench:plan` as `Plan`
 and return typed `Plan.Action`, `Plan.Guard`, or `Plan.Selector` values. Inside
 an amended definition, qualify helpers with `module.` as shown above.
 
+For an effort with decisions, parallel consumers, and changing acceptance, use
+the [campaign walkthrough](planning-tactics.md) and its complete
+[discovery](../examples/bulk-export/discovery.plan.pkl),
+[delivery](../examples/bulk-export/delivery.plan.pkl), and
+[revised](../examples/bulk-export/revised.plan.pkl) definitions. They share
+[typed node values](../examples/bulk-export/campaign.pkl); copy that local import
+with the selected definition. Their application tests are illustrative commands
+to implement in the target repository, not bundled passing fixtures.
+
 Imports default to the plan's directory. Use `--module-root DIR` only when the
 plan needs a wider local Pkl tree. Supply dynamic discovery as explicit Pkl
 inputs; evaluation cannot access environment resources, networks, or arbitrary

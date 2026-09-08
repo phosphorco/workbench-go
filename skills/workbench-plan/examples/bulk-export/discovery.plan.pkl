@@ -1,0 +1,9 @@
+amends "workbench:plan"
+import "campaign.pkl" as Campaign
+
+meta {
+  title = "Discover the export format"
+  goal = "Establish compatibility evidence and obtain the owner's format decision."
+}
+
+nodes { Campaign.probeBuild; Campaign.compatibility; Campaign.format }

@@ -12,6 +12,12 @@ Task plans do not run setup or grant repository mutation authority.
 For agent guidance, `workbench self skills export workbench-plan` exports the independent
 planning skill folder. See [installation](skills.md); the environment skill is optional.
 
+For a large or changing effort, follow the skill's
+[campaign walkthrough](../skills/workbench-plan/references/planning-tactics.md).
+It shows how a compatibility investigation becomes a decision, how an agreed
+contract enables parallel consumers, and how a new requirement revises the
+affected acceptance evidence while preserving the ledger.
+
 ## Author and inspect
 
 Use the [example definition](../examples/planning/feature.plan.pkl) as a starting
@@ -198,7 +204,7 @@ the legacy TypeScript `plan.json`/`index.json`/`diagram.mmd` web bundle. Review
 original TypeScript definition and unmixed ledger. No `workbench plan serve`,
 `watch`, `open-questions`, or automatic web adapter is implied.
 
-The `0.7.0` release coordinates are executable tag `0.7.0` and Pkl package
+The `0.7.1` executable uses the existing Pkl package
 `package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Plan.pkl`.
 Use the release URI to inspect the contract outside this evaluator. Runnable
 plans amend `workbench:plan`; release URLs do not enable network imports.

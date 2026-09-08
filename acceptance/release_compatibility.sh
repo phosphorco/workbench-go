@@ -162,9 +162,9 @@ run_version() {
 }
 
 run_version 0.6.1
-run_version 0.7.0
+run_version 0.7.1
 
-printf 'command/scenario                  0.6.1 exit  0.7.0 exit  0.6.1 stdout  0.7.0 stdout\n'
+printf 'command/scenario                  0.6.1 exit  0.7.1 exit  0.6.1 stdout  0.7.1 stdout\n'
 for label in \
   build-success build-refusal \
   seal-success seal-refusal \
@@ -172,9 +172,9 @@ for label in \
   check-fresh-success check-fresh-refusal \
   materialize-success materialize-refusal; do
   old_status="$(< "$results_root/0.6.1-${label}.status")"
-  new_status="$(< "$results_root/0.7.0-${label}.status")"
+  new_status="$(< "$results_root/0.7.1-${label}.status")"
   old_bytes="$(< "$results_root/0.6.1-${label}.bytes")"
-  new_bytes="$(< "$results_root/0.7.0-${label}.bytes")"
+  new_bytes="$(< "$results_root/0.7.1-${label}.bytes")"
   printf '%-34s %10s  %10s  %12s  %12s\n' "$label" "$old_status" "$new_status" "$old_bytes" "$new_bytes"
   case "$label" in
     *-success)
@@ -189,10 +189,10 @@ for label in \
 done
 
 old_materialize_stdout="$results_root/0.6.1-materialize-success.stdout"
-new_materialize_stdout="$results_root/0.7.0-materialize-success.stdout"
+new_materialize_stdout="$results_root/0.7.1-materialize-success.stdout"
 test ! -s "$old_materialize_stdout"
 grep -Eq '"candidate":"local"' "$new_materialize_stdout"
 grep -Eq '"digest":"[0-9a-f]{64}"' "$new_materialize_stdout"
 ! grep -Fq '"sha256"' "$new_materialize_stdout"
-printf 'materialize receipt 0.6.1 stdout bytes=%s; 0.7.0 stdout:\n' "$(< "$results_root/0.6.1-materialize-success.bytes")"
+printf 'materialize receipt 0.6.1 stdout bytes=%s; 0.7.1 stdout:\n' "$(< "$results_root/0.6.1-materialize-success.bytes")"
 cat "$new_materialize_stdout"
