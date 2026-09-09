@@ -46,7 +46,7 @@ agents through a versioned control protocol.
 
 | Surface | Status |
 | --- | --- |
-| Binary `0.7.1`; Pkl resource contracts `0.7.0` | Released |
+| Binary `0.8.0`; Pkl resource contracts `0.8.0` | Released |
 | `setup`, `check`, commit saga, snapshots, prune, skills, and buildables described below | Released |
 | Structured status, Environment Index, explain/ownership queries, explicit reconciliation plans, receipts, and scoped verification | Proposed and sequenced |
 
@@ -78,11 +78,11 @@ components does not relicense them as Workbench code.
 The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
 terms together and is included unchanged in every platform archive.
 
-Install the pinned `0.7.1` release. Its Pkl package remains `0.7.0`; binary
-and resource-contract releases have independent identities.
+Install the pinned `0.8.0` release. Binary and resource-contract releases may
+have independent identities; this release publishes both at `0.8.0`.
 
 ```sh
-mise use -g github:phosphorco/workbench-go@0.7.1
+mise use -g github:phosphorco/workbench-go@0.8.0
 workbench version
 ```
 
@@ -154,7 +154,7 @@ Workbench-owned generated files inside a resource repository must likewise be ex
 `workbench-subject.pkl` is the local request for what should exist:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/WorkbenchSubject.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/WorkbenchSubject.pkl"
 
 workLine {
   branch = "cole/example-work"
@@ -249,7 +249,7 @@ A filesystem lock, watcher, or permission layer is outside this design.
 Each participating resource contains a root `workbench.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/PackageScopeRepository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/PackageScopeRepository.pkl"
 
 scope = "@workbench-entry"
 
@@ -328,7 +328,7 @@ A Repository-shaped `workbench.pkl` amends the released `Repository.pkl`
 contract and does not author a name, scope, or generic identity:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/Repository.pkl"
 
 includes {}
 packages {}
@@ -607,10 +607,10 @@ The final Workbench implementation absorbs repository observation, planning, and
 ## Buildables make repository-owned tools explicit
 
 `PackageScopeRepository.pkl` and `Repository.pkl` expose the same `buildables`
-mapping. New declarations can amend the `0.7.0` contract, for example:
-`package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl`.
-Binary release and Pkl package versions are independent coordinates: binary
-`0.7.1` uses the `0.7.0` contract. Preserve existing declarations' supported contract versions;
+mapping. New declarations can amend the `0.8.0` contract, for example:
+`package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/Repository.pkl`.
+Binary release and Pkl package versions are independent coordinates. Preserve
+existing declarations' supported contract versions;
 installing a new binary does not require rewriting those inputs.
 
 A buildable declaration owns the facts Workbench cannot infer: producer input
@@ -794,7 +794,7 @@ The constrained `AgentInstructions.pkl` contract governs generated instructions.
 The context template tracks `AGENTS.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/AgentInstructions.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/AgentInstructions.pkl"
 
 prose = """
 # Agent instructions
@@ -836,7 +836,7 @@ Workbench must make it difficult for agents to lose work, commit unrelated edits
 `commit-plan.pkl` describes one **Workbench Change Set**:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/WorkbenchCommitPlan.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/WorkbenchCommitPlan.pkl"
 
 changeId = "fixture-cross-repository"
 summary = "Exercise a cross-repository fixture change"

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -129,7 +131,7 @@ func TestNormalizeClaudeReadProducesHostObservationOpportunity(t *testing.T) {
 		t.Fatalf("resources = %#v; reasons=%#v", normalized.Observation.Resources, normalized.Reasons)
 	}
 	resource := normalized.Observation.Resources[0]
-	if resource.Path != "README.md" || resource.Confidence != contextapi.ConfidenceObserved || resource.Outcome != contextapi.ResourceResolved || resource.Operation != contextapi.ResourceRead {
+	if resource.Path != "README.md" || resource.Confidence != contextapi.ConfidenceObserved || resource.Outcome != contextapi.ResourceOutcomeUnknown || resource.Operation != contextapi.ResourceRead {
 		t.Fatalf("resource = %#v", resource)
 	}
 }
@@ -191,6 +193,140 @@ func TestNativeFailureAndUnknownOutcomesStayDistinct(t *testing.T) {
 	}
 	if got := normalized.Observation.Resources[0].Outcome; got != contextapi.ResourceOutcomeUnknown {
 		t.Fatalf("malformed response outcome = %q", got)
+	}
+}
+
+func TestUnsupportedScalarResponsesRemainUnknown(t *testing.T) {
+	for _, response := range []string{`"text result"`, `42`, `true`} {
+		t.Run(response, func(t *testing.T) {
+			hook := HookDTO{
+				Harness: contextapi.HarnessCodex, SessionID: "s", CWD: "/repo",
+				EventName: "PostToolUse", ToolName: "Read",
+				ToolInput:    json.RawMessage(`{"file_path":"README.md"}`),
+				ToolResponse: json.RawMessage(response),
+			}
+			normalized, err := NormalizeCodexHook(hook, enabledActivation("/repo"), time.Unix(10, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := normalized.Observation.Resources[0].Outcome; got != contextapi.ResourceOutcomeUnknown {
+				t.Fatalf("scalar %s outcome = %q, want %q", response, got, contextapi.ResourceOutcomeUnknown)
+			}
+		})
+	}
+}
+
+func readHookFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("read hook fixture %q: %v", name, err)
+	}
+	return data
+}
+
+func TestNativeOutcomeEnvelopesThroughPublicAdapters(t *testing.T) {
+	tests := []struct {
+		name    string
+		harness contextapi.Harness
+		fixture string
+		want    contextapi.ResourceOutcome
+	}{
+		{name: "Codex explicit success", harness: contextapi.HarnessCodex, fixture: "codex-post-tool-use-success.json", want: contextapi.ResourceResolved},
+		{name: "Codex explicit failure", harness: contextapi.HarnessCodex, fixture: "codex-post-tool-use-failure.json", want: contextapi.ResourceFailed},
+		{name: "Codex captured native success scalar is unknown", harness: contextapi.HarnessCodex, fixture: "codex-live-captured-success.json", want: contextapi.ResourceOutcomeUnknown},
+		{name: "Codex captured native failed read is unknown", harness: contextapi.HarnessCodex, fixture: "codex-live-captured-failure.json", want: contextapi.ResourceOutcomeUnknown},
+		{name: "Codex unsupported scalar is unknown", harness: contextapi.HarnessCodex, fixture: "codex-post-tool-use-failed-scalar.json", want: contextapi.ResourceOutcomeUnknown},
+		{name: "Codex unknown object is unknown", harness: contextapi.HarnessCodex, fixture: "codex-post-tool-use-unknown.json", want: contextapi.ResourceOutcomeUnknown},
+		{name: "Codex malformed envelope is unknown", harness: contextapi.HarnessCodex, fixture: "codex-post-tool-use-malformed.json", want: contextapi.ResourceOutcomeUnknown},
+		{name: "Codex failure takes precedence over success", harness: contextapi.HarnessCodex, fixture: "codex-post-tool-use-ambiguous.json", want: contextapi.ResourceFailed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := readHookFixture(t, test.fixture)
+			var hook HookDTO
+			var err error
+			if test.harness == contextapi.HarnessCodex {
+				hook, err = DecodeCodexHook(context.Background(), data)
+			} else {
+				hook, err = DecodeClaudeHook(context.Background(), data)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var normalized Normalized
+			if test.harness == contextapi.HarnessCodex {
+				normalized, err = NormalizeCodexHook(hook, enabledActivation(hook.CWD), time.Unix(10, 0))
+			} else {
+				normalized, err = NormalizeClaudeHook(hook, enabledActivation(hook.CWD), time.Unix(10, 0))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(normalized.Observation.Resources) != 1 {
+				t.Fatalf("resources = %#v; reasons=%#v", normalized.Observation.Resources, normalized.Reasons)
+			}
+			if got := normalized.Observation.Resources[0].Outcome; got != test.want {
+				t.Fatalf("outcome = %q, want %q; resource=%#v", got, test.want, normalized.Observation.Resources[0])
+			}
+		})
+	}
+}
+
+func TestClaudeBatchPreservesPerResourceOutcomes(t *testing.T) {
+	data := readHookFixture(t, "claude-post-tool-batch-outcomes.json")
+	hook, err := DecodeClaudeHook(context.Background(), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := NormalizeClaudeHook(hook, enabledActivation("/tmp/workbench-context-admission/project"), time.Unix(10, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalized.Observation.Resources) != 2 {
+		t.Fatalf("resources = %#v; reasons=%#v", normalized.Observation.Resources, normalized.Reasons)
+	}
+	want := []struct {
+		path    string
+		outcome contextapi.ResourceOutcome
+	}{
+		{path: "README.md", outcome: contextapi.ResourceResolved},
+		{path: "missing-from-live-matrix.txt", outcome: contextapi.ResourceFailed},
+	}
+	for index, expected := range want {
+		resource := normalized.Observation.Resources[index]
+		if resource.Path != expected.path || resource.Outcome != expected.outcome {
+			t.Fatalf("resource[%d] = %#v, want path=%q outcome=%q", index, resource, expected.path, expected.outcome)
+		}
+	}
+}
+
+func TestCapturedClaudeBatchFailureDoesNotBecomeSuccess(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture string
+		want    contextapi.ResourceOutcome
+	}{
+		{name: "controlled native success scalar batch is unknown", fixture: "claude-controlled-native-post-tool-batch-success.json", want: contextapi.ResourceOutcomeUnknown},
+		{name: "controlled native failed batch", fixture: "claude-controlled-native-post-tool-batch-failure.json", want: contextapi.ResourceOutcomeUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			hook, err := DecodeClaudeHook(context.Background(), readHookFixture(t, test.fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			normalized, err := NormalizeClaudeHook(hook, enabledActivation(hook.CWD), time.Unix(10, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(normalized.Observation.Resources) != 1 {
+				t.Fatalf("resources = %#v; reasons=%#v", normalized.Observation.Resources, normalized.Reasons)
+			}
+			if got := normalized.Observation.Resources[0].Outcome; got != test.want {
+				t.Fatalf("outcome = %q, want %q; resource=%#v", got, test.want, normalized.Observation.Resources[0])
+			}
+		})
 	}
 }
 

@@ -952,10 +952,7 @@ func nativeOutcome(hook HookDTO, response json.RawMessage) contextapi.ResourceOu
 		}
 		return contextapi.ResourceOutcomeUnknown
 	}
-	if trimmed[0] == '[' || trimmed[0] == 't' || trimmed[0] == 'f' {
-		return contextapi.ResourceOutcomeUnknown
-	}
-	return contextapi.ResourceResolved
+	return contextapi.ResourceOutcomeUnknown
 }
 
 func parseStaticShell(command, root, cwd string, outcome contextapi.ResourceOutcome, maxWords, maxBytes int) ([]contextapi.ObservedResource, []contextapi.ObservedSelector, bool, bool) {

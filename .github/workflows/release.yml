@@ -1,13 +1,13 @@
-name: Release 0.7.1
+name: Release 0.8.0
 
 on:
   push:
-    tags: ["0.7.1"]
+    tags: ["0.8.0"]
   workflow_dispatch:
 
 env:
-  WORKBENCH_VERSION: 0.7.1
-  WORKBENCH_CONTRACT_VERSION: 0.7.0
+  WORKBENCH_VERSION: 0.8.0
+  WORKBENCH_CONTRACT_VERSION: 0.8.0
 
 permissions:
   contents: read
@@ -29,10 +29,19 @@ jobs:
         with:
           version: 2026.8.12
           cache: false
+      - name: Acquire the runtime-lock Pkl executable
+        run: |
+          release/acquire-pkl.sh \
+            --lock release/runtime-lock.json \
+            --platform linux-x64 \
+            --output "$RUNNER_TEMP/pkl"
       - name: Verify candidate, non-skill compatibility, and historical skill refusals
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          test -n "$PKL_EXECUTABLE"
+          case "$PKL_EXECUTABLE" in /*) ;; *) echo "PKL_EXECUTABLE is not absolute: $PKL_EXECUTABLE" >&2; exit 1 ;; esac
+          test -x "$PKL_EXECUTABLE"
           go test ./...
           go vet ./...
 
@@ -92,9 +101,11 @@ jobs:
             curl --fail --location --silent --show-error "$url" --output "$output"
             printf '%s  %s\n' "$digest" "$output" | shasum -a 256 --check
           }
-          pkl_url=$(jq -r --arg platform "$PLATFORM" '.runtimes.pkl.artifacts[$platform].url' release/runtime-lock.json)
-          pkl_sha=$(jq -r --arg platform "$PLATFORM" '.runtimes.pkl.artifacts[$platform].sha256' release/runtime-lock.json)
-          fetch "$pkl_url" "$pkl_sha" candidate/runtime/pkl
+          release/acquire-pkl.sh \
+            --lock release/runtime-lock.json \
+            --platform "$PLATFORM" \
+            --output candidate/runtime/pkl \
+            --env-file /dev/null
           bun_url=$(jq -r --arg platform "$PLATFORM" '.runtimes.bun.artifacts[$platform].url' release/runtime-lock.json)
           bun_sha=$(jq -r --arg platform "$PLATFORM" '.runtimes.bun.artifacts[$platform].sha256' release/runtime-lock.json)
           bun_member=$(jq -r --arg platform "$PLATFORM" '.runtimes.bun.artifacts[$platform].member' release/runtime-lock.json)
@@ -153,7 +164,7 @@ jobs:
           archive=$(find candidate/out -name '*.tar.gz' -type f)
           mkdir candidate/installed
           tar -xzf "$archive" --strip-components=1 -C candidate/installed
-          test "$(candidate/installed/bin/workbench version)" = "workbench 0.7.1 (${{ github.sha }})"
+          test "$(candidate/installed/bin/workbench version)" = "workbench 0.8.0 (${{ github.sha }})"
           candidate/installed/libexec/workbench/pkl --version | grep -F '0.32.1'
           test "$(candidate/installed/libexec/workbench/bun --version)" = '1.3.14'
           mkdir -p candidate/catalog/.agents/skills
@@ -165,6 +176,121 @@ jobs:
           cmp candidate/plan-schema.pkl candidate/installed/share/workbench/pkl/Plan.pkl
           (cd candidate/catalog && ../installed/bin/workbench skills check)
           bash acceptance/planner_release.sh "$PWD/candidate/installed/bin/workbench" "$PWD/candidate/planner"
+      - name: Prove installed context activation, no-source behavior, and cleanup
+        run: |
+          set -euo pipefail
+          smoke="$RUNNER_TEMP/workbench-context-smoke"
+          no_source="$smoke/no-source"
+          activation="$smoke/activation"
+          home="$smoke/home"
+          runtime_dir="$smoke/runtime"
+          socket="$runtime_dir/context.sock"
+          start_lock="$runtime_dir/context.start.lock"
+          server_lock="$runtime_dir/context.server.lock"
+          cache_dir="$smoke/cache"
+          home_config="$home/workbench-context.pkl"
+          mkdir -p "$no_source" "$activation" "$home"
+          export HOME="$smoke/home"
+          common=(--home-config "$home_config" --runtime-dir "$runtime_dir" --socket "$socket" --start-lock "$start_lock" --server-lock "$server_lock" --cache-dir "$cache_dir")
+          daemon_pid=""
+          daemon_children=()
+          collect_descendants() {
+            local parent="$1"
+            local child
+            while read -r child; do
+              test -n "$child" || continue
+              daemon_children+=("$child")
+              collect_descendants "$child"
+            done < <(pgrep -P "$parent" || true)
+          }
+          cleanup_runtime() {
+            if test -z "$daemon_pid"; then return 0; fi
+            kill -TERM "$daemon_pid" 2>/dev/null || true
+            for _ in $(seq 1 50); do
+              if ! kill -0 "$daemon_pid" 2>/dev/null; then break; fi
+              sleep 0.1
+            done
+            if kill -0 "$daemon_pid" 2>/dev/null; then
+              echo "installed context daemon did not exit: pid=$daemon_pid" >&2
+              return 1
+            fi
+            for child in "${daemon_children[@]}"; do
+              for _ in $(seq 1 50); do
+                if ! kill -0 "$child" 2>/dev/null; then break; fi
+                sleep 0.1
+              done
+              if kill -0 "$child" 2>/dev/null; then
+                echo "installed context daemon child did not exit: pid=$child" >&2
+                return 1
+              fi
+            done
+            test ! -e "$socket"
+            daemon_pid=""
+          }
+          cleanup() {
+            status=$?
+            cleanup_status=0
+            cleanup_runtime || cleanup_status=$?
+            rm -rf "$smoke"
+            if test "$status" -eq 0 && test "$cleanup_status" -ne 0; then status="$cleanup_status"; fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          no_source_payload="$smoke/no-source.json"
+          cat > "$no_source_payload" <<EOF
+          {"session_id":"native-no-source-session","transcript_path":"$no_source/does-not-exist.jsonl","cwd":"$no_source","prompt_id":"native-no-source-turn","hook_event_name":"PostToolBatch","tool_calls":[{"tool_name":"Read","tool_use_id":"native-no-source-turn","tool_input":{"file_path":"$no_source/README.md"},"tool_response":"fixture README"}]}
+          EOF
+          no_source_stdout="$smoke/no-source.stdout"
+          no_source_stderr="$smoke/no-source.stderr"
+          candidate/installed/bin/workbench context hook --harness claude "${common[@]}" < "$no_source_payload" > "$no_source_stdout" 2> "$no_source_stderr"
+          test ! -s "$no_source_stdout"
+          test ! -s "$no_source_stderr"
+          for path in "$home_config" "$runtime_dir" "$socket" "$start_lock" "$server_lock" "$cache_dir" "$no_source/workbench-context.pkl" "$no_source/.workbench"; do
+            test ! -e "$path"
+          done
+
+          cat > "$home_config" <<'EOF'
+          amends "workbench:context-home"
+          limits { runtime { idleTTLMs = 60000 } }
+          EOF
+          cat > "$activation/workbench-context.pkl" <<'EOF'
+          amends "workbench:context"
+          scope = "subtree"
+          contributors { ["project-guidance"] = new AiContext {} }
+          EOF
+          cat > "$activation/ai-context.md" <<'EOF'
+          ---
+          root: true
+          docs:
+            - files: ["README.md"]
+              message: Native installed context smoke guidance.
+          ---
+          EOF
+          printf 'native installed context smoke\n' > "$activation/README.md"
+          active_payload="$smoke/active.json"
+          cat > "$active_payload" <<EOF
+          {"session_id":"native-active-session","transcript_path":"$activation/does-not-exist.jsonl","cwd":"$activation","prompt_id":"native-active-turn","hook_event_name":"PostToolBatch","tool_calls":[{"tool_name":"Read","tool_use_id":"native-active-turn","tool_input":{"file_path":"$activation/README.md"},"tool_response":"native installed context smoke"}]}
+          EOF
+          active_stdout="$smoke/active.stdout"
+          active_stderr="$smoke/active.stderr"
+          candidate/installed/bin/workbench context hook --harness claude "${common[@]}" < "$active_payload" > "$active_stdout" 2> "$active_stderr"
+          test ! -s "$active_stderr"
+          grep -F 'Native installed context smoke guidance.' "$active_stdout"
+          command -v lsof >/dev/null
+          daemon_pids=$(lsof -t "$socket" | sort -u)
+          test "$(printf '%s\n' "$daemon_pids" | awk 'NF { count++ } END { print count + 0 }')" -eq 1
+          daemon_pid="$daemon_pids"
+          daemon_command=$(ps -p "$daemon_pid" -o command=)
+          case "$daemon_command" in
+            *"context serve --home-config $home_config"*) ;;
+            *) echo "unexpected installed context daemon argv: $daemon_command" >&2; exit 1 ;;
+          esac
+          collect_descendants "$daemon_pid"
+          cleanup_runtime
+          rm -f "$activation/workbench-context.pkl" "$home_config"
+          test ! -e "$activation/workbench-context.pkl"
+          test ! -e "$home_config"
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: candidate/out/workbench-*.tar.gz
@@ -192,21 +318,43 @@ jobs:
           test "$(sed -n 's/^  version = "\([^"]*\)"$/\1/p' PklProject)" = "$WORKBENCH_CONTRACT_VERSION"
           mkdir contracts
           mise exec -- pkl project package --skip-publish-check --output-path contracts .
-          for artifact in contracts/workbench@0.7.0 contracts/workbench@0.7.0.zip; do
+          for artifact in contracts/workbench@0.8.0 contracts/workbench@0.8.0.zip; do
             shasum -a 256 "$artifact" | awk '{print $1}' > "$artifact.sha256"
           done
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: contracts/workbench@0.7.0.zip
+          subject-path: contracts/workbench@0.8.0.zip
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: workbench-contracts
           path: contracts/*
           if-no-files-found: error
 
+  candidate-checks:
+    needs: [binaries, contracts]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          path: candidate-assets
+          merge-multiple: true
+      - name: Verify immutable candidate assets before promotion
+        run: |
+          set -euo pipefail
+          test "${WORKBENCH_VERSION}" = "0.8.0"
+          test "${WORKBENCH_CONTRACT_VERSION}" = "0.8.0"
+          test "$(find candidate-assets -name 'workbench-*.tar.gz' -type f | wc -l | tr -d ' ')" = 4
+          test -f candidate-assets/workbench@0.8.0
+          test -f candidate-assets/workbench@0.8.0.zip
+          for checksum in candidate-assets/*.sha256; do
+            artifact=${checksum%.sha256}
+            expected=$(tr -d '\n' < "$checksum")
+            printf '%s  %s\n' "$expected" "$artifact" | sha256sum --check
+          done
+
   release:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [binaries, contracts]
+    needs: [binaries, contracts, candidate-checks]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

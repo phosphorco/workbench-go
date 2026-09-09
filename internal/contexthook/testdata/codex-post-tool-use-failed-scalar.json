@@ -1,0 +1,1 @@
+{"session_id":"codex-fixture-session","turn_id":"codex-fixture-turn","cwd":"/tmp/workbench-context-admission/codex/project","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"cat missing-from-live-matrix.txt"},"tool_response":"cat: missing-from-live-matrix.txt: No such file or directory\n","tool_use_id":"codex-failed-scalar"}

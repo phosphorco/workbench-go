@@ -21,7 +21,19 @@ jobs:
         with:
           version: 2026.8.12
           cache: false
-      - run: go test ./...
+      - name: Acquire the runtime-lock Pkl executable
+        run: |
+          release/acquire-pkl.sh \
+            --lock release/runtime-lock.json \
+            --platform linux-x64 \
+            --output "$RUNNER_TEMP/pkl"
+      - run: |
+          test -n "$PKL_EXECUTABLE"
+          case "$PKL_EXECUTABLE" in /*) ;; *) echo "PKL_EXECUTABLE is not absolute: $PKL_EXECUTABLE" >&2; exit 1 ;; esac
+          test -x "$PKL_EXECUTABLE"
+          go test ./...
         env:
           GH_TOKEN: ${{ github.token }}
-      - run: go vet ./...
+      - run: |
+          test -x "$PKL_EXECUTABLE"
+          go vet ./...

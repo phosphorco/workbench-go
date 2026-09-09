@@ -261,7 +261,7 @@ func TestSelfSkillExportUsesPublishedContractCoordinates(t *testing.T) {
 		flags []string
 		uri   string
 	}{
-		{nil, "releases/download/0.7.0/workbench@0.7.0"},
+		{nil, "releases/download/0.8.0/workbench@0.8.0"},
 		{[]string{"--pkl-package-version", "0.6.1"}, "releases/download/0.6.2/workbench@0.6.1"},
 	} {
 		root := t.TempDir()

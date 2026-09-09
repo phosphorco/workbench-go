@@ -1,0 +1,1 @@
+{"session_id":"codex-fixture-session","turn_id":"codex-fixture-turn","cwd":"/tmp/workbench-context-admission/codex/project","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"cat README.md"},"tool_response":{"stdout":"Codex fixture.\n","exit_code":0},"tool_use_id":"codex-success"}

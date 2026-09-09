@@ -59,7 +59,7 @@ publication, which is independent of its binary release version. For an explicit
 contract reference:
 
 ```sh
-workbench self skills export workbench-plan --skills-dir=./exported-skills --pkl-package-version=0.7.0
+workbench self skills export workbench-plan --skills-dir=./exported-skills --pkl-package-version=0.8.0
 ```
 
 This configures publication references without fetching them or asserting that

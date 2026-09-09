@@ -19,10 +19,10 @@ const (
 
 	// CurrentContractVersion is the semantic version of the Pkl contract
 	// package embedded by the current Workbench release.
-	CurrentContractVersion = "0.7.0"
+	CurrentContractVersion = "0.8.0"
 	// ReleaseCoordinate is the independent GitHub release coordinate that
 	// publishes CurrentContractVersion.
-	ReleaseCoordinate = "0.7.0"
+	ReleaseCoordinate = "0.8.0"
 )
 
 // PackageReleaseCoordinate preserves independently published package locations.

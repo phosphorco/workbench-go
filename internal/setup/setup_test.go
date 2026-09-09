@@ -37,6 +37,18 @@ func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 	}
 }
 
+func TestHistorical070ContractSelectionRemainsSupported(t *testing.T) {
+	source := []byte(`amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl"`)
+	if _, version, err := schemaForSource(source, "Repository.pkl"); err != nil {
+		t.Fatalf("0.7.0 contract selection: %v", err)
+	} else if version != "0.7.0" {
+		t.Fatalf("0.7.0 contract version = %q, want 0.7.0", version)
+	}
+	if !isVersionedContract("0.7.0") {
+		t.Fatal("0.7.0 contract lost versioned setup semantics")
+	}
+}
+
 func TestBuildableProjectionSchemaDigestMatchesCurrentRepositoryContracts(t *testing.T) {
 	var schemas []byte
 	for _, path := range []string{"../../pkl/PackageScopeRepository.pkl", "../../pkl/Repository.pkl"} {
@@ -100,7 +112,7 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 		})
 	}
 	oldSource := []byte(fmt.Sprintf("amends %q\n", localV050RepositoryURI))
-	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, or 0.7.0") {
+	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, or 0.8.0") {
 		t.Fatalf("0.5 lifecycle declaration error = %v", err)
 	}
 }
