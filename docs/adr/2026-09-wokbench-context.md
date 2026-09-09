@@ -89,9 +89,21 @@ scope. A declaration must make its directory/subtree coverage legible, and
 explicit exclusions must be respected. Merely being a Git repository, containing
 guidance files, or having Workbench installed is not consent to activation.
 
+The intended project declaration is a discoverable `workbench-context.pkl`
+file that declares directory coverage, selected contributors, and their
+configuration. Its purpose is to make when context activates, with which
+contributors, and why understandable from one project-owned source, without
+editing global harness settings. Resolution must preserve the silent inactive
+path and fast Go hooks; evaluated configuration is a disposable derivative of
+the declaration. The exact Pkl schema, composition and evaluation rules, and
+implementation plan belong to a separate specification and planning effort.
+
 User-home exclusions constrain project declarations. Within an allowed scope,
-the nearest explicit project declaration refines inherited project settings and
-user-home defaults; a nested declaration cannot override an applicable exclusion.
+the nearest project declaration owns the complete contributor selection; reuse
+is explicit Pkl composition rather than implicit ancestor merging. A disabled,
+empty, or directory-only declaration blocks ancestor fallback, including for
+descendants outside its coverage. A nearer descendant declaration can opt in,
+but cannot override an applicable home exclusion.
 Unresolved conflicting declarations do not start providers and are inspectable.
 Opt-in delegates selection and execution of project-configured context providers
 within its declared scope, including later project changes. Setup must make that
@@ -116,6 +128,13 @@ context output, no daemon startup, no contributor execution, no transcript
 inspection, and no project-local files or explanation records. The unavoidable
 work is only the bounded Go invocation and activation lookup. Inactive hooks do
 not keep an already running daemon or its providers warm.
+
+When a declaration exists but its evaluated snapshot is missing or invalid,
+activation lookup may run a bounded temporary Pkl evaluator and write a private
+disposable snapshot, even if the result is inactive. Startup, evaluation and
+joined cleanup share the hook budget. This exception does not permit contributor
+or context-daemon startup, project writes, or explanation history for inactive
+work. With no project or home declaration, no evaluator or cache is created.
 
 For an enabled scope, Workbench derives the selected providers and profile from
 the applicable declarations. Project changes take effect through that resolution;
@@ -155,8 +174,9 @@ supplies bounded evidence to the explanation cache.
 
 One Go process per OS user on each execution machine hosts the shared runtime.
 The command-hook path is Go, including its activation check and provider envelope
-handling. It must not launch a scripting runtime merely to discover that there
-is no work. Contributors may use other languages and run on demand behind the
+handling. The only cold activation evaluation exception is the bounded Pkl path
+described above; warm valid snapshots require no evaluator. Contributors may use
+other languages and run on demand behind the
 shared process. A remote checkout uses the runtime on its execution machine.
 Enabled demand may start that process through one shared lifecycle owner;
 concurrent hooks must not create competing daemons. Startup and recovery remain
