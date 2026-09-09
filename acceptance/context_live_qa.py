@@ -17,6 +17,7 @@ import contextlib
 import fcntl
 import hashlib
 import http.server
+import inspect
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,7 @@ import secrets
 import select
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -54,9 +56,19 @@ MAX_CODEX_JSON_LINE = 2 * 1024 * 1024
 MAX_CODEX_EVIDENCE = 10 * 1024 * 1024
 CODEX_THREAD_PATH = "/usr/bin:/bin"
 QA_IDLE_TTL_MS = 300000
+MAX_RUNTIME_PROCESSES = 4096
+RUNTIME_CLEANUP_WAIT_SECONDS = 3.0
+MAX_PROC_CMDLINE_BYTES = 64 * 1024
+MAX_PROC_STAT_BYTES = 64 * 1024
+MAX_PROC_FDS = 256
+MAX_PROC_NET_UNIX_BYTES = 4 * 1024 * 1024
 
 
 class RunnerError(RuntimeError):
+    pass
+
+
+class RuntimeScanIncomplete(RunnerError):
     pass
 
 
@@ -347,6 +359,200 @@ def context_flags(paths: dict[str, Path]) -> list[str]:
     ]
 
 
+def _proc_record(pid: int, socket_inode: int | None = None) -> dict[str, object] | None:
+    proc = Path("/proc") / str(pid)
+    try:
+        with (proc / "stat").open("rb") as stream:
+            raw_stat = stream.read(MAX_PROC_STAT_BYTES + 1)
+        if len(raw_stat) > MAX_PROC_STAT_BYTES:
+            raise RuntimeScanIncomplete(f"/proc/{pid}/stat exceeded the bounded process census limit")
+        marker = raw_stat.rfind(b") ")
+        if marker < 0:
+            return None
+        fields = raw_stat[marker + 2 :].split()
+        if len(fields) < 20:
+            return None
+        with (proc / "cmdline").open("rb") as stream:
+            command = stream.read(MAX_PROC_CMDLINE_BYTES + 1)
+        if len(command) > MAX_PROC_CMDLINE_BYTES:
+            raise RuntimeScanIncomplete(f"/proc/{pid}/cmdline exceeded the bounded process census limit")
+        argv = [part.decode("utf-8", errors="surrogateescape") for part in command.split(b"\0") if part]
+        exe = os.readlink(proc / "exe")
+        cwd = os.path.realpath(proc / "cwd")
+        record: dict[str, object] = {"pid": pid, "ppid": int(fields[1]), "pgrp": int(fields[2]), "startTime": fields[19].decode(), "argv": argv, "exe": os.path.realpath(exe), "cwd": cwd}
+        if socket_inode is not None:
+            held = False
+            fds = []
+            for fd in (proc / "fd").iterdir():
+                fds.append(fd)
+                if len(fds) > MAX_PROC_FDS:
+                    raise RuntimeScanIncomplete(f"/proc/{pid}/fd exceeded the bounded process census limit")
+            for fd in fds:
+                try:
+                    if os.readlink(fd) == f"socket:[{socket_inode}]":
+                        held = True
+                        break
+                except (FileNotFoundError, PermissionError, OSError):
+                    continue
+            record["socketHeld"] = held
+        return record
+    except (FileNotFoundError, PermissionError, OSError, ValueError):
+        return None
+
+
+def _proc_table(socket_inode: int | None = None) -> dict[int, dict[str, object]]:
+    if sys.platform != "linux":
+        raise RunnerError("exact Workbench runtime ownership scan requires Linux /proc")
+    table: dict[int, dict[str, object]] = {}
+    entries = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        entries.append(entry)
+        if len(entries) > MAX_RUNTIME_PROCESSES:
+            raise RuntimeScanIncomplete(f"/proc census exceeded {MAX_RUNTIME_PROCESSES} processes")
+    for entry in entries:
+        record = _proc_record(int(entry.name), socket_inode)
+        if record is not None:
+            table[int(entry.name)] = record
+    return table
+
+
+def _unix_socket_inode(path: Path) -> int | None:
+    target = str(path)
+    try:
+        with Path("/proc/net/unix").open("rb") as stream:
+            raw = stream.read(MAX_PROC_NET_UNIX_BYTES + 1)
+        if len(raw) > MAX_PROC_NET_UNIX_BYTES:
+            raise RuntimeScanIncomplete("/proc/net/unix exceeded the bounded socket census limit")
+        for line in raw.decode("utf-8", errors="replace").splitlines()[1:]:
+            fields = line.split()
+            if len(fields) >= 7 and fields[-1] == target:
+                return int(fields[6])
+    except RuntimeScanIncomplete:
+        raise
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+    return None
+
+
+def _runtime_snapshot(workbench: Path, paths: dict[str, Path], anchor: dict[str, object] | None = None) -> dict[str, object]:
+    try:
+        return _runtime_snapshot_unchecked(workbench, paths, anchor)
+    except RuntimeScanIncomplete as error:
+        return {"status": "incomplete", "scanComplete": False, "reason": str(error), "socketExists": paths["socket"].exists(), "socketPath": str(paths["socket"]), "socketInode": None, "candidates": [], "socketOwners": [], "members": [], "processCount": None}
+
+
+def _runtime_snapshot_unchecked(workbench: Path, paths: dict[str, Path], anchor: dict[str, object] | None = None) -> dict[str, object]:
+    socket_inode: int | None = None
+    socket_exists = paths["socket"].exists()
+    if socket_exists:
+        try:
+            socket_stat = paths["socket"].stat()
+            if not stat.S_ISSOCK(socket_stat.st_mode):
+                return {"status": "mismatch", "reason": "fixture socket path exists but is not a Unix socket", "socketExists": True, "socketPath": str(paths["socket"]), "processes": []}
+            socket_inode = _unix_socket_inode(paths["socket"])
+        except OSError as error:
+            return {"status": "mismatch", "reason": f"fixture socket could not be inspected: {error}", "socketExists": True, "socketPath": str(paths["socket"]), "processes": []}
+    table = _proc_table()
+    expected = [str(workbench.resolve()), "context", "serve", *context_flags(paths)]
+    expected_exe = str(workbench.resolve())
+    expected_cwd = str(paths["project"].resolve())
+    candidates = [record for record in table.values() if record.get("argv") == expected and record.get("exe") == expected_exe and record.get("cwd") == expected_cwd]
+    if socket_inode is not None:
+        candidates = [(_proc_record(int(record["pid"]), socket_inode) or record) for record in candidates]
+    if anchor is not None:
+        pgrp = anchor.get("pgrp")
+        anchor_pid = anchor.get("pid")
+        members = [record for record in table.values() if record.get("pgrp") == pgrp or record.get("pid") == anchor_pid]
+    elif candidates:
+        pgrp = candidates[0].get("pgrp")
+        members = [record for record in table.values() if record.get("pgrp") == pgrp]
+    else:
+        members = []
+    socket_owners = [record["pid"] for record in candidates if record.get("socketHeld")]
+    if len(candidates) > 1:
+        status = "ambiguous"
+        reason = "multiple exact Workbench runtime owners matched the fixture argv"
+    elif candidates and socket_exists and candidates[0].get("socketHeld"):
+        status = "owned"
+        reason = "exact Workbench runtime owner and fixture socket matched"
+    elif candidates or socket_exists:
+        status = "mismatch"
+        reason = "fixture socket and exact Workbench runtime owner did not match"
+    elif anchor is not None and members:
+        status = "residual"
+        reason = "owned runtime process-group members remain after the daemon owner changed state"
+    else:
+        status = "clean"
+        reason = "no exact fixture runtime owner or socket remains"
+    return {"status": status, "scanComplete": True, "reason": reason, "socketExists": socket_exists, "socketPath": str(paths["socket"]), "socketInode": socket_inode, "expectedArgv": expected, "expectedCwd": expected_cwd, "candidates": candidates, "socketOwners": socket_owners, "members": members, "processCount": len(table)}
+
+
+def cleanup_runtime(workbench: Path, paths: dict[str, Path], evidence: Path, max_output: int, label: str) -> dict[str, object]:
+    def retain(record: dict[str, object]) -> dict[str, object]:
+        retained = write_observation(evidence / "runtime-cleanup.jsonl", [record], max_output)
+        record["evidenceComplete"] = retained["complete"]
+        record["complete"] = bool(record.get("complete")) and bool(retained["complete"])
+        return record
+
+    before = _runtime_snapshot(workbench, paths)
+    cleanup: dict[str, object] = {"component": label, "phase": "selected-runtime", "before": before, "signals": [], "bounded": True, "waitSeconds": RUNTIME_CLEANUP_WAIT_SECONDS}
+    if before.get("status") == "clean":
+        cleanup.update({"status": "clean", "complete": True, "after": before})
+        return retain(cleanup)
+    if before.get("status") != "owned" or len(before.get("candidates", [])) != 1:
+        cleanup.update({"status": "refused", "complete": False, "reason": before.get("reason", "runtime owner was not exact"), "after": before})
+        retain(cleanup)
+        raise RunnerError(f"{label} cleanup refused: {cleanup['reason']}")
+    owner = dict(before["candidates"][0])
+    revalidated = _runtime_snapshot(workbench, paths)
+    current = revalidated.get("candidates", [])
+    if revalidated.get("status") != "owned" or len(current) != 1 or any(current[0].get(key) != owner.get(key) for key in ("pid", "pgrp", "startTime", "argv", "exe", "cwd")):
+        cleanup.update({"status": "refused", "complete": False, "reason": "exact runtime owner changed before signal", "revalidated": revalidated})
+        retain(cleanup)
+        raise RunnerError(f"{label} cleanup refused: exact runtime owner changed before signal")
+    members = [dict(item) for item in revalidated.get("members", [])]
+    cleanup["owner"] = owner
+    cleanup["membersBeforeTerm"] = members
+    for signal_name, signal_value in (("TERM", signal.SIGTERM), ("KILL", signal.SIGKILL)):
+        cleanup["signals"].append(signal_name)
+        for member in members:
+            member_now = _proc_record(int(member["pid"]))
+            if member_now is None:
+                continue
+            if any(member_now.get(key) != member.get(key) for key in ("pid", "pgrp", "startTime", "argv", "exe", "cwd")):
+                cleanup.update({"status": "refused", "complete": False, "reason": f"owned process identity changed before {signal_name}"})
+                retain(cleanup)
+                raise RunnerError(f"{label} cleanup refused: owned process identity changed")
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(member["pid"]), signal_value)
+        deadline = time.monotonic() + RUNTIME_CLEANUP_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            remaining = _runtime_snapshot(workbench, paths, owner)
+            live_members = remaining.get("members", [])
+            live_captured = []
+            for member in members:
+                current_member = _proc_record(int(member["pid"]))
+                if current_member is not None and all(current_member.get(key) == member.get(key) for key in ("pid", "pgrp", "startTime", "argv", "exe", "cwd")):
+                    live_captured.append(current_member)
+            if remaining.get("scanComplete") is True and remaining.get("status") == "clean" and not live_members and not live_captured and not remaining.get("socketExists"):
+                cleanup.update({"status": "clean", "complete": True, "after": remaining, "membersAfter": []})
+                return retain(cleanup)
+            time.sleep(0.05)
+        if signal_name == "TERM":
+            continue
+        cleanup.update({"status": "failed", "complete": False, "after": _runtime_snapshot(workbench, paths, owner), "reason": "owned runtime process or socket remained after bounded TERM/KILL cleanup"})
+        retain(cleanup)
+        raise RunnerError(f"{label} cleanup failed; retained runtime-cleanup.jsonl")
+    raise RunnerError(f"{label} cleanup failed; retained runtime-cleanup.jsonl")
+
+
+def cleanup_runtime_after_failure(workbench: Path, paths: dict[str, Path], max_output: int, label: str) -> dict[str, object]:
+    """Clean only an already-owned runtime; never inspect or start Workbench on failure."""
+    return cleanup_runtime(workbench, paths, paths["evidence"], max_output, label)
+
+
 def make_hook_wrapper(path: Path, workbench: Path, capture_file: Path, max_bytes: int, timeout: float) -> None:
     path.write_text(
         """#!/usr/bin/env python3
@@ -615,8 +821,8 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def make_fixture(case: Path, marker: str) -> dict[str, Path]:
-    paths = {
+def fixture_paths(case: Path) -> dict[str, Path]:
+    return {
         "project": case / "project",
         "home_config": case / "workbench-context-home.pkl",
         "runtime": case / "runtime",
@@ -627,6 +833,10 @@ def make_fixture(case: Path, marker: str) -> dict[str, Path]:
         "settings": case / "claude" / "settings.json",
         "evidence": case / "evidence",
     }
+
+
+def make_fixture(case: Path, marker: str) -> dict[str, Path]:
+    paths = fixture_paths(case)
     paths["project"].mkdir(parents=True)
     paths["evidence"].mkdir(parents=True)
     (paths["project"] / "README.md").write_text("A fixture document with no hidden admission token.\n", encoding="utf-8")
@@ -875,6 +1085,7 @@ def run_case(workbench: Path, claude: Path, output: Path, case_name: str, failur
     relevant_wire_ordinal = next((index for index, item in enumerate(handler_type.request_records, 1) if item["path"].split("?", 1)[0].endswith("/messages") and marker in json.dumps(item["json"])), None)
     history_records = records_from_history(history_value)
     history_sidecar = write_observation(paths["evidence"] / "workbench-history.jsonl", [item for item in history_records if isinstance(item, dict)], max_output)
+    runtime_cleanup = cleanup_runtime(workbench, paths, paths["evidence"], max_output, f"controlled-{case_name}-workbench")
     confirmed_ordinal, confirmed_ids = confirmed_workbench_record(history_value, "README.md" if not failure else "missing.txt")
     request2_token = len(model_requests) >= 2 and marker in json.dumps(model_requests[1]["json"])
     events = sorted({item.get("eventName") for item in hook_records if item.get("eventName")})
@@ -899,7 +1110,7 @@ def run_case(workbench: Path, claude: Path, output: Path, case_name: str, failur
     return {
         "case": raw_case,
         "paths": paths,
-        "files": {"transcript": transcript, "native": native, "wire": wire, "inputs": inputs, "workbench": observations_file, "history": history_sidecar},
+        "files": {"transcript": transcript, "native": native, "wire": wire, "inputs": inputs, "workbench": observations_file, "history": history_sidecar, "runtimeCleanup": runtime_cleanup},
         "observations": observations,
         "hook_records": hook_records,
         "observed": observed,
@@ -1082,10 +1293,16 @@ def session_manifest(root: Path, case_name: str, capture_id: str, case: dict[str
         unknowns.append(unknown(f"sessions.{session_id}.sidecars.wire-requests", "truncated", reason))
     for item in case["hook_overflow"]:
         unknowns.append(unknown(f"sessions.{session_id}.sidecars.native-events", "truncated", item.get("reason", "Native hook log exceeded its bounded limit.")))
-    return {"sessionId": session_id, "provider": "claude", "dialect": "claude-stream-json", "canonicalTranscript": {"sourceFile": prefix + "transcript.raw.jsonl", "normalizedPath": prefix + "transcript.norm.jsonl", "digestPath": prefix + "transcript.digest.md", "normalizerVersion": "5"}, "inputs": [{"inputId": f"input-{case_name}-1", "boundary": "request", "actor": "harness", "capture": {"status": input_status, "sourcePath": prefix + "inputs.jsonl", "recordOrdinal": 1, "method": "runner-authored-argv"}, "causal": {"captureId": capture_id, "sessionId": session_id, "caseId": case_name, "stepId": "read-document"}}], "sidecars": [{"role": "native-events", "path": prefix + "native.jsonl", "opaque": True, "complete": native_complete, "causalIdsPresent": ["nativeEventId", "hookRunId"]}, {"role": "workbench-observations", "path": prefix + "workbench-observations.jsonl", "opaque": True, "complete": workbench_complete, "causalIdsPresent": ["workbenchObservationId", "contributionId"]}, {"role": "workbench-history", "path": prefix + "workbench-history.jsonl", "opaque": True, "complete": case["files"]["history"]["complete"], "causalIdsPresent": ["contributionId", "invocationId"]}, {"role": "other", "path": prefix + "wire-requests.jsonl", "opaque": True, "complete": wire_complete, "causalIdsPresent": []}], "verdicts": verdicts, "verdictEvidence": evidence, "unknowns": unknowns}
+    return {"sessionId": session_id, "provider": "claude", "dialect": "claude-stream-json", "canonicalTranscript": {"sourceFile": prefix + "transcript.raw.jsonl", "normalizedPath": prefix + "transcript.norm.jsonl", "digestPath": prefix + "transcript.digest.md", "normalizerVersion": "5"}, "inputs": [{"inputId": f"input-{case_name}-1", "boundary": "request", "actor": "harness", "capture": {"status": input_status, "sourcePath": prefix + "inputs.jsonl", "recordOrdinal": 1, "method": "runner-authored-argv"}, "causal": {"captureId": capture_id, "sessionId": session_id, "caseId": case_name, "stepId": "read-document"}}], "sidecars": [{"role": "native-events", "path": prefix + "native.jsonl", "opaque": True, "complete": native_complete, "causalIdsPresent": ["nativeEventId", "hookRunId"]}, {"role": "workbench-observations", "path": prefix + "workbench-observations.jsonl", "opaque": True, "complete": workbench_complete, "causalIdsPresent": ["workbenchObservationId", "contributionId"]}, {"role": "workbench-history", "path": prefix + "workbench-history.jsonl", "opaque": True, "complete": case["files"]["history"]["complete"], "causalIdsPresent": ["contributionId", "invocationId"]}, {"role": "other", "path": prefix + "wire-requests.jsonl", "opaque": True, "complete": wire_complete, "causalIdsPresent": []}, {"role": "other", "path": prefix + "runtime-cleanup.jsonl", "opaque": True, "complete": case["files"]["runtimeCleanup"]["complete"], "causalIdsPresent": []}], "verdicts": verdicts, "verdictEvidence": evidence, "unknowns": unknowns}
 
 
 def write_manifest(output: Path, workbench: Path, claude: Path, capture_id: str, cases: list[dict[str, object]], max_output: int, identity: dict[str, object]) -> dict[str, object]:
+    for item in cases:
+        cleanup = item["files"].get("runtimeCleanup", {})
+        cleanup_path = output / "sessions" / f"claude-controlled-{item['case']['name']}" / "evidence" / "runtime-cleanup.jsonl"
+        cleanup_records, cleanup_parse_complete = bounded_jsonl(cleanup_path, max_output)
+        if not (isinstance(cleanup, dict) and cleanup.get("status") == "clean" and cleanup.get("complete") is True and cleanup.get("evidenceComplete") is True and cleanup_parse_complete and len(cleanup_records) == 1 and cleanup_records[0].get("status") == "clean" and cleanup_records[0].get("complete") is True):
+            raise RunnerError(f"controlled manifest refused: incomplete runtime cleanup evidence for {item['case']['name']}")
     required = {
         "setup_exit_success": all(item["case"]["setup"]["exit"] == 0 for item in cases),
         "all_five_installed": all(set(item["case"]["installed_events"]) == EXPECTED_EVENTS for item in cases),
@@ -1095,6 +1312,7 @@ def write_manifest(output: Path, workbench: Path, claude: Path, capture_id: str,
         "request2_token": cases[0]["request2_token"],
         "history_command_success": all(item["case"]["history"]["exit"] == 0 for item in cases),
         "history_nonempty": all(item["case"]["history"]["records"] > 0 for item in cases),
+        "runtime_cleanup_complete": all(item["files"]["runtimeCleanup"].get("status") == "clean" and item["files"]["runtimeCleanup"].get("complete") is True and item["files"]["runtimeCleanup"].get("evidenceComplete") is True for item in cases),
     }
     sessions = [session_manifest(output, item["case"]["name"], capture_id, item) for item in cases]
     manifest = {"schemaVersion": 1, "kind": "capture-manifest", "captureId": capture_id, "producer": {"name": "context-live-qa", "version": "1", "workbench": identity, "claude": {"binarySha256": sha256_file(claude), "mode": "controlled"}}, "limits": {"maxManifestBytes": 2 * 1024 * 1024, "maxFileBytes": max_output, "maxSidecarBytes": max_output, "maxBundleBytes": 256 * 1024 * 1024, "maxSessions": 64, "maxNormalizedEvents": 100000, "maxNormalizedBytes": 64 * 1024 * 1024, "maxOutputHtmlBytes": 32 * 1024 * 1024, "phpTimeoutMs": 5000, "phpOutputBytes": 32 * 1024 * 1024}, "files": [], "sessions": sessions, "unknowns": []}
@@ -1105,10 +1323,52 @@ def write_manifest(output: Path, workbench: Path, claude: Path, capture_id: str,
         manifest["files"].append(file_entry(output, identity_path, "workbench-identity", bool(identity.get("stdout", {}).get("complete", False) and identity.get("stderr", {}).get("complete", False)), True))
     for item in cases:
         prefix = output / "sessions" / f"claude-controlled-{item['case']['name']}" / "evidence"
-        manifest["files"].extend([file_entry(output, prefix / "transcript.raw.jsonl", "transcript-source", item["files"]["transcript"]["complete"], item["files"]["transcript"]["bounded"]), file_entry(output, prefix / "native.jsonl", "native-events", item["files"]["native"]["complete"], True), file_entry(output, prefix / "wire-requests.jsonl", "other", item["files"]["wire"]["complete"], True), file_entry(output, prefix / "inputs.jsonl", "input-capture", item["files"]["inputs"]["complete"], True), file_entry(output, prefix / "workbench-observations.jsonl", "workbench-observations", item["files"]["workbench"]["complete"], True), file_entry(output, prefix / "workbench-history.jsonl", "workbench-history", item["files"]["history"]["complete"], True)])
+        manifest["files"].extend([file_entry(output, prefix / "transcript.raw.jsonl", "transcript-source", item["files"]["transcript"]["complete"], item["files"]["transcript"]["bounded"]), file_entry(output, prefix / "native.jsonl", "native-events", item["files"]["native"]["complete"], True), file_entry(output, prefix / "wire-requests.jsonl", "other", item["files"]["wire"]["complete"], True), file_entry(output, prefix / "inputs.jsonl", "input-capture", item["files"]["inputs"]["complete"], True), file_entry(output, prefix / "workbench-observations.jsonl", "workbench-observations", item["files"]["workbench"]["complete"], True), file_entry(output, prefix / "workbench-history.jsonl", "workbench-history", item["files"]["history"]["complete"], True), file_entry(output, prefix / "runtime-cleanup.jsonl", "other", item["files"]["runtimeCleanup"]["complete"], True)])
     manifest_path = output / "capture-manifest.json"
     manifest_path.write_bytes(json_bytes(manifest))
     return {"required": required, "manifest": manifest}
+
+
+def self_test_controlled_manifest_inventory(root: Path) -> bool:
+    output = root / "controlled-manifest"
+    output.mkdir()
+    workbench = output / "workbench"
+    claude = output / "claude"
+    workbench.write_bytes(b"workbench-offline\n")
+    claude.write_bytes(b"claude-offline\n")
+    identity = {"published": False, "stdout": {"complete": True}, "stderr": {"complete": True}}
+    cases: list[dict[str, object]] = []
+    for case_name in ("success", "failure"):
+        evidence = output / "sessions" / f"claude-controlled-{case_name}" / "evidence"
+        evidence.mkdir(parents=True)
+        files = {name: write_bytes(evidence / filename, b"{}\n", 1024) for name, filename in {"transcript": "transcript.raw.jsonl", "native": "native.jsonl", "wire": "wire-requests.jsonl", "inputs": "inputs.jsonl"}.items()}
+        files["workbench"] = write_observation(evidence / "workbench-observations.jsonl", [{"name": "status"}], 1024)
+        files["history"] = write_observation(evidence / "workbench-history.jsonl", [{"Outcome": 3}], 1024)
+        cleanup_file = write_observation(evidence / "runtime-cleanup.jsonl", [{"status": "clean", "complete": True}], 1024)
+        files["runtimeCleanup"] = {**cleanup_file, "status": "clean", "evidenceComplete": cleanup_file["complete"]}
+        cases.append({"case": {"name": case_name, "setup": {"exit": 0}, "installed_events": sorted(EXPECTED_EVENTS), "claude": {"exit": 0}, "history": {"exit": 0, "records": 1}}, "files": files, "observed": sorted(EXPECTED_EVENTS), "request2_token": True, "delivered": True, "admitted_record_ordinal": 1, "confirmed_ids": {"contributionId": 1}, "relevant_wire_ordinal": 1, "request_overflow": [], "hook_overflow": []})
+    result = write_manifest(output, workbench, claude, "offline-controlled", cases, 1024, identity)
+    manifest = result["manifest"]
+    paths = {entry.get("path") for entry in manifest.get("files", []) if isinstance(entry, dict)}
+    valid = all(result["required"].values()) and len(manifest.get("sessions", [])) == 2 and all(f"sessions/claude-controlled-{name}/evidence/runtime-cleanup.jsonl" in paths for name in ("success", "failure"))
+    cases[0]["files"]["runtimeCleanup"]["evidenceComplete"] = False
+    refused = False
+    try:
+        write_manifest(output, workbench, claude, "offline-controlled-incomplete", cases, 1024, identity)
+    except RunnerError:
+        refused = True
+    return valid and refused
+
+
+def self_test_live_cleanup_wiring() -> bool:
+    claude_source = inspect.getsource(run_live_claude)
+    codex_source = inspect.getsource(run_live_codex)
+    return claude_source.count("runtime_cleanup = cleanup_runtime") == 1 and codex_source.count("runtime_cleanup = cleanup_runtime") == 1 and '"runtime-cleanup.jsonl"' in claude_source and '"runtime-cleanup.jsonl"' in codex_source
+
+
+def self_test_failure_cleanup_no_start() -> bool:
+    source = inspect.getsource(cleanup_runtime_after_failure)
+    return "live_workbench_observations" not in source and "run_workbench" not in source
 
 
 def copy_private(source: Path, target: Path) -> Path:
@@ -1649,6 +1909,7 @@ def run_live_claude(workbench: Path, claude: Path, auth: Path, output: Path, dea
         provider_state = provider_status(claude_result)
         before_inspection = {"runtimeExists": paths["runtime"].exists(), "cacheExists": paths["cache"].exists()}
         observations = live_workbench_observations(workbench, paths, env, deadline, max_output, inactive=case_name in {"disabled", "no-source"}, before_inspection=before_inspection)
+        runtime_cleanup = cleanup_runtime(workbench, paths, paths["evidence"], max_output, f"live-claude-{case_name}-workbench")
         records = read_hook_records(hook_file)
         try:
             history_value = json.loads(observations["history"]["stdout"])
@@ -1671,9 +1932,13 @@ def run_live_claude(workbench: Path, claude: Path, auth: Path, output: Path, dea
             unknowns.append(unknown(f"sessions.{session_id}.sidecars.native-events", "truncated", "Native Claude hook capture exceeded the configured byte limit."))
         if not inputs["complete"]:
             unknowns.append(unknown(f"sessions.{session_id}.inputs[0].capture", "truncated", "Authored Claude input exceeded the configured byte limit."))
-        manifest = live_manifest(output, "claude", "claude-stream-json", workbench, claude, capture_id, session_id, paths["evidence"] / "transcript.raw.jsonl", bool(transcript["complete"]), f"sessions/{session_id}/evidence", [(paths["evidence"] / "native.jsonl", "native-events", bool(native["complete"])), (paths["evidence"] / "native-checkpoints.jsonl", "native-checkpoints", bool(checkpoints["complete"])), (paths["evidence"] / "workbench-observations.jsonl", "workbench-observations", bool(observations["file"]["complete"])), (paths["evidence"] / "workbench-history.jsonl", "workbench-history", bool(observations["historyFile"]["complete"])), (paths["evidence"] / "wire-requests.jsonl", "other", bool(wire["complete"]))], paths["evidence"] / "inputs.jsonl", bool(inputs["complete"]), len(prompts), verdicts, verdict_evidence, unknowns, max_output, identity)
+        manifest = live_manifest(output, "claude", "claude-stream-json", workbench, claude, capture_id, session_id, paths["evidence"] / "transcript.raw.jsonl", bool(transcript["complete"]), f"sessions/{session_id}/evidence", [(paths["evidence"] / "native.jsonl", "native-events", bool(native["complete"])), (paths["evidence"] / "native-checkpoints.jsonl", "native-checkpoints", bool(checkpoints["complete"])), (paths["evidence"] / "workbench-observations.jsonl", "workbench-observations", bool(observations["file"]["complete"])), (paths["evidence"] / "workbench-history.jsonl", "workbench-history", bool(observations["historyFile"]["complete"])), (paths["evidence"] / "runtime-cleanup.jsonl", "other", bool(runtime_cleanup["complete"])), (paths["evidence"] / "wire-requests.jsonl", "other", bool(wire["complete"]))], paths["evidence"] / "inputs.jsonl", bool(inputs["complete"]), len(prompts), verdicts, verdict_evidence, unknowns, max_output, identity)
         return {"sessionId": session_id, "provider": "claude", "case": case_name, "setupExit": setup["exit"], "providerExit": claude_result["exit"], "providerStatus": provider_state, "shutdownClassification": "intentional-joined" if claude_result.get("intentional_shutdown") else "none", "successfulTerminalResults": claude_result.get("successfulTerminalResults", 0), "matrixStatus": provider_state, "delivered": delivered, "manifest": manifest, "credentialRemoved": True}
     except (OSError, RunnerError, TimeoutError, ValueError) as error:
+        cleanup_records, _ = bounded_jsonl(paths["evidence"] / "runtime-cleanup.jsonl", max_output)
+        if cleanup_records and cleanup_records[-1].get("complete") is not True:
+            raise RunnerError("live Claude runtime cleanup failed; retained runtime-cleanup.jsonl") from error
+        cleanup_runtime_after_failure(workbench, paths, max_output, f"live-claude-{case_name}-workbench")
         return incomplete_live_case(output, "claude", claude, workbench, identity, paths, session_id, capture_id, prompt, max_output, error, provider_result=claude_result)
     finally:
         remove_owned(credential, paths["evidence"], max_output, "claude-credential")
@@ -1806,6 +2071,11 @@ def incomplete_live_case(output: Path, provider: str, provider_path: Path, workb
     if stderr_capture.exists():
         stderr_complete = bool(provider_result.get("stderrComplete")) if provider_result and "stderrComplete" in provider_result else bounded_file_complete(stderr_capture, MAX_CODEX_EVIDENCE)
         sidecars.append((stderr_capture, "native-rpc", stderr_complete))
+    runtime_cleanup = evidence / "runtime-cleanup.jsonl"
+    if runtime_cleanup.exists():
+        cleanup_records, cleanup_complete = bounded_jsonl(runtime_cleanup, max_output)
+        cleanup_ok = cleanup_complete and bool(cleanup_records) and cleanup_records[-1].get("complete") is True and cleanup_records[-1].get("status") == "clean"
+        sidecars.append((runtime_cleanup, "other", cleanup_ok))
     sidecars = [item for item in sidecars if item[0].exists()]
     approval_log = evidence / "approval-events.jsonl"
     if approval_log.exists():
@@ -1896,6 +2166,7 @@ def run_live_codex(workbench: Path, codex: Path, auth: Path, output: Path, deadl
             raise RunnerError(f"Codex app-server exited unexpectedly with status {shutdown_info.get('exit')}")
         before_inspection = {"runtimeExists": paths["runtime"].exists(), "cacheExists": paths["cache"].exists()}
         observations = live_workbench_observations(workbench, paths, env, deadline, max_output, inactive=case_name in {"disabled", "no-source"}, before_inspection=before_inspection)
+        runtime_cleanup = cleanup_runtime(workbench, paths, paths["evidence"], max_output, f"live-codex-{case_name}-workbench")
         native = copy_bounded_file(hook_file, paths["evidence"] / "native.jsonl", max_output) if hook_file.exists() else write_bytes(paths["evidence"] / "native.jsonl", b"", max_output)
         checkpoints = write_observation(paths["evidence"] / "native-checkpoints.jsonl", native_checkpoint_records(native_messages, "codex-rpc-boundary"), max_output)
         rollout_captured = rollout_path is not None and rollout_path.exists()
@@ -1943,7 +2214,7 @@ def run_live_codex(workbench: Path, codex: Path, auth: Path, output: Path, deadl
         stderr_complete = bool(shutdown_info.get("stderrComplete"))
         if not stderr_complete:
             unknowns.append(unknown(f"sessions.{session_id}.providerExecution", "truncated", "Codex app-server stderr exceeded the configured byte limit before case completion."))
-        codex_sidecars = [(paths["evidence"] / "native.jsonl", "native-events", bool(native["complete"])), (paths["evidence"] / "native-checkpoints.jsonl", "native-checkpoints", bool(checkpoints["complete"])), (paths["evidence"] / "workbench-observations.jsonl", "workbench-observations", bool(observations["file"]["complete"])), (paths["evidence"] / "workbench-history.jsonl", "workbench-history", bool(observations["historyFile"]["complete"])), (paths["evidence"] / "fixture-environment.jsonl", "other", bool(fixture_environment["complete"])), (paths["evidence"] / "rpc-stdin.jsonl", "native-rpc", True), (paths["evidence"] / "rpc-stdout.jsonl", "native-rpc", True), (paths["evidence"] / "app-server-stderr.txt", "native-rpc", stderr_complete), (paths["evidence"] / "wire-requests.jsonl", "other", bool(wire["complete"]))]
+        codex_sidecars = [(paths["evidence"] / "native.jsonl", "native-events", bool(native["complete"])), (paths["evidence"] / "native-checkpoints.jsonl", "native-checkpoints", bool(checkpoints["complete"])), (paths["evidence"] / "workbench-observations.jsonl", "workbench-observations", bool(observations["file"]["complete"])), (paths["evidence"] / "workbench-history.jsonl", "workbench-history", bool(observations["historyFile"]["complete"])), (paths["evidence"] / "runtime-cleanup.jsonl", "other", bool(runtime_cleanup["complete"])), (paths["evidence"] / "fixture-environment.jsonl", "other", bool(fixture_environment["complete"])), (paths["evidence"] / "rpc-stdin.jsonl", "native-rpc", True), (paths["evidence"] / "rpc-stdout.jsonl", "native-rpc", True), (paths["evidence"] / "app-server-stderr.txt", "native-rpc", stderr_complete), (paths["evidence"] / "wire-requests.jsonl", "other", bool(wire["complete"]))]
         if (paths["evidence"] / "approval-events.jsonl").exists():
             codex_sidecars.append((paths["evidence"] / "approval-events.jsonl", "other", True))
         manifest = live_manifest(output, "codex", "codex-rollout" if rollout_captured else "unknown", workbench, codex, capture_id, session_id, paths["evidence"] / "transcript.raw.jsonl", bool(transcript["complete"]), f"sessions/{session_id}/evidence", codex_sidecars, paths["evidence"] / "inputs.jsonl", bool(inputs["complete"]), len(input_prompts), verdicts, verdict_evidence, unknowns, max_output, identity, step_evidence)
@@ -1957,6 +2228,10 @@ def run_live_codex(workbench: Path, codex: Path, auth: Path, output: Path, deadl
                 raise RunnerError("Codex cleanup was incomplete; retained cleanup-failure.jsonl")
             shutdown_info = dict(client.shutdown_info)
             client = None
+        cleanup_records, _ = bounded_jsonl(paths["evidence"] / "runtime-cleanup.jsonl", max_output)
+        if cleanup_records and cleanup_records[-1].get("complete") is not True:
+            raise RunnerError("live Codex runtime cleanup failed; retained runtime-cleanup.jsonl") from error
+        cleanup_runtime_after_failure(workbench, paths, max_output, f"live-codex-{case_name}-workbench")
         return incomplete_live_case(output, "codex", codex, workbench, identity, paths, session_id, capture_id, prompt, max_output, error, messages, shutdown_info)
     finally:
         if client is not None:
@@ -1984,6 +2259,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--self-test-bounds", action="store_true", help="run the bounded process/drain witness without a provider")
     value.add_argument("--self-test-protocol", action="store_true", help="exercise the bounded local JSON-RPC client without a provider or manifest")
     value.add_argument("--self-test-contract", action="store_true", help="run offline manifest/linkage counterexamples without a provider or native evidence")
+    value.add_argument("--self-test-cleanup", action="store_true", help="exercise exact Workbench runtime ownership cleanup without a provider")
     return value
 
 
@@ -2036,7 +2312,48 @@ def self_test_protocol() -> int:
         return 0 if all(witness.values()) else 1
 
 
+def self_test_cleanup(workbench: Path) -> int:
+    with tempfile.TemporaryDirectory(prefix="cqa-runtime-cleanup-") as root_name:
+        root = Path(root_name)
+        case = root / "case"
+        paths = make_fixture(case, "WCTX_CLEANUP_OFFLINE")
+        env = isolated_env(case)
+        daemon = subprocess.Popen([str(workbench.resolve()), "context", "serve", *context_flags(paths)], cwd=paths["project"], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        started = time.monotonic()
+        while not paths["socket"].exists() and daemon.poll() is None and time.monotonic() - started < 5:
+            time.sleep(0.05)
+        daemon_started = paths["socket"].exists() and daemon.poll() is None
+        real_cleanup = False
+        if daemon_started:
+            result = cleanup_runtime(workbench, paths, paths["evidence"], 1024 * 1024, "self-test-real-workbench")
+            real_cleanup = result.get("status") == "clean" and result.get("complete") is True and not paths["socket"].exists() and daemon.poll() is not None
+        else:
+            with contextlib.suppress(ProcessLookupError):
+                terminate_group(daemon.pid)
+            daemon.wait(timeout=3)
+        sentinel_socket = paths["socket"]
+        sentinel_socket.parent.mkdir(parents=True, exist_ok=True)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(sentinel_socket))
+        sentinel = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], cwd=paths["project"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        refused = False
+        try:
+            cleanup_runtime(workbench, paths, paths["evidence"], 1024 * 1024, "self-test-mismatched-owner")
+        except RunnerError:
+            refused = sentinel.poll() is None
+        finally:
+            listener.close()
+            with contextlib.suppress(ProcessLookupError):
+                terminate_group(sentinel.pid)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                sentinel.wait(timeout=3)
+        witness = {"realLongTTLWorkbenchCleanup": real_cleanup, "mismatchedOwnerRefusedWithoutKill": refused}
+        print(json.dumps(witness, indent=2, sort_keys=True))
+        return 0 if all(witness.values()) else 1
+
+
 def self_test_contract() -> int:
+    global MAX_RUNTIME_PROCESSES
     with tempfile.TemporaryDirectory(prefix="cqa-contract-") as root_name:
         root = Path(root_name)
         project = root / "project"
@@ -2077,10 +2394,19 @@ def self_test_contract() -> int:
         control_step = native_command_step([{"method": "item/completed", "params": {"turnId": "turn-control", "item": {"type": "commandExecution", "id": "exec-control", "cwd": str(project), "status": "completed", "exitCode": 0, "commandActions": [{"path": "README.md"}]}}}], "disabled", project)["exercised"] and native_command_step([{"method": "item/completed", "params": {"turnId": "turn-control", "item": {"type": "commandExecution", "id": "exec-control", "cwd": str(project), "status": "completed", "exitCode": 0, "commandActions": [{"path": "README.md"}]}}}], "no-source", project)["exercised"]
         ttl_fixture = make_fixture(root / "ttl-fixture", "WCTX_TTL_OFFLINE")
         qa_idle_ttl = f"idleTTLMs = {QA_IDLE_TTL_MS}" in ttl_fixture["home_config"].read_text(encoding="utf-8") and QA_IDLE_TTL_MS >= 60000
+        controlled_manifest_inventory = self_test_controlled_manifest_inventory(root)
+        live_cleanup_wiring = self_test_live_cleanup_wiring()
+        failure_cleanup_no_start = self_test_failure_cleanup_no_start()
+        prior_process_limit = MAX_RUNTIME_PROCESSES
+        MAX_RUNTIME_PROCESSES = 0
+        try:
+            census_refusal = _runtime_snapshot(Path(sys.executable), fixture_paths(root / "census"))["status"] == "incomplete"
+        finally:
+            MAX_RUNTIME_PROCESSES = prior_process_limit
         (root / "workbench-version.json").write_bytes(json_bytes(identity))
         merged = merge_live_manifests(root, [{"files": [], "sessions": [], "unknowns": [], "producer": {"workbench": identity}}, {"files": [], "sessions": [], "unknowns": [], "producer": {"workbench": identity}}])
         identity_unique = sum(1 for item in merged["files"] if item.get("path") == "workbench-version.json") == 1
-        witness = {"status": "offline-only", "retainedInputActor": derived_actor, "hookExitAloneNotDelivery": no_delivery, "structuredConfirmationLinks": delivery[0] == 2 and delivery[1].get("causalId") == "native-1", "codexPostToolUseDelivery": codex_delivery[0] == 2, "wireUnavailableHasLocators": wire_locator, "authFailureRejected": auth_rejected, "intentionalJoinedShutdownAccepted": intentional_shutdown, "strictIdentityAccepted": strict_identity["valid"], "stderrOnlyNonzeroRejected": not rejected_identity["valid"], "identityFileUniqueAfterMerge": identity_unique, "startupRuntimeDiagnostic": startup_runtime_diagnostic, "irrelevantSuccessExecution": irrelevant_step["exercised"], "failedReadRequiresExecution": not failed_prose_only["exercised"] and failed_step["exercised"], "inactiveControlsRequireRead": control_step, "qaIdleTTL300000": qa_idle_ttl}
+        witness = {"status": "offline-only", "retainedInputActor": derived_actor, "hookExitAloneNotDelivery": no_delivery, "structuredConfirmationLinks": delivery[0] == 2 and delivery[1].get("causalId") == "native-1", "codexPostToolUseDelivery": codex_delivery[0] == 2, "wireUnavailableHasLocators": wire_locator, "authFailureRejected": auth_rejected, "intentionalJoinedShutdownAccepted": intentional_shutdown, "strictIdentityAccepted": strict_identity["valid"], "stderrOnlyNonzeroRejected": not rejected_identity["valid"], "identityFileUniqueAfterMerge": identity_unique, "startupRuntimeDiagnostic": startup_runtime_diagnostic, "irrelevantSuccessExecution": irrelevant_step["exercised"], "failedReadRequiresExecution": not failed_prose_only["exercised"] and failed_step["exercised"], "inactiveControlsRequireRead": control_step, "qaIdleTTL300000": qa_idle_ttl, "controlledManifestBothSessions": controlled_manifest_inventory, "liveCleanupWiring": live_cleanup_wiring, "failureCleanupNoStart": failure_cleanup_no_start, "truncatedCensusRefused": census_refusal}
         print(json.dumps(witness, indent=2, sort_keys=True))
         return 0 if all(value is True for key, value in witness.items() if key != "status") else 1
 
@@ -2129,6 +2455,10 @@ def main(argv: list[str] | None = None) -> int:
         return self_test_protocol()
     if args.self_test_contract:
         return self_test_contract()
+    if args.self_test_cleanup:
+        if args.workbench is None:
+            raise RunnerError("--self-test-cleanup requires --workbench")
+        return self_test_cleanup(args.workbench.resolve(strict=True))
     if args.harness is None or args.mode is None or args.output is None:
         raise RunnerError("--harness, --mode, and --output are required for a capture")
     if args.deadline_seconds <= 0 or args.max_output_bytes <= 0:

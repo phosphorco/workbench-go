@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	contextLiveQABaselineRunnerEnv = "WCTX_QA_BASELINE_RUNNER"
-	contextLiveQAClaudeEnv         = "WCTX_CLAUDE"
-	contextLiveQAPklEnv            = "PKL_EXECUTABLE"
-	contextLiveQABaselineDeadline  = 2 * time.Minute
-	contextLiveQAOutputLimit       = 8 << 20
+	contextLiveQABaselineRunnerEnv   = "WCTX_QA_BASELINE_RUNNER"
+	contextLiveQAClaudeEnv           = "WCTX_CLAUDE"
+	contextLiveQAPklEnv              = "PKL_EXECUTABLE"
+	contextLiveQACleanupWorkbenchEnv = "WCTX_QA_CLEANUP_WORKBENCH"
+	contextLiveQABaselineDeadline    = 2 * time.Minute
+	contextLiveQAOutputLimit         = 8 << 20
 )
 
 // TestContextLiveQACapture is opt-in because it launches a real native Claude
@@ -213,6 +214,28 @@ func TestContextLiveQAInputsRequireDedicatedOptIn(t *testing.T) {
 	}
 }
 
+func TestContextLiveQARuntimeCleanupWitness(t *testing.T) {
+	workbench := os.Getenv(contextLiveQACleanupWorkbenchEnv)
+	if workbench == "" {
+		t.Skip("runtime cleanup witness not selected; set WCTX_QA_CLEANUP_WORKBENCH to an installed Workbench binary")
+	}
+	command := exec.Command("python3", "context_live_qa.py", "--self-test-cleanup", "--workbench", workbench)
+	command.Dir = filepath.Join("..", "acceptance")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("runtime cleanup witness failed: %v", err)
+	}
+	var witness map[string]bool
+	if err := json.Unmarshal(output, &witness); err != nil {
+		t.Fatalf("runtime cleanup witness was not JSON: %v", err)
+	}
+	for _, key := range []string{"realLongTTLWorkbenchCleanup", "mismatchedOwnerRefusedWithoutKill"} {
+		if !witness[key] {
+			t.Fatalf("runtime cleanup witness %q = %v, want true", key, witness[key])
+		}
+	}
+}
+
 func TestContextLiveQAOfflineCounterexamples(t *testing.T) {
 	command := exec.Command("python3", "context_live_qa.py", "--self-test-contract")
 	command.Dir = filepath.Join("..", "acceptance")
@@ -224,7 +247,7 @@ func TestContextLiveQAOfflineCounterexamples(t *testing.T) {
 	if err := json.Unmarshal(output, &witness); err != nil {
 		t.Fatalf("offline capture contract witness was not JSON: %v", err)
 	}
-	for _, key := range []string{"retainedInputActor", "hookExitAloneNotDelivery", "structuredConfirmationLinks", "codexPostToolUseDelivery", "wireUnavailableHasLocators", "authFailureRejected", "intentionalJoinedShutdownAccepted", "strictIdentityAccepted", "stderrOnlyNonzeroRejected", "identityFileUniqueAfterMerge", "startupRuntimeDiagnostic", "irrelevantSuccessExecution", "failedReadRequiresExecution", "inactiveControlsRequireRead", "qaIdleTTL300000"} {
+	for _, key := range []string{"retainedInputActor", "hookExitAloneNotDelivery", "structuredConfirmationLinks", "codexPostToolUseDelivery", "wireUnavailableHasLocators", "authFailureRejected", "intentionalJoinedShutdownAccepted", "strictIdentityAccepted", "stderrOnlyNonzeroRejected", "identityFileUniqueAfterMerge", "startupRuntimeDiagnostic", "irrelevantSuccessExecution", "failedReadRequiresExecution", "inactiveControlsRequireRead", "qaIdleTTL300000", "controlledManifestBothSessions", "liveCleanupWiring", "failureCleanupNoStart", "truncatedCensusRefused"} {
 		if value, ok := witness[key].(bool); !ok || !value {
 			t.Fatalf("offline capture contract witness %q = %v, want true", key, witness[key])
 		}
