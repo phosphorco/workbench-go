@@ -30,7 +30,9 @@ func TestRunWritesNamedArchiveAndExactChecksum(t *testing.T) {
 		"--pkl-third-party-notice", file("pkl-third-party"), "--bun-license", file("bun-license"),
 		"--go-license", file("go-license"), "--go-patents", file("go-patents"),
 		"--pkl-go-license", file("pkl-go-license"), "--pkl-go-notice", file("pkl-go-notice"),
+		"--doublestar-license", file("doublestar-license"),
 		"--msgpack-license", file("msgpack-license"), "--tagparser-license", file("tagparser-license"),
+		"--sh-license", file("sh-license"), "--toml-license", file("toml-license"),
 		"--yaml-license", file("yaml-license"),
 	}
 	var output bytes.Buffer
@@ -76,7 +78,9 @@ func TestRunRequiresThePinnedRuntimeLock(t *testing.T) {
 		"--pkl-third-party-notice", file("pkl-third-party"), "--bun-license", file("bun-license"),
 		"--go-license", file("go-license"), "--go-patents", file("go-patents"),
 		"--pkl-go-license", file("pkl-go-license"), "--pkl-go-notice", file("pkl-go-notice"),
+		"--doublestar-license", file("doublestar-license"),
 		"--msgpack-license", file("msgpack-license"), "--tagparser-license", file("tagparser-license"),
+		"--sh-license", file("sh-license"), "--toml-license", file("toml-license"),
 		"--yaml-license", file("yaml-license"),
 	}
 	if err := run(arguments, &bytes.Buffer{}); err == nil {

@@ -84,6 +84,17 @@
     }
   },
   "buildDependencies": {
+    "doublestar": {
+      "version": "4.10.0",
+      "sourceRevision": "a9ad9e0ef4d6b7e4443090e9a7201d847a881711",
+      "licenses": [
+        {
+          "url": "https://raw.githubusercontent.com/bmatcuk/doublestar/a9ad9e0ef4d6b7e4443090e9a7201d847a881711/LICENSE",
+          "sha256": "2391eb152e1f700051c1618a7aaa7ad86186585190ca9a30e7579c9b9d459332",
+          "archivePath": "doublestar/LICENSE"
+        }
+      ]
+    },
     "go": {
       "version": "1.26.6",
       "sourceRevision": "1ea5a71ad8ceb7b9f16b4b6f8ea4739a4327dd6e",
@@ -116,6 +127,17 @@
         }
       ]
     },
+    "sh": {
+      "version": "3.14.1",
+      "sourceRevision": "a3f0c75d21d918756fa38de8b5d3429efde7948b",
+      "licenses": [
+        {
+          "url": "https://raw.githubusercontent.com/mvdan/sh/a3f0c75d21d918756fa38de8b5d3429efde7948b/LICENSE",
+          "sha256": "ce63850f77649f00d1394045e2794ffb09a5596beabac51c9548edd958845d7c",
+          "archivePath": "sh/LICENSE"
+        }
+      ]
+    },
     "msgpack": {
       "version": "5.4.1",
       "sourceRevision": "19c91dfdfa062658c39d9321be26163fc5833bd1",
@@ -135,6 +157,17 @@
           "url": "https://raw.githubusercontent.com/vmihailenco/tagparser/2147fb31205921d022818561da850209b44b0097/LICENSE",
           "sha256": "0f02aac22084ef463aa5f42f566feeec6aa4c99653519744a8c25cb079da5b5d",
           "archivePath": "tagparser/LICENSE"
+        }
+      ]
+    },
+    "toml": {
+      "version": "2.4.0",
+      "sourceRevision": "b99e8db1027869f497c5402ff38afbb5d0f1a932",
+      "licenses": [
+        {
+          "url": "https://raw.githubusercontent.com/pelletier/go-toml/b99e8db1027869f497c5402ff38afbb5d0f1a932/LICENSE",
+          "sha256": "26844e4b53c5adec04e557fd7dfef281cc0205a7d355626b1c68b778b99e9e7b",
+          "archivePath": "toml/LICENSE"
         }
       ]
     },

@@ -46,8 +46,11 @@ type ArchiveInputs struct {
 	GoPatents           string
 	PklGoLicense        string
 	PklGoNotice         string
+	DoublestarLicense   string
 	MsgpackLicense      string
+	ShLicense           string
 	TagparserLicense    string
+	TomlLicense         string
 	YAMLLicense         string
 }
 
@@ -96,6 +99,8 @@ func WriteArchive(output string, inputs ArchiveInputs) error {
 		directory(root + "/share/licenses/"),
 		directory(root + "/share/licenses/bun/"),
 		file(root+"/share/licenses/bun/LICENSE.md", inputs.BunLicense, 0o644),
+		directory(root + "/share/licenses/doublestar/"),
+		file(root+"/share/licenses/doublestar/LICENSE", inputs.DoublestarLicense, 0o644),
 		directory(root + "/share/licenses/go/"),
 		file(root+"/share/licenses/go/LICENSE", inputs.GoLicense, 0o644),
 		file(root+"/share/licenses/go/PATENTS", inputs.GoPatents, 0o644),
@@ -108,8 +113,12 @@ func WriteArchive(output string, inputs ArchiveInputs) error {
 		directory(root + "/share/licenses/pkl-go/"),
 		file(root+"/share/licenses/pkl-go/LICENSE.txt", inputs.PklGoLicense, 0o644),
 		file(root+"/share/licenses/pkl-go/NOTICE.txt", inputs.PklGoNotice, 0o644),
+		directory(root + "/share/licenses/sh/"),
+		file(root+"/share/licenses/sh/LICENSE", inputs.ShLicense, 0o644),
 		directory(root + "/share/licenses/tagparser/"),
 		file(root+"/share/licenses/tagparser/LICENSE", inputs.TagparserLicense, 0o644),
+		directory(root + "/share/licenses/toml/"),
+		file(root+"/share/licenses/toml/LICENSE", inputs.TomlLicense, 0o644),
 		directory(root + "/share/licenses/workbench/"),
 		file(root+"/share/licenses/workbench/LICENSE", inputs.WorkbenchLicense, 0o644),
 		directory(root + "/share/licenses/yaml/"),

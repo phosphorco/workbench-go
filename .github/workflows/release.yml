@@ -130,7 +130,7 @@ jobs:
           set -euo pipefail
           test "$(go version -m candidate/workbench | awk 'NR == 1 { sub(/^go/, "", $2); print $2 }')" = "$(jq -r '.buildDependencies.go.version' release/runtime-lock.json)"
           go version -m candidate/workbench | awk '$1 == "dep" { print $2 " " $3 }' | sort > candidate/linked-modules.txt
-          jq -r '.buildDependencies | to_entries[] | select(.key != "go") | if .key == "pkl-go" then "github.com/apple/pkl-go v" + .value.version elif .key == "msgpack" then "github.com/vmihailenco/msgpack/v5 v" + .value.version elif .key == "tagparser" then "github.com/vmihailenco/tagparser/v2 v" + .value.version elif .key == "yaml" then "gopkg.in/yaml.v3 v" + .value.version else error("unknown linked module " + .key) end' \
+          jq -r '.buildDependencies | to_entries[] | select(.key != "go") | if .key == "doublestar" then "github.com/bmatcuk/doublestar/v4 v" + .value.version elif .key == "pkl-go" then "github.com/apple/pkl-go v" + .value.version elif .key == "toml" then "github.com/pelletier/go-toml/v2 v" + .value.version elif .key == "msgpack" then "github.com/vmihailenco/msgpack/v5 v" + .value.version elif .key == "sh" then "mvdan.cc/sh/v3 v" + .value.version elif .key == "tagparser" then "github.com/vmihailenco/tagparser/v2 v" + .value.version elif .key == "yaml" then "gopkg.in/yaml.v3 v" + .value.version else error("unknown linked module " + .key) end' \
             release/runtime-lock.json | sort > candidate/inventoried-modules.txt
           diff -u candidate/inventoried-modules.txt candidate/linked-modules.txt
       - name: Package deterministic archive
@@ -155,8 +155,11 @@ jobs:
             --go-patents candidate/licenses/go/PATENTS \
             --pkl-go-license candidate/licenses/pkl-go/LICENSE.txt \
             --pkl-go-notice candidate/licenses/pkl-go/NOTICE.txt \
+            --doublestar-license candidate/licenses/doublestar/LICENSE \
             --msgpack-license candidate/licenses/msgpack/LICENSE \
+            --sh-license candidate/licenses/sh/LICENSE \
             --tagparser-license candidate/licenses/tagparser/LICENSE \
+            --toml-license candidate/licenses/toml/LICENSE \
             --yaml-license candidate/licenses/yaml/LICENSE
       - name: Prove native archive behavior
         run: |

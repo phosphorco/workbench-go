@@ -267,7 +267,9 @@ func distributionV1Inputs(t *testing.T, root string) distribution.ArchiveInputs 
 		PklThirdPartyNotice: file("pkl-third-party", "third party\n", false), BunLicense: file("bun-license", "license\n", false),
 		GoLicense: file("go-license", "license\n", false), GoPatents: file("go-patents", "patents\n", false),
 		PklGoLicense: file("pkl-go-license", "license\n", false), PklGoNotice: file("pkl-go-notice", "notice\n", false),
-		MsgpackLicense: file("msgpack-license", "license\n", false), TagparserLicense: file("tagparser-license", "license\n", false),
+		DoublestarLicense: file("doublestar-license", "license\n", false),
+		MsgpackLicense:    file("msgpack-license", "license\n", false), TagparserLicense: file("tagparser-license", "license\n", false),
+		ShLicense: file("sh-license", "license\n", false), TomlLicense: file("toml-license", "license\n", false),
 		YAMLLicense: file("yaml-license", "license\n", false),
 	}
 }
