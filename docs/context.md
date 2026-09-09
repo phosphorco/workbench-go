@@ -12,6 +12,9 @@ This page describes the user-facing product; the [CLI implementation](../cmd/wor
 [activation loader](../internal/contextconfig/config.go) are the source of
 truth for details that must evolve with the implementation.
 
+For an isolated live Claude/Codex smoke test with native hook logs, Workbench
+history, and model-admission checks, follow the [harness QA runbook](context-harness-qa.md).
+
 ## Install once, activate deliberately
 
 Install the Workbench executable once, then reconcile the host hook settings:
