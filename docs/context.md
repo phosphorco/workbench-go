@@ -272,12 +272,35 @@ Claude setup covers `PostToolBatch`, `PostToolUse`, `PostToolUseFailure`,
 `PostToolUse`, `UserPromptSubmit`, and `SessionStart`; delivery uses the same
 envelope with the corresponding event name and a 32,000-byte adapter limit.
 
-The Go adapter recognizes bounded evidence such as a Bash `cat README.md` and
-its structured response. Unknown or ambiguous shell commands remain unknown:
-Workbench does not claim a file was read or fabricate evidence. Hook stdout
-proves only the local handoff to the host adapter. It does not prove that the
-native host accepted the envelope or that a model request contained the
-context; those are separate host/model tests.
+The Go adapter recognizes bounded Python file intent when `python` or `python3`
+(including an absolute path with that basename) is the first simple command and
+uses literal `-c` source or one wholly quoted heredoc on stdin. The supported
+subset covers literal and aliased `Path`/`open` reads and writes, literal modes,
+and tested literal path joins. The matrix includes a complete chained
+read/replace/write representative, but it is not exhaustive raw-session
+coverage: slicing, augmented assignment, and other unlisted Python syntax
+remain outside this first subset. See the [normalizer regression matrix](../internal/contexthook/shell_python_test.go)
+and [real CLI proof](../acceptance/context_python_test.go) for the exact
+supported forms and adversarial cases.
+
+Python resources are source-level intent, so they are recorded as
+`file`/`inferred`/`unknown` regardless of the outer shell result. A failed shell
+does not prove that an earlier sink failed, and a successful shell does not
+prove that every sink executed. The existing `observed-file` recruitment label
+names the causal input category used to match builtin guidance; it is not a
+claim of confirmed file I/O. Omitted `workdir` uses the hook cwd; a literal
+`workdir` on supported command tools is resolved relative to that cwd and must
+remain inside the active scope. Invalid or out-of-scope workdirs produce no
+inferred resources.
+
+Wrappers, preceding commands, unknown flags, shell control flow, dynamic paths
+or rebinding, interpolation, globbing, `chdir`, unquoted or non-stdin-file
+heredocs, scripts, subprocesses, and copy/delete/rename helpers remain unknown;
+Workbench neither executes Python nor scans the filesystem to resolve them.
+Unknown or ambiguous shell commands likewise remain unknown. Hook stdout proves
+only the local handoff to the host adapter. It does not prove that the native
+host accepted the envelope or that a model request contained the context; those
+are separate host/model tests.
 
 The inactive path is intentionally silent: it does not start the runtime,
 providers, or create project, socket, lock, or cache artifacts. Enabled hooks

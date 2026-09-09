@@ -902,6 +902,9 @@ func normalizeShellTool(hook HookDTO, call ToolCall, root, cwd string, now time.
 	if len(command) > limits.MaxShellBytes {
 		return nil, nil, nil, &SizeError{Operation: "shell command", Limit: int64(limits.MaxShellBytes), Observed: int64(len(command))}
 	}
+	if resources, reasons, handled, err := normalizePythonShell(call, command, root, cwd, limits.MaxShellWords, limits.MaxShellBytes, now); handled {
+		return resources, nil, reasons, err
+	}
 	resources, selectors, parsed, overflow := parseStaticShell(command, root, cwd, nativeOutcome(hook, call.Response), limits.MaxShellWords, limits.MaxShellBytes)
 	if overflow {
 		return nil, nil, nil, &SizeError{Operation: "shell words", Limit: int64(limits.MaxShellWords), Observed: int64(limits.MaxShellWords + 1)}
