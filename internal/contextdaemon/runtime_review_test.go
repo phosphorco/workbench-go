@@ -1051,15 +1051,25 @@ func TestRuntimeReviewIdleExecutableProviderReceivesShutdown(t *testing.T) {
 	root := f.executableProject(t, "provider", "unused", script, []string{log, closing, release, "false"})
 
 	result := f.observe(t, f.input(t, root, "provider-session", "provider-read", true, false))
-	if result.Decision.Offer.Identity.ID != 0 {
-		t.Fatalf("unavailable delivery unexpectedly offered provider guidance: %#v", result.Decision)
+	if result.Decision.State != contextapi.DeliveryDeferred || result.Decision.Offer.Identity.ID != 0 {
+		t.Fatalf("provider observation did not defer unavailable delivery: %#v", result.Decision)
 	}
-	healthy, err := f.runtime.Status(t.Context(), contextdaemon.StatusRequest{})
+	var unavailable bool
+	for _, reason := range result.Decision.Reasons {
+		if reason.Code == contextapi.ReasonNoDeliveryCapability {
+			unavailable = true
+			break
+		}
+	}
+	if !unavailable {
+		t.Fatalf("provider observation lacked no-delivery reason: %#v", result.Decision.Reasons)
+	}
+	contents, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if healthy.ProviderProcesses != 1 || len(healthy.Partitions) != 1 || healthy.Partitions[0].Engine.PendingItems == 0 {
-		t.Fatalf("provider contribution was not healthy and queued before idle: %#v", healthy)
+	if strings.Count(string(contents), `"method":"initialize"`) != 1 || strings.Count(string(contents), `"method":"context.contribute"`) != 1 {
+		t.Fatalf("provider observation did not initialize and contribute exactly once: %s", contents)
 	}
 
 	time.Sleep(150 * time.Millisecond)
@@ -1070,7 +1080,7 @@ func TestRuntimeReviewIdleExecutableProviderReceivesShutdown(t *testing.T) {
 	if after.ProviderProcesses != 0 {
 		t.Fatalf("idle provider remained resident: %#v", after)
 	}
-	contents, err := os.ReadFile(log)
+	contents, err = os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1086,19 +1096,32 @@ func TestRuntimeReviewClosingProviderStillConsumesGlobalProcessCapacity(t *testi
 	closing := filepath.Join(f.root, "closing")
 	release := filepath.Join(f.root, "release")
 	writeReviewExecutableProvider(t, script)
-	firstRoot := f.executableProject(t, "first-provider", "unused", script, []string{log, closing, release, "true"})
+	firstRoot := f.executableProject(t, "first-provider", "unused", script, []string{log, closing, release, "true", "0.075"})
 	secondRoot := f.executableProject(t, "second-provider", "unused", script, []string{log, closing, release, "true"})
+	firstInput := f.input(t, firstRoot, "first-session", "first-read", true, false)
+	secondInput := f.input(t, secondRoot, "second-session", "second-read", true, false)
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0600) })
 
-	first := f.observe(t, f.input(t, firstRoot, "first-session", "first-read", true, false))
-	if first.Decision.Offer.Identity.ID != 0 {
-		t.Fatalf("unavailable delivery unexpectedly offered first provider guidance: %#v", first.Decision)
+	first := f.observe(t, firstInput)
+	if first.Decision.State != contextapi.DeliveryDeferred || first.Decision.Offer.Identity.ID != 0 {
+		t.Fatalf("first provider observation did not defer unavailable delivery: %#v", first.Decision)
 	}
-	healthy, err := f.runtime.Status(t.Context(), contextdaemon.StatusRequest{})
+	var unavailable bool
+	for _, reason := range first.Decision.Reasons {
+		if reason.Code == contextapi.ReasonNoDeliveryCapability {
+			unavailable = true
+			break
+		}
+	}
+	if !unavailable {
+		t.Fatalf("first provider observation lacked no-delivery reason: %#v", first.Decision.Reasons)
+	}
+	contents, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if healthy.ProviderProcesses != 1 || len(healthy.Partitions) != 1 || healthy.Partitions[0].Engine.PendingItems == 0 {
-		t.Fatalf("first provider contribution was not healthy and queued before idle: %#v", healthy)
+	if strings.Count(string(contents), `"method":"initialize"`) != 1 || strings.Count(string(contents), `"method":"context.contribute"`) != 1 {
+		t.Fatalf("first provider observation did not initialize and contribute exactly once: %s", contents)
 	}
 	time.Sleep(75 * time.Millisecond)
 	statusDone := make(chan error, 1)
@@ -1117,11 +1140,11 @@ func TestRuntimeReviewClosingProviderStillConsumesGlobalProcessCapacity(t *testi
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	second := f.observe(t, f.input(t, secondRoot, "second-session", "second-read", true, false))
+	second := f.observe(t, secondInput)
 	if second.Decision.Offer.Identity.ID != 0 {
 		t.Fatalf("replacement provider was admitted while predecessor was closing: %#v", second.Decision)
 	}
-	contents, err := os.ReadFile(log)
+	contents, err = os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
