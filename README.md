@@ -46,7 +46,7 @@ agents through a versioned control protocol.
 
 | Surface | Status |
 | --- | --- |
-| Binary `0.8.0`; Pkl resource contracts `0.8.0` | Released |
+| Binary `0.8.1`; Pkl resource contracts `0.8.0` | Released |
 | `setup`, `check`, commit saga, snapshots, prune, skills, and buildables described below | Released |
 | Structured status, Environment Index, explain/ownership queries, explicit reconciliation plans, receipts, and scoped verification | Proposed and sequenced |
 
@@ -78,11 +78,11 @@ components does not relicense them as Workbench code.
 The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
 terms together and is included unchanged in every platform archive.
 
-Install the pinned `0.8.0` release. Binary and resource-contract releases may
-have independent identities; this release publishes both at `0.8.0`.
+Install the pinned `0.8.1` release. Binary and resource-contract releases have
+independent identities; this release carries the existing `0.8.0` contract.
 
 ```sh
-mise use -g github:phosphorco/workbench-go@0.8.0
+mise use -g github:phosphorco/workbench-go@0.8.1
 workbench version
 ```
 

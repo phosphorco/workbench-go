@@ -1,12 +1,12 @@
-name: Release 0.8.0
+name: Release 0.8.1
 
 on:
   push:
-    tags: ["0.8.0"]
+    tags: ["0.8.1"]
   workflow_dispatch:
 
 env:
-  WORKBENCH_VERSION: 0.8.0
+  WORKBENCH_VERSION: 0.8.1
   WORKBENCH_CONTRACT_VERSION: 0.8.0
 
 permissions:
@@ -167,7 +167,7 @@ jobs:
           archive=$(find candidate/out -name '*.tar.gz' -type f)
           mkdir candidate/installed
           tar -xzf "$archive" --strip-components=1 -C candidate/installed
-          test "$(candidate/installed/bin/workbench version)" = "workbench 0.8.0 (${{ github.sha }})"
+          test "$(candidate/installed/bin/workbench version)" = "workbench 0.8.1 (${{ github.sha }})"
           candidate/installed/libexec/workbench/pkl --version | grep -F '0.32.1'
           test "$(candidate/installed/libexec/workbench/bun --version)" = '1.3.14'
           mkdir -p candidate/catalog/.agents/skills
@@ -710,7 +710,7 @@ jobs:
       - name: Verify immutable candidate assets before promotion
         run: |
           set -euo pipefail
-          test "${WORKBENCH_VERSION}" = "0.8.0"
+          test "${WORKBENCH_VERSION}" = "0.8.1"
           test "${WORKBENCH_CONTRACT_VERSION}" = "0.8.0"
           test "$(find candidate-assets -name 'workbench-*.tar.gz' -type f | wc -l | tr -d ' ')" = 4
           test -f candidate-assets/workbench@0.8.0
