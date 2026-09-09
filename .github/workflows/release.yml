@@ -565,16 +565,18 @@ jobs:
               echo "installed context daemon did not exit: pid=$daemon_pid" >&2
               return 1
             fi
-            for child in "${daemon_children[@]}"; do
-              for _ in $(seq 1 50); do
-                if ! kill -0 "$child" 2>/dev/null; then break; fi
-                sleep 0.1
+            if test "${daemon_children[0]+present}" = present; then
+              for child in "${daemon_children[@]}"; do
+                for _ in $(seq 1 50); do
+                  if ! kill -0 "$child" 2>/dev/null; then break; fi
+                  sleep 0.1
+                done
+                if kill -0 "$child" 2>/dev/null; then
+                  echo "installed context daemon child did not exit: pid=$child" >&2
+                  return 1
+                fi
               done
-              if kill -0 "$child" 2>/dev/null; then
-                echo "installed context daemon child did not exit: pid=$child" >&2
-                return 1
-              fi
-            done
+            fi
             test ! -e "$socket"
             daemon_pid=""
             daemon_validated=false
