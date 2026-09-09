@@ -1,0 +1,15 @@
+amends "workbench:context"
+
+contributors {
+  ["example-profile"] = new Executable {
+    executable = "./profile-provider.py"
+    capabilities { "profile" }
+    limits {
+      deadlineMs = 500
+      maxResponseBytes = 262144
+      maxFacts = 32
+      maxContributions = 64
+      maxBodyBytes = 262144
+    }
+  }
+}

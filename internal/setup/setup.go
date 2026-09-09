@@ -225,8 +225,8 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		return Result{}, err
 	}
 	projection, err := workspace.BuildWithOptions(packages, workspace.BuildOptions{
-		ReassembleRootDependencies: version == "0.6.0" || version == "0.6.1" || version == workbenchversion.CurrentContractVersion,
-		ProductionTypeScript:       version == "0.6.0" || version == "0.6.1" || version == workbenchversion.CurrentContractVersion,
+		ReassembleRootDependencies: version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == workbenchversion.CurrentContractVersion,
+		ProductionTypeScript:       version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == workbenchversion.CurrentContractVersion,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("build workspace projection: %w", err)
@@ -345,7 +345,7 @@ func discoverResources(subject contract.Subject, source *discoverySource, versio
 }
 
 func isVersionedContract(version string) bool {
-	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == workbenchversion.CurrentContractVersion
+	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == workbenchversion.CurrentContractVersion
 }
 
 func reconcileDependencies(ctx context.Context, root, bun string) error {
@@ -584,7 +584,7 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	}
 	var declaration contract.Declaration
 	if filename == "PackageScopeRepository.pkl" {
-		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == workbenchversion.CurrentContractVersion {
+		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == workbenchversion.CurrentContractVersion {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclarationV030(source.ctx, encoded, schema)
 		} else {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclaration(source.ctx, encoded, schema)
@@ -756,6 +756,7 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 			{coordinate: "0.5.0", version: "0.5.0"},
 			{coordinate: "0.6.0", version: "0.6.0"},
 			{coordinate: "0.6.2", version: "0.6.1"},
+			{coordinate: "0.7.0", version: "0.7.0"},
 			{coordinate: workbenchversion.ReleaseCoordinate, version: workbenchversion.CurrentContractVersion},
 		} {
 			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate.coordinate + "/workbench@" + candidate.version + "#/" + filename
@@ -790,8 +791,8 @@ func EvaluateCurrentDeclaration(ctx context.Context, evaluator evaluate.Evaluato
 	if err != nil {
 		return contract.Declaration{}, err
 	}
-	if version != "0.6.0" && version != "0.6.1" && version != workbenchversion.CurrentContractVersion {
-		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires a 0.6.0, 0.6.1, or 0.7.0 declaration, got %s", version)
+	if version != "0.6.0" && version != "0.6.1" && version != "0.7.0" && version != workbenchversion.CurrentContractVersion {
+		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires a 0.6.0, 0.6.1, 0.7.0, or 0.8.0 declaration, got %s", version)
 	}
 	if filename == "PackageScopeRepository.pkl" {
 		return evaluator.EvaluatePackageScopeDeclarationV030(ctx, source, schema)
@@ -852,7 +853,7 @@ func observePackagesAt(ctx context.Context, resources []Resource, contractVersio
 }
 
 func locatePackage(resourceRoot string, resource Resource, name, contractVersion string, allowRoot bool) (string, error) {
-	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0" || contractVersion == "0.6.1" || contractVersion == workbenchversion.CurrentContractVersion) && resource.Shape.Kind == contract.PackageScopeShape {
+	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0" || contractVersion == "0.6.1" || contractVersion == "0.7.0" || contractVersion == workbenchversion.CurrentContractVersion) && resource.Shape.Kind == contract.PackageScopeShape {
 		return locatePackageScopePackage(resourceRoot, resource.Shape.Scope, name)
 	}
 	return locateLegacyPackage(resourceRoot, name, allowRoot)

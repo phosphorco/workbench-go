@@ -42,8 +42,11 @@ func run(arguments []string, output io.Writer) error {
 	flags.StringVar(&inputs.GoPatents, "go-patents", "", "Go patents notice")
 	flags.StringVar(&inputs.PklGoLicense, "pkl-go-license", "", "pkl-go license")
 	flags.StringVar(&inputs.PklGoNotice, "pkl-go-notice", "", "pkl-go notice")
+	flags.StringVar(&inputs.DoublestarLicense, "doublestar-license", "", "doublestar license")
 	flags.StringVar(&inputs.MsgpackLicense, "msgpack-license", "", "msgpack license")
+	flags.StringVar(&inputs.ShLicense, "sh-license", "", "mvdan.cc/sh license")
 	flags.StringVar(&inputs.TagparserLicense, "tagparser-license", "", "tagparser license")
+	flags.StringVar(&inputs.TomlLicense, "toml-license", "", "go-toml license")
 	flags.StringVar(&inputs.YAMLLicense, "yaml-license", "", "yaml.v3 license")
 	if err := flags.Parse(arguments); err != nil {
 		return err

@@ -22,6 +22,49 @@ Workbench then assembles the complete repository closure, checks out that work l
 
 The result feels like a purpose-built monorepo without requiring Phosphor’s source to live in one Git repository.
 
+## Read this system at the right level
+
+Workbench is one control system with three planes:
+
+```text
+authority plane                 knowledge plane                 execution plane
+
+Subject + declarations ──► observation + derived graph ──► bounded actions
+source + skills                plans + diagnostics             receipts + verification
+```
+
+The authority plane says what the environment means. The knowledge plane makes
+that meaning and the observed machine state legible. The execution plane changes
+state only through operations with explicit safety and recovery boundaries.
+Generated files, orientation, and local receipts are projections; they never
+become competing desired-state authorities.
+
+The released system already has the authority plane and the safety-critical
+reconciliation spine. The next design step is to make its internal observation,
+planning, provenance, ownership, and recovery model directly available to
+agents through a versioned control protocol.
+
+| Surface | Status |
+| --- | --- |
+| Binary `0.8.0`; Pkl resource contracts `0.8.0` | Released |
+| `setup`, `check`, commit saga, snapshots, prune, skills, and buildables described below | Released |
+| Structured status, Environment Index, explain/ownership queries, explicit reconciliation plans, receipts, and scoped verification | Proposed and sequenced |
+
+The design corpus deliberately separates released fact from future intent:
+
+- [Agent-native system design](docs/agent-system.md) defines the target system,
+  abstraction tower, agent loop, invariants, and accretion model.
+- [Agent control protocol](docs/agent-protocol.md) specifies the proposed command,
+  index, plan, diagnostic, budget, and receipt interfaces.
+- [Roadmap](ROADMAP.md) orders implementation slices and gives each one concrete
+  acceptance gates.
+
+An agent driving the released Workbench should begin with generated `AGENTS.md`,
+use `workbench setup` to establish convergence, edit only Git-owned source or
+typed declarations, use `workbench check` for the complete checkout-to-test
+loop, and use an exact `commit-plan.pkl` for delivery. The proposed control plane
+makes every stage individually inspectable without weakening that composition.
+
 ## Install the released Workbench with Mise
 
 Workbench releases contain a self-contained executable plus private, pinned Pkl
@@ -35,10 +78,11 @@ components does not relicense them as Workbench code.
 The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
 terms together and is included unchanged in every platform archive.
 
-Install the pinned `0.7.1` release:
+Install the pinned `0.8.0` release. Binary and resource-contract releases may
+have independent identities; this release publishes both at `0.8.0`.
 
 ```sh
-mise use -g github:phosphorco/workbench-go@0.7.1
+mise use -g github:phosphorco/workbench-go@0.8.0
 workbench version
 ```
 
@@ -110,7 +154,7 @@ Workbench-owned generated files inside a resource repository must likewise be ex
 `workbench-subject.pkl` is the local request for what should exist:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/WorkbenchSubject.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/WorkbenchSubject.pkl"
 
 workLine {
   branch = "cole/example-work"
@@ -205,7 +249,7 @@ A filesystem lock, watcher, or permission layer is outside this design.
 Each participating resource contains a root `workbench.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/PackageScopeRepository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/PackageScopeRepository.pkl"
 
 scope = "@workbench-entry"
 
@@ -284,7 +328,7 @@ A Repository-shaped `workbench.pkl` amends the released `Repository.pkl`
 contract and does not author a name, scope, or generic identity:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/Repository.pkl"
 
 includes {}
 packages {}
@@ -372,10 +416,11 @@ exactly proven legacy receipt may be retired. Malformed, ambiguous, foreign, or
 disagreeing state causes a zero-change refusal, leaving a reachable manual
 repair path instead of guessing ownership.
 
-The public reconciliation workflow remains centered on `setup`. Observation,
-planning, and comparison are internal machinery.
-
-This gives Workbench Terraform-like desired state without requiring a separate public plan-and-apply lifecycle.
+The released reconciliation workflow remains centered on `setup`. Workbench
+0.7 additionally exposes portable task-plan operations through `workbench plan`;
+those task graphs and their evidence remain disposable and can never override
+the Subject. The proposed environment reconciliation plans have a separate
+semantic contract, as described in the [agent control protocol](docs/agent-protocol.md).
 
 `workbench check` is the one-command checkout-to-test loop. It runs setup first,
 prints the setup result as its own outcome, then invokes the generated root
@@ -562,10 +607,10 @@ The final Workbench implementation absorbs repository observation, planning, and
 ## Buildables make repository-owned tools explicit
 
 `PackageScopeRepository.pkl` and `Repository.pkl` expose the same `buildables`
-mapping. New declarations can amend the `0.7.0` contract, for example:
-`package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl`.
-Binary release and Pkl package versions are independent coordinates: binary
-`0.7.1` uses the `0.7.0` contract. Preserve existing declarations' supported contract versions;
+mapping. New declarations can amend the `0.8.0` contract, for example:
+`package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/Repository.pkl`.
+Binary release and Pkl package versions are independent coordinates. Preserve
+existing declarations' supported contract versions;
 installing a new binary does not require rewriting those inputs.
 
 A buildable declaration owns the facts Workbench cannot infer: producer input
@@ -749,7 +794,7 @@ The constrained `AgentInstructions.pkl` contract governs generated instructions.
 The context template tracks `AGENTS.pkl`:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/AgentInstructions.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/AgentInstructions.pkl"
 
 prose = """
 # Agent instructions
@@ -791,7 +836,7 @@ Workbench must make it difficult for agents to lose work, commit unrelated edits
 `commit-plan.pkl` describes one **Workbench Change Set**:
 
 ```pkl
-amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/WorkbenchCommitPlan.pkl"
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/WorkbenchCommitPlan.pkl"
 
 changeId = "fixture-cross-repository"
 summary = "Exercise a cross-repository fixture change"
@@ -898,6 +943,12 @@ Ordinary setup never trades source preservation for tidiness.
 
 10. **Cross-repository work is linked and recoverable, never transactionally atomic.**
 
+These are domain laws: they define the meaning of repositories, branch state,
+generated outputs, and delivery. The proposed control plane adds complementary
+[agent-interface laws](docs/agent-system.md#agent-interface-laws) for provenance,
+freshness, structured outcomes, capability grants, progressive disclosure,
+resource budgets, and receipts. It does not replace or weaken these ten.
+
 ## Failure is safer than guessing
 
 Setup stops when it cannot preserve the laws. Examples include:
@@ -990,6 +1041,11 @@ frontmatter law, so 0.5 retains an explicit source-anchored refusal oracle
 rather than rewriting or blessing them. Contract, snapshot, and declaration
 compatibility remain independently covered; current positive setup proof uses
 current resource declarations.
+
+The `0.7.0` package retains the existing package metadata, TypeScript
+projection, external dependency reassembly, and declared buildable contracts,
+and adds the Plan contract. Binary `0.7.1` is a planning-skill patch on that
+contract line.
 
 Adopting BasinDB and `phosphorco/community-packages` is a separate future
 promise. Their Workbench declarations, repository split, migration, and history

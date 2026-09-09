@@ -20,7 +20,7 @@ func TestRunWritesNamedArchiveAndExactChecksum(t *testing.T) {
 	}
 	outputDirectory := filepath.Join(root, "out")
 	arguments := []string{
-		"--version", "0.7.1",
+		"--version", "0.8.0",
 		"--revision", "0123456789abcdef0123456789abcdef01234567",
 		"--goos", "linux", "--goarch", "amd64", "--output", outputDirectory,
 		"--workbench", file("workbench"), "--pkl", file("pkl"), "--bun", file("bun"),
@@ -30,14 +30,16 @@ func TestRunWritesNamedArchiveAndExactChecksum(t *testing.T) {
 		"--pkl-third-party-notice", file("pkl-third-party"), "--bun-license", file("bun-license"),
 		"--go-license", file("go-license"), "--go-patents", file("go-patents"),
 		"--pkl-go-license", file("pkl-go-license"), "--pkl-go-notice", file("pkl-go-notice"),
+		"--doublestar-license", file("doublestar-license"),
 		"--msgpack-license", file("msgpack-license"), "--tagparser-license", file("tagparser-license"),
+		"--sh-license", file("sh-license"), "--toml-license", file("toml-license"),
 		"--yaml-license", file("yaml-license"),
 	}
 	var output bytes.Buffer
 	if err := run(arguments, &output); err != nil {
 		t.Fatalf("run(): %v", err)
 	}
-	archive := filepath.Join(outputDirectory, "workbench-0.7.1-linux-x64.tar.gz")
+	archive := filepath.Join(outputDirectory, "workbench-0.8.0-linux-x64.tar.gz")
 	if output.String() != archive+"\n" {
 		t.Fatalf("output = %q, want archive path", output.String())
 	}
@@ -76,7 +78,9 @@ func TestRunRequiresThePinnedRuntimeLock(t *testing.T) {
 		"--pkl-third-party-notice", file("pkl-third-party"), "--bun-license", file("bun-license"),
 		"--go-license", file("go-license"), "--go-patents", file("go-patents"),
 		"--pkl-go-license", file("pkl-go-license"), "--pkl-go-notice", file("pkl-go-notice"),
+		"--doublestar-license", file("doublestar-license"),
 		"--msgpack-license", file("msgpack-license"), "--tagparser-license", file("tagparser-license"),
+		"--sh-license", file("sh-license"), "--toml-license", file("toml-license"),
 		"--yaml-license", file("yaml-license"),
 	}
 	if err := run(arguments, &bytes.Buffer{}); err == nil {

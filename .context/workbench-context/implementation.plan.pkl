@@ -1,0 +1,76 @@
+amends "workbench:plan"
+meta { title = "Implement Workbench context"; goal = "Deliver the accepted context ADR through fast Go hooks, extensible contributors, isolated audiences, bounded resources, and useful explanations." }
+local contract = new Action {
+  id = "contract"; owner = "contract-worker"
+  outcome = "Small reviewed value contracts and package API agreement cover the accepted context lifecycle."
+  grant { "internal/contextapi/**"; ".context/workbench-context/contracts.md" }
+  oracle = module.adjudicated("Concrete ownership, validity, budgets, exact receipts, bounded explanations, no implementation-owned mega-interface; Go contracts compile.", "driver")
+}
+local harness = new Action {
+  id = "harness-probe"; owner = "harness-worker"
+  outcome = "Establish actual installed Claude/Codex hooks, identity, output admission, and a reproducible real-harness test route."
+  grant { ".context/workbench-context/harness-evidence.md" }
+  oracle = module.adjudicated("Primary evidence identifies supported inputs and outputs and proves or explicitly exposes each capability gap; no guessed harness protocol.", "driver")
+}
+local config = new Action {
+  id = "activation"; owner = "config-worker"; outcome = "Explicit directory activation with home constraints, nested scopes, bounded lookup and fresh negative results."
+  grant { "internal/contextconfig/**" }; needs { module.produced(contract) }
+  oracle = module.mechanical("go test ./internal/contextconfig")
+}
+local engine = new Action {
+  id = "delivery"; owner = "engine-worker"; outcome = "Deterministic isolated profile/queue/offer/confirmation state with stale input handling and bounded lifetimes."
+  grant { "internal/contextengine/**" }; needs { module.produced(contract) }
+  oracle = module.mechanical("go test -race ./internal/contextengine")
+}
+local historyStore = new Action {
+  id = "explanations"; owner = "trace-worker"; outcome = "Numeric bounded rotating cache answers what/when/why and distinguishes unavailable evidence."
+  grant { "internal/contexttrace/**" }
+  oracle = module.mechanical("go test -race ./internal/contexttrace")
+}
+local providers = new Action {
+  id = "contributors"; owner = "provider-worker"; outcome = "Language-neutral bounded JSON-RPC contributors, optional profile facts, builtin project file guidance, joined cleanup."
+  grant { "internal/contextprovider/**" }; needs { module.produced(contract) }
+  oracle = module.mechanical("go test -race ./internal/contextprovider")
+}
+local adapter = new Action {
+  id = "adapters"; owner = "harness-worker"; outcome = "Go Claude/Codex observation normalization and exact provider envelopes follow verified capabilities."
+  grant { "internal/contexthook/**" }; needs { module.produced(contract); module.verified(harness) }
+  oracle = module.mechanical("go test ./internal/contexthook")
+}
+local runtimeContract = new Action {
+  id = "runtime-contract"; owner = "runtime-worker"; outcome = "Concrete runtime/client API and owned lifetime contract let CLI implementation proceed independently."
+  grant { "internal/contextdaemon/api.go"; ".context/workbench-context/runtime-contract.md" }
+  needs { module.produced(contract) }
+  oracle = module.adjudicated("Typed observation, exact confirmation, bounded inspection, startup and shutdown API is published with explicit ownership and actual peer signatures.", "driver")
+}
+local runtime = new Action {
+  id = "runtime"; owner = "runtime-worker"; outcome = "Per-user runtime composes activation, profiles, providers, delivery and traces with bounded process/memory lifetimes."
+  grant { "internal/contextdaemon/**"; ".context/workbench-context/runtime-contract.md" }
+  needs { module.produced(runtimeContract); module.produced(config); module.produced(engine); module.produced(historyStore) }
+  oracle = module.mechanical("go test -race ./internal/contextdaemon")
+}
+local cli = new Action {
+  id = "cli"; owner = "cli-worker"; outcome = "One global setup, inactive Go hook path, enabled automatic delivery, and bounded human/JSON inspection."
+  grant { "cmd/workbench/context*.go"; "cmd/workbench/main.go" }
+  needs { module.produced(runtimeContract); module.produced(adapter) }
+  oracle = module.mechanical("go test ./cmd/workbench")
+}
+local acceptance = new Action {
+  id = "acceptance"; owner = "acceptance-worker"; outcome = "Real subprocess end-to-end behavior, resource benchmarks, and useful documentation demonstrate the complete feature."
+  grant { "acceptance/context*"; "docs/context.md"; "examples/context/**" }
+  needs { module.produced(cli) }
+  oracle = module.mechanical("go test ./acceptance -run Context -count=1")
+}
+local review = new Guard {
+  id = "ownership-review"; owner = "driver"; outcome = "Interrogate implementation against Rust-inspired ownership and data-oriented Go architecture."
+  observes { "internal/context*/**"; "cmd/workbench/context*.go" }
+  needs { module.produced(acceptance) }
+  oracle = module.adjudicated("Explicit borrowing/transfer, dense bounded data, single mutation owners, no stale receipts or scope leaks, joined lifetimes, no unbounded query/queue/provider work; independently reproduce counterexamples.", "driver")
+}
+local completion = new Guard {
+  id = "completion"; owner = "driver"; outcome = "All ADR scenarios including real harness admission and measured resource limits are proven, with no hidden incomplete obligations."
+  observes { "docs/adr/2026-09-wokbench-context.md"; ".context/workbench-context/**"; "internal/context*/**"; "acceptance/context*" }
+  needs { module.verified(contract); module.verified(config); module.verified(engine); module.verified(historyStore); module.verified(providers); module.verified(adapter); module.verified(runtimeContract); module.verified(runtime); module.verified(cli); module.verified(acceptance); module.verified(review) }
+  oracle = module.adjudicated("Full Go tests, vet/race, real Claude/Codex admission, explicit latency/process-tree/disk/query budgets, unprompted relevance and missing-context diagnosis; no scope reduction without Cole.", "driver")
+}
+nodes { contract; harness; config; engine; historyStore; providers; adapter; runtimeContract; runtime; cli; acceptance; review; completion }

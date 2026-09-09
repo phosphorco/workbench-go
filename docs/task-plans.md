@@ -204,8 +204,8 @@ the legacy TypeScript `plan.json`/`index.json`/`diagram.mmd` web bundle. Review
 original TypeScript definition and unmixed ledger. No `workbench plan serve`,
 `watch`, `open-questions`, or automatic web adapter is implied.
 
-The `0.7.1` executable uses the existing Pkl package
-`package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Plan.pkl`.
+The `0.8.0` executable uses the `0.8.0` Pkl package
+`package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/Plan.pkl`.
 Use the release URI to inspect the contract outside this evaluator. Runnable
 plans amend `workbench:plan`; release URLs do not enable network imports.
 

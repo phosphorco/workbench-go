@@ -1,13 +1,13 @@
-name: Release 0.7.1
+name: Release 0.8.0
 
 on:
   push:
-    tags: ["0.7.1"]
+    tags: ["0.8.0"]
   workflow_dispatch:
 
 env:
-  WORKBENCH_VERSION: 0.7.1
-  WORKBENCH_CONTRACT_VERSION: 0.7.0
+  WORKBENCH_VERSION: 0.8.0
+  WORKBENCH_CONTRACT_VERSION: 0.8.0
 
 permissions:
   contents: read
@@ -29,10 +29,19 @@ jobs:
         with:
           version: 2026.8.12
           cache: false
+      - name: Acquire the runtime-lock Pkl executable
+        run: |
+          release/acquire-pkl.sh \
+            --lock release/runtime-lock.json \
+            --platform linux-x64 \
+            --output "$RUNNER_TEMP/pkl"
       - name: Verify candidate, non-skill compatibility, and historical skill refusals
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          test -n "$PKL_EXECUTABLE"
+          case "$PKL_EXECUTABLE" in /*) ;; *) echo "PKL_EXECUTABLE is not absolute: $PKL_EXECUTABLE" >&2; exit 1 ;; esac
+          test -x "$PKL_EXECUTABLE"
           go test ./...
           go vet ./...
 
@@ -92,9 +101,11 @@ jobs:
             curl --fail --location --silent --show-error "$url" --output "$output"
             printf '%s  %s\n' "$digest" "$output" | shasum -a 256 --check
           }
-          pkl_url=$(jq -r --arg platform "$PLATFORM" '.runtimes.pkl.artifacts[$platform].url' release/runtime-lock.json)
-          pkl_sha=$(jq -r --arg platform "$PLATFORM" '.runtimes.pkl.artifacts[$platform].sha256' release/runtime-lock.json)
-          fetch "$pkl_url" "$pkl_sha" candidate/runtime/pkl
+          release/acquire-pkl.sh \
+            --lock release/runtime-lock.json \
+            --platform "$PLATFORM" \
+            --output candidate/runtime/pkl \
+            --env-file /dev/null
           bun_url=$(jq -r --arg platform "$PLATFORM" '.runtimes.bun.artifacts[$platform].url' release/runtime-lock.json)
           bun_sha=$(jq -r --arg platform "$PLATFORM" '.runtimes.bun.artifacts[$platform].sha256' release/runtime-lock.json)
           bun_member=$(jq -r --arg platform "$PLATFORM" '.runtimes.bun.artifacts[$platform].member' release/runtime-lock.json)
@@ -119,7 +130,7 @@ jobs:
           set -euo pipefail
           test "$(go version -m candidate/workbench | awk 'NR == 1 { sub(/^go/, "", $2); print $2 }')" = "$(jq -r '.buildDependencies.go.version' release/runtime-lock.json)"
           go version -m candidate/workbench | awk '$1 == "dep" { print $2 " " $3 }' | sort > candidate/linked-modules.txt
-          jq -r '.buildDependencies | to_entries[] | select(.key != "go") | if .key == "pkl-go" then "github.com/apple/pkl-go v" + .value.version elif .key == "msgpack" then "github.com/vmihailenco/msgpack/v5 v" + .value.version elif .key == "tagparser" then "github.com/vmihailenco/tagparser/v2 v" + .value.version elif .key == "yaml" then "gopkg.in/yaml.v3 v" + .value.version else error("unknown linked module " + .key) end' \
+          jq -r '.buildDependencies | to_entries[] | select(.key != "go") | if .key == "doublestar" then "github.com/bmatcuk/doublestar/v4 v" + .value.version elif .key == "pkl-go" then "github.com/apple/pkl-go v" + .value.version elif .key == "toml" then "github.com/pelletier/go-toml/v2 v" + .value.version elif .key == "msgpack" then "github.com/vmihailenco/msgpack/v5 v" + .value.version elif .key == "sh" then "mvdan.cc/sh/v3 v" + .value.version elif .key == "tagparser" then "github.com/vmihailenco/tagparser/v2 v" + .value.version elif .key == "yaml" then "gopkg.in/yaml.v3 v" + .value.version else error("unknown linked module " + .key) end' \
             release/runtime-lock.json | sort > candidate/inventoried-modules.txt
           diff -u candidate/inventoried-modules.txt candidate/linked-modules.txt
       - name: Package deterministic archive
@@ -144,8 +155,11 @@ jobs:
             --go-patents candidate/licenses/go/PATENTS \
             --pkl-go-license candidate/licenses/pkl-go/LICENSE.txt \
             --pkl-go-notice candidate/licenses/pkl-go/NOTICE.txt \
+            --doublestar-license candidate/licenses/doublestar/LICENSE \
             --msgpack-license candidate/licenses/msgpack/LICENSE \
+            --sh-license candidate/licenses/sh/LICENSE \
             --tagparser-license candidate/licenses/tagparser/LICENSE \
+            --toml-license candidate/licenses/toml/LICENSE \
             --yaml-license candidate/licenses/yaml/LICENSE
       - name: Prove native archive behavior
         run: |
@@ -153,7 +167,7 @@ jobs:
           archive=$(find candidate/out -name '*.tar.gz' -type f)
           mkdir candidate/installed
           tar -xzf "$archive" --strip-components=1 -C candidate/installed
-          test "$(candidate/installed/bin/workbench version)" = "workbench 0.7.1 (${{ github.sha }})"
+          test "$(candidate/installed/bin/workbench version)" = "workbench 0.8.0 (${{ github.sha }})"
           candidate/installed/libexec/workbench/pkl --version | grep -F '0.32.1'
           test "$(candidate/installed/libexec/workbench/bun --version)" = '1.3.14'
           mkdir -p candidate/catalog/.agents/skills
@@ -165,6 +179,477 @@ jobs:
           cmp candidate/plan-schema.pkl candidate/installed/share/workbench/pkl/Plan.pkl
           (cd candidate/catalog && ../installed/bin/workbench skills check)
           bash acceptance/planner_release.sh "$PWD/candidate/installed/bin/workbench" "$PWD/candidate/planner"
+      - name: Prove installed context activation, no-source behavior, and cleanup
+        run: |
+          set -euo pipefail
+          smoke="$RUNNER_TEMP/workbench-context-smoke"
+          no_source="$smoke/no-source"
+          activation="$smoke/activation"
+          home="$smoke/home"
+          runtime_dir="$smoke/runtime"
+          socket="$runtime_dir/context.sock"
+          start_lock="$runtime_dir/context.start.lock"
+          server_lock="$runtime_dir/context.server.lock"
+          cache_dir="$smoke/cache"
+          home_config="$home/workbench-context.pkl"
+          mkdir -p "$no_source" "$activation" "$home"
+          export HOME="$smoke/home"
+          common=(--home-config "$home_config" --runtime-dir "$runtime_dir" --socket "$socket" --start-lock "$start_lock" --server-lock "$server_lock" --cache-dir "$cache_dir")
+          expected_daemon_args="context serve --home-config $home_config --runtime-dir $runtime_dir --socket $socket --start-lock $start_lock --server-lock $server_lock --cache-dir $cache_dir"
+          diagnostic_dir="$RUNNER_TEMP/workbench-context-smoke-diagnostics"
+          failure_report="$diagnostic_dir/failure.log"
+          mkdir -p "$diagnostic_dir"
+          current_stage="setup"
+          current_command="initialize smoke fixtures"
+          last_stdout=""
+          last_stderr=""
+          last_hook_status="not-a-hook"
+          activation_status_stdout="$diagnostic_dir/activation-status.stdout"
+          activation_status_stderr="$diagnostic_dir/activation-status.stderr"
+          activation_status_code="not-run"
+          private_pkl="$PWD/candidate/installed/libexec/workbench/pkl"
+          python3_path="$(command -v python3 || true)"
+          probe_stage="not-run"
+          probe_command="not-run"
+          probe_time_prefix=()
+          if test "${{ matrix.goos }}" = darwin && test -x /usr/bin/time; then
+            probe_time_prefix=(/usr/bin/time -l)
+          fi
+          stdout_pipe="$smoke/.diagnostic.stdout.pipe"
+          stderr_pipe="$smoke/.diagnostic.stderr.pipe"
+          status_stdout_pipe="$smoke/.diagnostic.status.stdout.pipe"
+          status_stderr_pipe="$smoke/.diagnostic.status.stderr.pipe"
+          mkfifo "$stdout_pipe" "$stderr_pipe" "$status_stdout_pipe" "$status_stderr_pipe"
+          bounded_capture() {
+            head -c 65536
+            cat > /dev/null
+          }
+          run_bounded() {
+            local stdout="$1"
+            local stderr="$2"
+            local stdout_fifo="$3"
+            local stderr_fifo="$4"
+            shift 4
+            bounded_capture < "$stdout_fifo" > "$stdout" &
+            local stdout_pid=$!
+            bounded_capture < "$stderr_fifo" > "$stderr" &
+            local stderr_pid=$!
+            "$@" > "$stdout_fifo" 2> "$stderr_fifo"
+            local command_status=$?
+            wait "$stdout_pid" || true
+            wait "$stderr_pid" || true
+            return "$command_status"
+          }
+          run_supervised_probe() {
+            local name="$1"
+            local stdout="$2"
+            local stderr="$3"
+            local status_file="$4"
+            shift 4
+            probe_stage="$name worker probe"
+            probe_command="$* </dev/null (bounded supervisor, 2s)"
+            if test -z "$python3_path"; then
+              printf 'status=not-run\nreason=python3 unavailable\n' > "$status_file"
+              return 0
+            fi
+            set +e
+            "$python3_path" - "$stdout" "$stderr" "$status_file" 2 "$@" > /dev/null 2> "$diagnostic_dir/$name.supervisor.stderr" <<'PY'
+          import os
+          import selectors
+          import signal
+          import subprocess
+          import sys
+          import time
+
+          stdout_path, stderr_path, status_path, timeout_seconds, *command = sys.argv[1:]
+          limit = 65536
+          counts = [0, 0]
+          kept = [0, 0]
+          started = time.monotonic()
+          deadline = started + float(timeout_seconds)
+          hard_deadline = deadline + 1.0
+          timed_out = False
+          drain_timed_out = False
+          group_terminated = False
+          leader_unjoined = False
+          selector = selectors.DefaultSelector()
+          outputs = []
+
+          def terminate_group(force=False):
+              global group_terminated
+              try:
+                  os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+                  group_terminated = True
+              except ProcessLookupError:
+                  group_terminated = True
+
+          try:
+              process = subprocess.Popen(
+                  command,
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  start_new_session=True,
+              )
+          except OSError as error:
+              with open(status_path, "w", encoding="utf-8") as status:
+                  status.write("status=spawn-error\nerror=%s\n" % error)
+              raise SystemExit(127)
+
+          for index, (pipe, output_path) in enumerate(((process.stdout, stdout_path), (process.stderr, stderr_path))):
+              os.set_blocking(pipe.fileno(), False)
+              output = open(output_path, "wb")
+              outputs.append(output)
+              selector.register(pipe, selectors.EVENT_READ, index)
+
+          while True:
+              now = time.monotonic()
+              return_code = process.poll()
+              if return_code is None and now >= deadline:
+                  timed_out = True
+                  terminate_group()
+              elif return_code is not None and not group_terminated:
+                  terminate_group()
+              if now >= hard_deadline:
+                  if return_code is None:
+                      terminate_group(force=True)
+                      try:
+                          return_code = process.wait(timeout=0.5)
+                      except subprocess.TimeoutExpired:
+                          leader_unjoined = True
+                  if selector.get_map():
+                      drain_timed_out = True
+                  break
+              if return_code is not None and not selector.get_map():
+                  break
+              for key, _ in selector.select(timeout=min(0.05, hard_deadline - now)):
+                  pipe = key.fileobj
+                  index = key.data
+                  try:
+                      chunk = pipe.read(8192)
+                  except BlockingIOError:
+                      continue
+                  if not chunk:
+                      selector.unregister(pipe)
+                      pipe.close()
+                      continue
+                  counts[index] += len(chunk)
+                  if kept[index] < limit:
+                      portion = chunk[:limit - kept[index]]
+                      outputs[index].write(portion)
+                      kept[index] += len(portion)
+
+          for pipe in list(selector.get_map().values()):
+              selector.unregister(pipe.fileobj)
+              pipe.fileobj.close()
+          for output in outputs:
+              output.close()
+          if return_code is None:
+              return_code = process.poll()
+          elapsed_ms = int((time.monotonic() - started) * 1000)
+          with open(status_path, "w", encoding="utf-8") as status:
+              status.write("status=timeout\n" if timed_out else "status=complete\n")
+              status.write("exit_status=%s\n" % (return_code if return_code is not None else "unknown"))
+              status.write("elapsed_ms=%s\n" % elapsed_ms)
+              status.write("stdout_bytes=%s\n" % counts[0])
+              status.write("stderr_bytes=%s\n" % counts[1])
+              status.write("group_terminated=%s\n" % str(group_terminated).lower())
+              status.write("leader_joined=%s\n" % str(not leader_unjoined).lower())
+              status.write("cleanup_failure=%s\n" % str(leader_unjoined or drain_timed_out).lower())
+              status.write("drain_timeout=%s\n" % str(drain_timed_out).lower())
+          if leader_unjoined or drain_timed_out or return_code is None:
+              raise SystemExit(125)
+          if timed_out:
+              raise SystemExit(124)
+          raise SystemExit(return_code if return_code >= 0 else 128 - return_code)
+          PY
+            local probe_status=$?
+            set -e
+            printf 'supervisor_exit_status=%s\n' "$probe_status" >> "$status_file"
+            return "$probe_status"
+          }
+          probe_stream_summary() {
+            local name="$1"
+            local stdout="$2"
+            local stderr="$3"
+            local status_file="$4"
+            printf '%s status:\n' "$name"
+            if test -f "$status_file"; then head -c 4096 "$status_file"; else printf '<none>\n'; fi
+            printf '%s stdout_bytes=' "$name"
+            if test -f "$stdout"; then wc -c < "$stdout"; else printf '0\n'; fi
+            printf '%s stdout_sha256=' "$name"
+            if test -f "$stdout"; then shasum -a 256 "$stdout" | awk '{print $1}'; else printf 'none\n'; fi
+            printf '%s stdout_hex_prefix=' "$name"
+            if test -f "$stdout"; then od -An -tx1 -N64 "$stdout" | tr -d '\n '; printf '\n'; else printf 'none\n'; fi
+            printf '%s stderr (first 65536 bytes):\n' "$name"
+            if test -f "$stderr"; then head -c 65536 "$stderr"; else printf '<none>\n'; fi
+          }
+          run_worker_diagnostics() {
+            if test -z "$python3_path"; then
+              printf 'worker diagnostics not run: python3 unavailable\n' >&2
+              return 0
+            fi
+            set +e
+            run_supervised_probe "pkl-control" "$diagnostic_dir/pkl-control.stdout" "$diagnostic_dir/pkl-control.stderr" "$diagnostic_dir/pkl-control.status" "${probe_time_prefix[@]}" "$private_pkl" server
+            pkl_probe_status=$?
+            run_supervised_probe "worker-128m" "$diagnostic_dir/worker-128m.stdout" "$diagnostic_dir/worker-128m.stderr" "$diagnostic_dir/worker-128m.status" "${probe_time_prefix[@]}" candidate/installed/bin/workbench context worker --pkl "$private_pkl" --max-data-bytes 134217728 server
+            worker_128_status=$?
+            if test "$worker_128_status" -ne 0; then
+              run_supervised_probe "worker-256m" "$diagnostic_dir/worker-256m.stdout" "$diagnostic_dir/worker-256m.stderr" "$diagnostic_dir/worker-256m.status" "${probe_time_prefix[@]}" candidate/installed/bin/workbench context worker --pkl "$private_pkl" --max-data-bytes 268435456 server
+              run_supervised_probe "worker-512m" "$diagnostic_dir/worker-512m.stdout" "$diagnostic_dir/worker-512m.stderr" "$diagnostic_dir/worker-512m.status" "${probe_time_prefix[@]}" candidate/installed/bin/workbench context worker --pkl "$private_pkl" --max-data-bytes 536870912 server
+            fi
+            set -e
+          }
+          check() {
+            current_stage="$1"
+            current_command="$2"
+            shift 2
+            "$@"
+          }
+          run_hook() {
+            local label="$1"
+            local stdout="$2"
+            local stderr="$3"
+            shift 3
+            current_stage="$label"
+            current_command="$*"
+            last_stdout="$stdout"
+            last_stderr="$stderr"
+            set +e
+            run_bounded "$stdout" "$stderr" "$stdout_pipe" "$stderr_pipe" "$@"
+            last_hook_status=$?
+            set -e
+            return "$last_hook_status"
+          }
+          report_failure() {
+            local exit_status="$1"
+            run_worker_diagnostics || true
+            if test -f "$activation/workbench-context.pkl"; then
+              set +e
+              run_bounded "$activation_status_stdout" "$activation_status_stderr" "$status_stdout_pipe" "$status_stderr_pipe" candidate/installed/bin/workbench context status --path "$activation" --json "${common[@]}" --whole-hook-deadline 2s
+              activation_status_code=$?
+              set -e
+            fi
+            {
+              printf 'platform=%s\n' "${{ matrix.platform }}"
+              printf 'stage=%s\n' "$current_stage"
+              printf 'command=%s\n' "$current_command"
+              printf 'exit_status=%s\n' "$exit_status"
+              printf 'last_hook_status=%s\n' "$last_hook_status"
+              printf 'activation_status_code=%s\n' "$activation_status_code"
+              printf 'fixture_status:\n'
+              for path in "$home_config" "$runtime_dir" "$socket" "$start_lock" "$server_lock" "$cache_dir" "$no_source/workbench-context.pkl" "$no_source/.workbench" "$activation/workbench-context.pkl" "$activation/ai-context.md" "$activation/README.md"; do
+                if test -e "$path"; then
+                  printf 'present %s\n' "$path"
+                else
+                  printf 'absent %s\n' "$path"
+                fi
+              done
+              printf 'stdout (first 80 lines):\n'
+              if test -n "$last_stdout" && test -f "$last_stdout"; then
+                sed -n '1,80p' "$last_stdout"
+              else
+                printf '<none>\n'
+              fi
+              printf 'stderr (first 80 lines):\n'
+              if test -n "$last_stderr" && test -f "$last_stderr"; then
+                sed -n '1,80p' "$last_stderr"
+              else
+                printf '<none>\n'
+              fi
+              printf 'activation status stdout (first 65536 bytes):\n'
+              if test -f "$activation_status_stdout"; then
+                head -c 65536 "$activation_status_stdout"
+              else
+                printf '<none>\n'
+              fi
+              printf 'activation status stderr (first 65536 bytes):\n'
+              if test -f "$activation_status_stderr"; then
+                head -c 65536 "$activation_status_stderr"
+              else
+                printf '<none>\n'
+              fi
+              printf 'worker diagnostic private Pkl=%s python3=%s time=%s\n' "$private_pkl" "${python3_path:-unavailable}" "${probe_time_prefix[*]:-none}"
+              probe_stream_summary "pkl-control" "$diagnostic_dir/pkl-control.stdout" "$diagnostic_dir/pkl-control.stderr" "$diagnostic_dir/pkl-control.status"
+              probe_stream_summary "worker-128m" "$diagnostic_dir/worker-128m.stdout" "$diagnostic_dir/worker-128m.stderr" "$diagnostic_dir/worker-128m.status"
+              if test -f "$diagnostic_dir/worker-256m.status"; then
+                probe_stream_summary "worker-256m" "$diagnostic_dir/worker-256m.stdout" "$diagnostic_dir/worker-256m.stderr" "$diagnostic_dir/worker-256m.status"
+              fi
+              if test -f "$diagnostic_dir/worker-512m.status"; then
+                probe_stream_summary "worker-512m" "$diagnostic_dir/worker-512m.stdout" "$diagnostic_dir/worker-512m.stderr" "$diagnostic_dir/worker-512m.status"
+              fi
+            } | head -c 262144 > "$failure_report" || true
+            printf 'installed context smoke failed; bounded diagnostics: %s\n' "$failure_report" >&2
+            head -c 262144 "$failure_report" >&2
+          }
+          daemon_pid=""
+          daemon_validated=false
+          daemon_children=()
+          collect_descendants() {
+            local parent="$1"
+            local child
+            while read -r child; do
+              test -n "$child" || continue
+              daemon_children+=("$child")
+              collect_descendants "$child"
+            done < <(pgrep -P "$parent" || true)
+          }
+          validate_owned_daemon() {
+            local pid="$1"
+            daemon_validated=false
+            daemon_command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+            case "$daemon_command" in
+              *" $expected_daemon_args") daemon_validated=true; return 0 ;;
+              *)
+                echo "refusing to clean unexpected installed context socket owner: pid=$pid command=$daemon_command" >&2
+                return 1
+                ;;
+            esac
+          }
+          discover_owned_daemon() {
+            if test -n "$daemon_pid" && test "$daemon_validated" = true; then return 0; fi
+            if ! test -e "$socket"; then
+              daemon_pid=""
+              daemon_validated=false
+              return 0
+            fi
+            if ! command -v lsof >/dev/null; then
+              echo "cannot discover installed context daemon: lsof unavailable" >&2
+              return 1
+            fi
+            local daemon_pids
+            local lsof_status=0
+            daemon_pids=$(lsof -t "$socket" 2>/dev/null) || lsof_status=$?
+            if test "$lsof_status" -ne 0 && test "$lsof_status" -ne 1; then
+              echo "cannot discover installed context daemon: lsof status=$lsof_status" >&2
+              return 1
+            fi
+            local daemon_pid_count
+            daemon_pid_count=$(printf '%s\n' "$daemon_pids" | sort -u | awk 'NF { count++ } END { print count + 0 }')
+            if test "$daemon_pid_count" -eq 0; then
+              rm -f "$socket"
+              test ! -e "$socket"
+              return 0
+            fi
+            if test "$daemon_pid_count" -ne 1; then
+              echo "refusing to clean ambiguous installed context socket owners: socket=$socket pids=$(printf '%s' "$daemon_pids" | tr '\n' ' ')" >&2
+              return 1
+            fi
+            local candidate_pid
+            local validation_status=0
+            candidate_pid=$(printf '%s\n' "$daemon_pids" | sort -u)
+            validate_owned_daemon "$candidate_pid" || validation_status=$?
+            if test "$validation_status" -ne 0; then
+              daemon_pid=""
+              return "$validation_status"
+            fi
+            daemon_pid="$candidate_pid"
+            daemon_children=()
+            collect_descendants "$daemon_pid"
+          }
+          cleanup_runtime() {
+            discover_owned_daemon || return $?
+            if test -z "$daemon_pid"; then return 0; fi
+            local validation_status=0
+            validate_owned_daemon "$daemon_pid" || validation_status=$?
+            if test "$validation_status" -ne 0; then
+              daemon_pid=""
+              return "$validation_status"
+            fi
+            kill -TERM "$daemon_pid" 2>/dev/null || true
+            for _ in $(seq 1 50); do
+              if ! kill -0 "$daemon_pid" 2>/dev/null; then break; fi
+              sleep 0.1
+            done
+            if kill -0 "$daemon_pid" 2>/dev/null; then
+              echo "installed context daemon did not exit: pid=$daemon_pid" >&2
+              return 1
+            fi
+            if test "${daemon_children[0]+present}" = present; then
+              for child in "${daemon_children[@]}"; do
+                for _ in $(seq 1 50); do
+                  if ! kill -0 "$child" 2>/dev/null; then break; fi
+                  sleep 0.1
+                done
+                if kill -0 "$child" 2>/dev/null; then
+                  echo "installed context daemon child did not exit: pid=$child" >&2
+                  return 1
+                fi
+              done
+            fi
+            test ! -e "$socket"
+            daemon_pid=""
+            daemon_validated=false
+          }
+          cleanup() {
+            status=$?
+            if test "$status" -ne 0; then report_failure "$status" || true; fi
+            cleanup_status=0
+            cleanup_runtime || cleanup_status=$?
+            rm -rf "$smoke"
+            if test "$status" -eq 0 && test "$cleanup_status" -ne 0; then status="$cleanup_status"; fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          no_source_payload="$smoke/no-source.json"
+          cat > "$no_source_payload" <<EOF
+          {"session_id":"native-no-source-session","transcript_path":"$no_source/does-not-exist.jsonl","cwd":"$no_source","prompt_id":"native-no-source-turn","hook_event_name":"PostToolBatch","tool_calls":[{"tool_name":"Read","tool_use_id":"native-no-source-turn","tool_input":{"file_path":"$no_source/README.md"},"tool_response":"fixture README"}]}
+          EOF
+          no_source_stdout="$smoke/no-source.stdout"
+          no_source_stderr="$smoke/no-source.stderr"
+          run_hook "no-source hook" "$no_source_stdout" "$no_source_stderr" candidate/installed/bin/workbench context hook --harness claude "${common[@]}" < "$no_source_payload"
+          check "no-source stdout" "test ! -s $no_source_stdout" test ! -s "$no_source_stdout"
+          check "no-source stderr" "test ! -s $no_source_stderr" test ! -s "$no_source_stderr"
+          for path in "$home_config" "$runtime_dir" "$socket" "$start_lock" "$server_lock" "$cache_dir" "$no_source/workbench-context.pkl" "$no_source/.workbench"; do
+            check "no-source artifact absence" "test ! -e $path" test ! -e "$path"
+          done
+
+          cat > "$home_config" <<'EOF'
+          amends "workbench:context-home"
+          limits { runtime { idleTTLMs = 60000 } }
+          EOF
+          cat > "$activation/workbench-context.pkl" <<'EOF'
+          amends "workbench:context"
+          scope = "subtree"
+          contributors { ["project-guidance"] = new AiContext {} }
+          EOF
+          cat > "$activation/ai-context.md" <<'EOF'
+          ---
+          root: true
+          docs:
+            - files: ["README.md"]
+              message: Native installed context smoke guidance.
+          ---
+          EOF
+          printf 'native installed context smoke\n' > "$activation/README.md"
+          active_payload="$smoke/active.json"
+          cat > "$active_payload" <<EOF
+          {"session_id":"native-active-session","transcript_path":"$activation/does-not-exist.jsonl","cwd":"$activation","prompt_id":"native-active-turn","hook_event_name":"PostToolBatch","tool_calls":[{"tool_name":"Read","tool_use_id":"native-active-turn","tool_input":{"file_path":"$activation/README.md"},"tool_response":"native installed context smoke"}]}
+          EOF
+          active_stdout="$smoke/active.stdout"
+          active_stderr="$smoke/active.stderr"
+          run_hook "active hook" "$active_stdout" "$active_stderr" candidate/installed/bin/workbench context hook --harness claude "${common[@]}" < "$active_payload"
+          check "active stderr" "test ! -s $active_stderr" test ! -s "$active_stderr"
+          check "active guidance" "grep -F Native installed context smoke guidance. $active_stdout" grep -F 'Native installed context smoke guidance.' "$active_stdout"
+          check "lsof prerequisite" "command -v lsof" command -v lsof >/dev/null
+          current_stage="daemon discovery"
+          current_command="lsof -t $socket | sort -u"
+          daemon_pids=$(lsof -t "$socket" | sort -u)
+          check "daemon PID count" "one PID from lsof $socket" test "$(printf '%s\n' "$daemon_pids" | awk 'NF { count++ } END { print count + 0 }')" -eq 1
+          daemon_pid="$daemon_pids"
+          current_stage="daemon identity"
+          current_command="context daemon argv contains the selected runtime paths"
+          validate_owned_daemon "$daemon_pid" || exit $?
+          collect_descendants "$daemon_pid"
+          current_stage="daemon cleanup"
+          current_command="cleanup_runtime joins the selected daemon and removes its socket"
+          cleanup_runtime
+          current_stage="owned fixture cleanup"
+          current_command="remove activation and home config, then assert both are absent"
+          rm -f "$activation/workbench-context.pkl" "$home_config"
+          check "activation fixture absence" "test ! -e $activation/workbench-context.pkl" test ! -e "$activation/workbench-context.pkl"
+          check "home config absence" "test ! -e $home_config" test ! -e "$home_config"
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: candidate/out/workbench-*.tar.gz
@@ -188,25 +673,57 @@ jobs:
         with:
           version: 2026.8.12
           cache: false
+      - name: Acquire the runtime-lock Pkl executable
+        run: |
+          release/acquire-pkl.sh \
+            --lock release/runtime-lock.json \
+            --platform linux-x64 \
+            --output "$RUNNER_TEMP/pkl"
       - run: |
           test "$(sed -n 's/^  version = "\([^"]*\)"$/\1/p' PklProject)" = "$WORKBENCH_CONTRACT_VERSION"
+          set -euo pipefail
+          test -n "$PKL_EXECUTABLE"
+          case "$PKL_EXECUTABLE" in /*) ;; *) echo "PKL_EXECUTABLE is not absolute: $PKL_EXECUTABLE" >&2; exit 1 ;; esac
+          test -x "$PKL_EXECUTABLE"
           mkdir contracts
-          mise exec -- pkl project package --skip-publish-check --output-path contracts .
-          for artifact in contracts/workbench@0.7.0 contracts/workbench@0.7.0.zip; do
+          "$PKL_EXECUTABLE" project package --skip-publish-check --output-path contracts .
+          for artifact in contracts/workbench@0.8.0 contracts/workbench@0.8.0.zip; do
             shasum -a 256 "$artifact" | awk '{print $1}' > "$artifact.sha256"
           done
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: contracts/workbench@0.7.0.zip
+          subject-path: contracts/workbench@0.8.0.zip
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: workbench-contracts
           path: contracts/*
           if-no-files-found: error
 
+  candidate-checks:
+    needs: [binaries, contracts]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          path: candidate-assets
+          merge-multiple: true
+      - name: Verify immutable candidate assets before promotion
+        run: |
+          set -euo pipefail
+          test "${WORKBENCH_VERSION}" = "0.8.0"
+          test "${WORKBENCH_CONTRACT_VERSION}" = "0.8.0"
+          test "$(find candidate-assets -name 'workbench-*.tar.gz' -type f | wc -l | tr -d ' ')" = 4
+          test -f candidate-assets/workbench@0.8.0
+          test -f candidate-assets/workbench@0.8.0.zip
+          for checksum in candidate-assets/*.sha256; do
+            artifact=${checksum%.sha256}
+            expected=$(tr -d '\n' < "$checksum")
+            printf '%s  %s\n' "$expected" "$artifact" | sha256sum --check
+          done
+
   release:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [binaries, contracts]
+    needs: [binaries, contracts, candidate-checks]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

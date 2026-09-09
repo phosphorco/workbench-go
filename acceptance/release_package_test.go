@@ -22,8 +22,8 @@ const (
 	releasePackageZIP        = "https://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0.zip"
 	v020ReleasePackageURI    = "package://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0"
 	v020ReleasePackageZIP    = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
-	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0"
-	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0.zip"
+	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0"
+	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0.zip"
 )
 
 func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
@@ -36,9 +36,9 @@ func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
 	}
 	project := read(filepath.Join("..", "PklProject"))
 	for _, marker := range []string{
-		`local releaseCoordinate = "0.7.0"`,
+		`local releaseCoordinate = "0.8.0"`,
 		`baseUri = "package://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench"`,
-		`version = "0.7.0"`,
+		`version = "0.8.0"`,
 		`"https://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench@\(version).zip"`,
 	} {
 		if !strings.Contains(project, marker) {
@@ -51,25 +51,56 @@ func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
 
 	workflow := read(filepath.Join("..", ".github", "workflows", "release.yml"))
 	for _, marker := range []string{
-		"WORKBENCH_VERSION: 0.7.1",
-		"WORKBENCH_CONTRACT_VERSION: 0.7.0",
-		"mise exec -- pkl project package --skip-publish-check --output-path contracts .",
-		"contracts/workbench@0.7.0.zip",
+		"WORKBENCH_VERSION: 0.8.0",
+		"WORKBENCH_CONTRACT_VERSION: 0.8.0",
+		"\"$PKL_EXECUTABLE\" project package --skip-publish-check --output-path contracts .",
+		"contracts/workbench@0.8.0.zip",
 		"gh release create \"${{ github.ref_name }}\" release-assets/*",
 	} {
 		if !strings.Contains(workflow, marker) {
 			t.Fatalf("release workflow lacks current contract publication marker %q", marker)
 		}
 	}
-	if currentReleasePackageURI != "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0" {
-		t.Fatalf("current contract URI = %q, want the 0.7.0 release asset", currentReleasePackageURI)
+	if currentReleasePackageURI != "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0" {
+		t.Fatalf("current contract URI = %q, want the 0.8.0 release asset", currentReleasePackageURI)
 	}
 	acceptance := read(filepath.Join("..", ".github", "workflows", "release-acceptance.yml"))
 	if !strings.Contains(acceptance, currentReleasePackageURI+"#/Repository.pkl") {
-		t.Fatal("release acceptance does not amend the package asset produced under release 0.7.0")
+		t.Fatal("release acceptance does not amend the package asset produced under release 0.8.0")
 	}
 	if strings.Contains(acceptance, "releases/download/0.6.1/workbench@0.6.1") {
 		t.Fatal("release acceptance points at nonexistent release coordinate 0.6.1 for contract package 0.6.1")
+	}
+}
+
+func TestContractsJobUsesHashVerifiedPklProducer(t *testing.T) {
+	workflowBytes, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(workflowBytes)
+	start := strings.Index(workflow, "\n  contracts:\n")
+	end := strings.Index(workflow, "\n  candidate-checks:\n")
+	if start < 0 || end <= start {
+		t.Fatal("release workflow lacks a bounded contracts job")
+	}
+	contractsJob := workflow[start:end]
+	for _, marker := range []string{
+		"release/acquire-pkl.sh",
+		"--lock release/runtime-lock.json",
+		"--platform linux-x64",
+		"--output \"$RUNNER_TEMP/pkl\"",
+		"test -n \"$PKL_EXECUTABLE\"",
+		"case \"$PKL_EXECUTABLE\" in /*) ;; *)",
+		"test -x \"$PKL_EXECUTABLE\"",
+		"\"$PKL_EXECUTABLE\" project package --skip-publish-check --output-path contracts .",
+	} {
+		if !strings.Contains(contractsJob, marker) {
+			t.Fatalf("contracts job lacks locked Pkl producer marker %q", marker)
+		}
+	}
+	if strings.Contains(contractsJob, "mise exec -- pkl project package") {
+		t.Fatal("contracts job still invokes ambient mise Pkl for package production")
 	}
 }
 
@@ -78,7 +109,7 @@ func TestReleasePackageCandidate(t *testing.T) {
 	outputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, outputRoot)
 
-	metadataPath := filepath.Join(outputRoot, "workbench@0.7.0")
+	metadataPath := filepath.Join(outputRoot, "workbench@0.8.0")
 	archivePath := metadataPath + ".zip"
 	metadata := readReleaseMetadata(t, metadataPath)
 	if metadata.Name != "workbench" {
@@ -87,8 +118,8 @@ func TestReleasePackageCandidate(t *testing.T) {
 	if metadata.PackageURI != currentReleasePackageURI {
 		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, currentReleasePackageURI)
 	}
-	if metadata.Version != "0.7.0" {
-		t.Errorf("metadata version = %q, want 0.7.0", metadata.Version)
+	if metadata.Version != "0.8.0" {
+		t.Errorf("metadata version = %q, want 0.8.0", metadata.Version)
 	}
 	if metadata.Version != contracts.PackageVersion {
 		t.Fatalf("bundled skill Pkl version %q differs from packaged contract %q", contracts.PackageVersion, metadata.Version)
@@ -130,6 +161,9 @@ func TestReleasePackageCandidate(t *testing.T) {
 		"pkl/Plan.pkl",
 		"pkl/Repository.pkl",
 		"pkl/WorkbenchCommitPlan.pkl",
+		"pkl/WorkbenchContext.pkl",
+		"pkl/WorkbenchContextHome.pkl",
+		"pkl/WorkbenchContextTypes.pkl",
 		"pkl/WorkbenchSnapshot.pkl",
 		"pkl/WorkbenchSubject.pkl",
 	}
@@ -142,10 +176,10 @@ func TestReleasePackageCandidate(t *testing.T) {
 	secondOutputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, secondOutputRoot)
 	for _, name := range []string{
-		"workbench@0.7.0",
-		"workbench@0.7.0.sha256",
-		"workbench@0.7.0.zip",
-		"workbench@0.7.0.zip.sha256",
+		"workbench@0.8.0",
+		"workbench@0.8.0.sha256",
+		"workbench@0.8.0.zip",
+		"workbench@0.8.0.zip.sha256",
 	} {
 		first, err := os.ReadFile(filepath.Join(outputRoot, name))
 		if err != nil {
@@ -163,8 +197,12 @@ func TestReleasePackageCandidate(t *testing.T) {
 
 func packageReleaseCandidate(t *testing.T, projectRoot, outputRoot string) {
 	t.Helper()
+	pklExecutable := os.Getenv("PKL_EXECUTABLE")
+	if pklExecutable == "" {
+		pklExecutable = "pkl"
+	}
 	command := exec.Command(
-		"pkl", "project", "package",
+		pklExecutable, "project", "package",
 		"--skip-publish-check",
 		"--output-path", outputRoot,
 		projectRoot,

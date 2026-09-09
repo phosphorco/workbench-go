@@ -1,0 +1,47 @@
+module phosphor.workbench.WorkbenchContextTypes
+
+typealias NonEmptyString = String(length > 0)
+typealias ContributorName = String(matches(Regex(#"[A-Za-z0-9][A-Za-z0-9_.-]*"#)))
+typealias Scope = "directory" | "subtree"
+typealias Capability = "profile" | "contribute"
+
+class ContributorLimits {
+  deadlineMs: UInt = 0
+  maxResponseBytes: UInt = 0
+  maxFacts: UInt = 0
+  maxContributions: UInt = 0
+  maxBodyBytes: UInt = 0
+}
+
+class ProfilePreference {
+  name: NonEmptyString
+  value: String
+}
+
+class Profile {
+  role: String = ""
+  guidanceSet: String = ""
+  preferences: Listing<ProfilePreference> = new {}
+}
+
+abstract class Contributor {
+  enabled: Boolean = true
+}
+
+class AiContext extends Contributor {
+  fixed kind: "aiContext" = "aiContext"
+  fixed capabilities: Listing<Capability> = new { "contribute" }
+}
+
+class Executable extends Contributor {
+  fixed kind: "executable" = "executable"
+  executable: NonEmptyString
+  arguments: Listing<String> = new {}
+  capabilities: Listing<Capability>(length > 0)
+  // unknown admits JSON strings, numbers, booleans, nulls, objects, and
+  // arrays. The bounded evaluator decoder owns recursive depth/size checks.
+  settings: Mapping<String, unknown> = new {}
+  limits: ContributorLimits = new {}
+}
+
+typealias ContributorValue = AiContext | Executable

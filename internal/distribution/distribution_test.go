@@ -15,16 +15,59 @@ func TestRuntimeLockPinsClosedPlatformAndLicenseInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRuntimeLock(): %v", err)
 	}
-	if lock.WorkbenchVersion != "0.7.1" {
-		t.Fatalf("WorkbenchVersion = %q, want 0.7.1", lock.WorkbenchVersion)
+	if lock.WorkbenchVersion != "0.8.0" {
+		t.Fatalf("WorkbenchVersion = %q, want 0.8.0", lock.WorkbenchVersion)
 	}
-	wantDependencies := map[string]string{"go": "1.26.6", "msgpack": "5.4.1", "pkl-go": "0.14.0", "tagparser": "2.0.0", "yaml": "3.0.1"}
+	wantDependencies := map[string]string{
+		"go":         "1.26.6",
+		"msgpack":    "5.4.1",
+		"pkl-go":     "0.14.0",
+		"tagparser":  "2.0.0",
+		"yaml":       "3.0.1",
+		"doublestar": "4.10.0",
+		"toml":       "2.4.0",
+		"sh":         "3.14.1",
+	}
 	if len(lock.BuildDependencies) != len(wantDependencies) {
 		t.Fatalf("build dependencies = %#v, want closed inventory %#v", lock.BuildDependencies, wantDependencies)
 	}
 	for name, version := range wantDependencies {
 		if got := lock.BuildDependencies[name].Version; got != version {
 			t.Errorf("build dependency %s version = %q, want %q", name, got, version)
+		}
+	}
+	wantLinkedLicenses := map[string]struct {
+		versionRevision string
+		url             string
+		archivePath     string
+		sha256          string
+	}{
+		"doublestar": {
+			versionRevision: "a9ad9e0ef4d6b7e4443090e9a7201d847a881711",
+			url:             "https://raw.githubusercontent.com/bmatcuk/doublestar/a9ad9e0ef4d6b7e4443090e9a7201d847a881711/LICENSE",
+			archivePath:     "doublestar/LICENSE",
+			sha256:          "2391eb152e1f700051c1618a7aaa7ad86186585190ca9a30e7579c9b9d459332",
+		},
+		"toml": {
+			versionRevision: "b99e8db1027869f497c5402ff38afbb5d0f1a932",
+			url:             "https://raw.githubusercontent.com/pelletier/go-toml/b99e8db1027869f497c5402ff38afbb5d0f1a932/LICENSE",
+			archivePath:     "toml/LICENSE",
+			sha256:          "26844e4b53c5adec04e557fd7dfef281cc0205a7d355626b1c68b778b99e9e7b",
+		},
+		"sh": {
+			versionRevision: "a3f0c75d21d918756fa38de8b5d3429efde7948b",
+			url:             "https://raw.githubusercontent.com/mvdan/sh/a3f0c75d21d918756fa38de8b5d3429efde7948b/LICENSE",
+			archivePath:     "sh/LICENSE",
+			sha256:          "ce63850f77649f00d1394045e2794ffb09a5596beabac51c9548edd958845d7c",
+		},
+	}
+	for name, want := range wantLinkedLicenses {
+		dependency := lock.BuildDependencies[name]
+		if dependency.SourceRevision != want.versionRevision {
+			t.Errorf("%s source revision = %q, want %q", name, dependency.SourceRevision, want.versionRevision)
+		}
+		if len(dependency.Licenses) != 1 || dependency.Licenses[0].URL != want.url || dependency.Licenses[0].ArchivePath != want.archivePath || dependency.Licenses[0].SHA256 != want.sha256 {
+			t.Errorf("%s license inventory = %#v, want the pinned upstream license", name, dependency.Licenses)
 		}
 	}
 	yaml := lock.BuildDependencies["yaml"]
@@ -82,6 +125,8 @@ func TestWriteArchiveIsByteDeterministicAndHasClosedLayout(t *testing.T) {
 		"workbench-0.5.0/share/licenses/",
 		"workbench-0.5.0/share/licenses/bun/",
 		"workbench-0.5.0/share/licenses/bun/LICENSE.md",
+		"workbench-0.5.0/share/licenses/doublestar/",
+		"workbench-0.5.0/share/licenses/doublestar/LICENSE",
 		"workbench-0.5.0/share/licenses/go/",
 		"workbench-0.5.0/share/licenses/go/LICENSE",
 		"workbench-0.5.0/share/licenses/go/PATENTS",
@@ -94,8 +139,12 @@ func TestWriteArchiveIsByteDeterministicAndHasClosedLayout(t *testing.T) {
 		"workbench-0.5.0/share/licenses/pkl/LICENSE.txt",
 		"workbench-0.5.0/share/licenses/pkl/NOTICE.txt",
 		"workbench-0.5.0/share/licenses/pkl/THIRD-PARTY-NOTICES.txt",
+		"workbench-0.5.0/share/licenses/sh/",
+		"workbench-0.5.0/share/licenses/sh/LICENSE",
 		"workbench-0.5.0/share/licenses/tagparser/",
 		"workbench-0.5.0/share/licenses/tagparser/LICENSE",
+		"workbench-0.5.0/share/licenses/toml/",
+		"workbench-0.5.0/share/licenses/toml/LICENSE",
 		"workbench-0.5.0/share/licenses/workbench/",
 		"workbench-0.5.0/share/licenses/workbench/LICENSE",
 		"workbench-0.5.0/share/licenses/yaml/",
@@ -169,8 +218,11 @@ func archiveInputs(t *testing.T) ArchiveInputs {
 		GoPatents:           write("go-patents", "patents\n", 0o644),
 		PklGoLicense:        write("pkl-go-license", "license\n", 0o644),
 		PklGoNotice:         write("pkl-go-notice", "notice\n", 0o644),
+		DoublestarLicense:   write("doublestar-license", "license\n", 0o644),
 		MsgpackLicense:      write("msgpack-license", "license\n", 0o644),
+		ShLicense:           write("sh-license", "license\n", 0o644),
 		TagparserLicense:    write("tagparser-license", "license\n", 0o644),
+		TomlLicense:         write("toml-license", "license\n", 0o644),
 		YAMLLicense:         write("yaml-license", "license\n", 0o644),
 	}
 }

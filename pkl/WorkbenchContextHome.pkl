@@ -1,0 +1,95 @@
+module phosphor.workbench.WorkbenchContextHome
+
+import "workbench:context-types" as ContextTypes
+
+typealias AiContext = ContextTypes.AiContext
+typealias Executable = ContextTypes.Executable
+typealias ContributorValue = ContextTypes.ContributorValue
+typealias ContributorName = ContextTypes.ContributorName
+
+class ProviderPolicy {
+  mode: "unrestricted" | "allowlist" | "deny-all" = "unrestricted"
+  allowed: Listing<ContextTypes.NonEmptyString> = new {}
+}
+
+class ProfileDefaults {
+  selection: ContextTypes.Profile = new {}
+}
+
+class QueueLimits {
+  maxItemBytes: UInt = 0
+  maxPendingBytes: UInt = 0
+  maxPendingItems: UInt = 0
+  maxAgeMs: UInt = 0
+}
+
+class DeliveryLimits {
+  queue: QueueLimits = new {}
+  maxLiveOffers: UInt = 0
+  maxReceipts: UInt = 0
+  maxOfferAgeMs: UInt = 0
+  maxRetainedBytes: UInt = 0
+}
+
+class RuntimeLimits {
+  hookDeadlineMs: UInt = 0
+  wholeHookDeadlineMs: UInt = 0
+  maxActivationAncestors: UInt = 0
+  maxActivationConfigBytes: UInt = 0
+  maxActivationConfigFiles: UInt = 0
+  maxProviders: UInt = 0
+  maxProfileFacts: UInt = 0
+  maxContributions: UInt = 0
+  maxContributionBodyBytes: UInt = 0
+  maxActiveScopes: UInt = 0
+  maxActiveAudiences: UInt = 0
+  maxProviderProcesses: UInt = 0
+  maxPendingMemoryBytes: UInt = 0
+  maxPendingItems: UInt = 0
+  maxOutstandingOffers: UInt = 0
+  maxReceipts: UInt = 0
+  providerDefaults: ContextTypes.ContributorLimits = new {}
+  idleTTLMs: UInt = 0
+}
+
+class CacheLimits {
+  diskCapBytes: UInt = 0
+  maxRecordBytes: UInt = 0
+  maxInputBytes: UInt = 0
+  maxStringBytes: UInt = 0
+  maxReasons: UInt = 0
+  maxReasonParameters: UInt = 0
+  maxQueryRecords: UInt = 0
+  maxQueryBytes: UInt = 0
+  maxScanBytes: UInt = 0
+  maxBlockBytes: UInt = 0
+  maxBlockRecords: UInt = 0
+  maxBlocks: UInt = 0
+}
+
+class HomeLimits {
+  providerPolicy: ProviderPolicy = new {}
+  defaults: ProfileDefaults = new {}
+  delivery: DeliveryLimits = new {}
+  runtime: RuntimeLimits = new {}
+  cache: CacheLimits = new {}
+}
+
+typealias AbsolutePath = String(length > 0, startsWith("/"))
+
+class DirectorySelection {
+  root: AbsolutePath
+  enabled: Boolean = true
+  scope: ContextTypes.Scope = "subtree"
+  contributors: Mapping<ContributorName, ContributorValue> = new {}
+  profile: ContextTypes.Profile = new {}
+}
+
+class Exclusion {
+  root: AbsolutePath
+  scope: ContextTypes.Scope = "subtree"
+}
+
+limits: HomeLimits = new {}
+exclusions: Listing<Exclusion> = new {}
+directories: Listing<DirectorySelection> = new {}

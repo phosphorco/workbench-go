@@ -11,7 +11,7 @@ on:
         description: Synthetic source revision label for the old-seal/new-consume fixture.
         required: false
         type: string
-        default: published-0.7.1
+        default: published-0.8.0
   workflow_dispatch:
     inputs:
       published_revision:
@@ -21,7 +21,7 @@ on:
       fixture_revision:
         description: Synthetic source revision label for the old-seal/new-consume fixture.
         required: false
-        default: published-0.7.1
+        default: published-0.8.0
         type: string
 
 permissions:
@@ -52,9 +52,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/anonymous-home" "$RUNNER_TEMP/catalog/.agents/skills/release-smoke"
           export HOME="$RUNNER_TEMP/anonymous-home"
-          mise install github:phosphorco/workbench-go@0.7.1
-          published_version="$(mise exec github:phosphorco/workbench-go@0.7.1 -- workbench version)"
-          expected_version="workbench 0.7.1 ($EXPECTED_PUBLISHED_REVISION)"
+          mise install github:phosphorco/workbench-go@0.8.0
+          published_version="$(mise exec github:phosphorco/workbench-go@0.8.0 -- workbench version)"
+          expected_version="workbench 0.8.0 ($EXPECTED_PUBLISHED_REVISION)"
           if [[ "$published_version" != "$expected_version" ]]; then
             printf 'published binary provenance does not match expected published revision: observed=%s expected=%s\n' "$published_version" "$expected_version" >&2
             exit 1
@@ -69,7 +69,7 @@ jobs:
 
           # Release smoke
           EOF
-          (cd "$RUNNER_TEMP/catalog" && mise exec github:phosphorco/workbench-go@0.7.1 -- workbench skills check)
+          (cd "$RUNNER_TEMP/catalog" && mise exec github:phosphorco/workbench-go@0.8.0 -- workbench skills check)
 
       - name: Exercise the published planner and exported skills
         run: |
@@ -78,12 +78,12 @@ jobs:
           export MISE_CACHE_DIR="$RUNNER_TEMP/planner-mise-cache"
           export MISE_STATE_DIR="$RUNNER_TEMP/planner-mise-state"
           export MISE_CONFIG_DIR="$RUNNER_TEMP/planner-mise-config"
-          mise install github:phosphorco/workbench-go@0.7.1
-          planner_binary="$(mise which --tool github:phosphorco/workbench-go@0.7.1 workbench)"
-          test "$("$planner_binary" version)" = "workbench 0.7.1 ($EXPECTED_PUBLISHED_REVISION)"
+          mise install github:phosphorco/workbench-go@0.8.0
+          planner_binary="$(mise which --tool github:phosphorco/workbench-go@0.8.0 workbench)"
+          test "$("$planner_binary" version)" = "workbench 0.8.0 ($EXPECTED_PUBLISHED_REVISION)"
           bash acceptance/planner_release.sh "$planner_binary" "$RUNNER_TEMP/published-planner"
 
-      - name: Resolve a cold buildable through the published 0.7.1 asset
+      - name: Resolve a cold buildable through the published 0.8.0 asset
         run: |
           set -euo pipefail
           export HOME="$RUNNER_TEMP/cold-resolve-home"
@@ -94,13 +94,13 @@ jobs:
           mkdir -p "$HOME" "$MISE_DATA_DIR" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_CONFIG_DIR"
           test ! -e "$MISE_DATA_DIR/installs"
           test -z "$(find "$MISE_CACHE_DIR" -mindepth 1 -print -quit)"
-          mise install github:phosphorco/workbench-go@0.7.1
+          mise install github:phosphorco/workbench-go@0.8.0
           printf 'published Workbench cold resolver='
-          (mise exec github:phosphorco/workbench-go@0.7.1 -- workbench version)
+          (mise exec github:phosphorco/workbench-go@0.8.0 -- workbench version)
           root="$RUNNER_TEMP/cold-resolve-fixture"
           mkdir -p "$root/.local-build/cold"
           cat > "$root/workbench.pkl" <<'EOF'
-          amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl"
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/Repository.pkl"
           buildables {
             ["cold"] = new Buildable {
               inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
@@ -127,7 +127,7 @@ jobs:
             }
           }
           EOF
-          test "$(sed -n '1p' "$root/workbench.pkl")" = 'amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl"'
+          test "$(sed -n '1p' "$root/workbench.pkl")" = 'amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/Repository.pkl"'
           printf 'producer\n' > "$root/producer.txt"
           printf '#!/bin/sh\nprintf cold\\n' > "$root/.local-build/cold/cold.bin"
           chmod 0755 "$root/.local-build/cold/cold.bin"
@@ -137,9 +137,9 @@ jobs:
           git -C "$root" config user.email "workbench-release@example.invalid"
           git -C "$root" add producer.txt workbench.pkl
           git -C "$root" commit -qm fixture
-          (cd "$root" && mise exec github:phosphorco/workbench-go@0.7.1 -- workbench buildable seal --name cold --candidate-root .local-build/cold)
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.8.0 -- workbench buildable seal --name cold --candidate-root .local-build/cold)
           test ! -e "$root/.workbench"
-          result="$(cd "$root" && mise exec github:phosphorco/workbench-go@0.7.1 -- workbench buildable resolve --name cold --platform linux-x86_64 --format json)"
+          result="$(cd "$root" && mise exec github:phosphorco/workbench-go@0.8.0 -- workbench buildable resolve --name cold --platform linux-x86_64 --format json)"
           test ! -e "$root/.workbench"
           printf '%s\n' "$result"
           printf '%s\n' "$result" | grep -Eq '"candidate":"local"'
@@ -161,12 +161,12 @@ jobs:
           export MISE_STATE_DIR="$RUNNER_TEMP/legacy-manifest-mise-state"
           export MISE_CONFIG_DIR="$RUNNER_TEMP/legacy-manifest-mise-config"
           mkdir -p "$HOME" "$MISE_DATA_DIR" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_CONFIG_DIR"
-          mise install github:phosphorco/workbench-go@0.7.1
+          mise install github:phosphorco/workbench-go@0.8.0
           root="$RUNNER_TEMP/legacy-manifest-fixture"
           candidate="$root/.local-build/basindb-state-sql-browser"
           mkdir -p "$candidate"
           cat > "$root/workbench.pkl" <<'EOF'
-          amends "package://github.com/phosphorco/workbench-go/releases/download/0.7.0/workbench@0.7.0#/Repository.pkl"
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#/Repository.pkl"
           buildables {
             ["basindb-state-sql-browser"] = new Buildable {
               inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt" } }
@@ -213,7 +213,7 @@ jobs:
           git -C "$root" commit -qm fixture
           git -C "$root" update-ref refs/remotes/origin/main HEAD
           printf 'origin-shaped fixture origin/main=%s\n' "$(git -C "$root" rev-parse refs/remotes/origin/main)"
-          (cd "$root" && mise exec github:phosphorco/workbench-go@0.7.1 -- workbench buildable seal --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser)
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.8.0 -- workbench buildable seal --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser)
           test ! -e "$root/.workbench"
           manifest="$candidate/manifest.json"
           test -s "$manifest"
@@ -266,15 +266,15 @@ jobs:
           PY
           ! grep -Fq '"declarationIdentity"' "$manifest"
           verify_status=0
-          (cd "$root" && mise exec github:phosphorco/workbench-go@0.7.1 -- workbench buildable verify --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser) || verify_status=$?
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.8.0 -- workbench buildable verify --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser) || verify_status=$?
           printf 'origin-shaped legacy manifest verify exit=%s\n' "$verify_status"
           test "$verify_status" -eq 0
           fresh_status=0
-          (cd "$root" && mise exec github:phosphorco/workbench-go@0.7.1 -- workbench buildable check-fresh --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser --built-from HEAD --against origin/main) || fresh_status=$?
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.8.0 -- workbench buildable check-fresh --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser --built-from HEAD --against origin/main) || fresh_status=$?
           printf 'origin-shaped legacy manifest check-fresh exit=%s\n' "$fresh_status"
           test "$fresh_status" -eq 0
           test ! -e "$root/.workbench"
-          result="$(cd "$root" && mise exec github:phosphorco/workbench-go@0.7.1 -- workbench buildable resolve --name basindb-state-sql-browser --platform browser-wasm --format json)"
+          result="$(cd "$root" && mise exec github:phosphorco/workbench-go@0.8.0 -- workbench buildable resolve --name basindb-state-sql-browser --platform browser-wasm --format json)"
           test ! -e "$root/.workbench"
           printf '%s\n' "$result"
           printf '%s\n' "$result" | grep -Eq '"candidate":"local"'
@@ -283,7 +283,7 @@ jobs:
           printf '%s\n' "$result" | grep -Eq '"digest":"[0-9a-f]{64}"'
           ! printf '%s\n' "$result" | grep -Fq '"sha256"'
 
-      - name: Consume a candidate sealed by published 0.6.1 with published 0.7.1
+      - name: Consume a candidate sealed by published 0.6.1 with published 0.8.0
         run: |
           set -euo pipefail
           old_home="$RUNNER_TEMP/legacy-consumer-old-home"
@@ -298,7 +298,7 @@ jobs:
           new_config="$RUNNER_TEMP/legacy-consumer-new-config"
           mkdir -p "$old_home" "$old_data" "$old_cache" "$old_state" "$old_config" "$new_home" "$new_data" "$new_cache" "$new_state" "$new_config"
           (HOME="$old_home" MISE_DATA_DIR="$old_data" MISE_CACHE_DIR="$old_cache" MISE_STATE_DIR="$old_state" MISE_CONFIG_DIR="$old_config" mise install github:phosphorco/workbench-go@0.6.1)
-          (HOME="$new_home" MISE_DATA_DIR="$new_data" MISE_CACHE_DIR="$new_cache" MISE_STATE_DIR="$new_state" MISE_CONFIG_DIR="$new_config" mise install github:phosphorco/workbench-go@0.7.1)
+          (HOME="$new_home" MISE_DATA_DIR="$new_data" MISE_CACHE_DIR="$new_cache" MISE_STATE_DIR="$new_state" MISE_CONFIG_DIR="$new_config" mise install github:phosphorco/workbench-go@0.8.0)
           root="$RUNNER_TEMP/public-legacy-consumer"
           candidate="$root/.local-build/compat"
           mkdir -p "$candidate"
@@ -359,7 +359,7 @@ jobs:
             (cd "$root" && HOME="$old_home" MISE_DATA_DIR="$old_data" MISE_CACHE_DIR="$old_cache" MISE_STATE_DIR="$old_state" MISE_CONFIG_DIR="$old_config" mise exec github:phosphorco/workbench-go@0.6.1 -- workbench "$@")
           }
           new_workbench() {
-            (cd "$root" && HOME="$new_home" MISE_DATA_DIR="$new_data" MISE_CACHE_DIR="$new_cache" MISE_STATE_DIR="$new_state" MISE_CONFIG_DIR="$new_config" mise exec github:phosphorco/workbench-go@0.7.1 -- workbench "$@")
+            (cd "$root" && HOME="$new_home" MISE_DATA_DIR="$new_data" MISE_CACHE_DIR="$new_cache" MISE_STATE_DIR="$new_state" MISE_CONFIG_DIR="$new_config" mise exec github:phosphorco/workbench-go@0.8.0 -- workbench "$@")
           }
           printf 'public compatibility fixture: sealing with published 0.6.1\n'
           old_workbench buildable seal --name compat --candidate-root .local-build/compat
@@ -389,12 +389,12 @@ jobs:
           PY
           verify_status=0
           new_workbench buildable verify --name compat --candidate-root .local-build/compat || verify_status=$?
-          printf 'published 0.7.1 consuming verify exit=%s\n' "$verify_status"
+          printf 'published 0.8.0 consuming verify exit=%s\n' "$verify_status"
           test "$verify_status" -eq 0
           test ! -e "$root/.workbench"
           fresh_status=0
           new_workbench buildable check-fresh --name compat --candidate-root .local-build/compat --built-from HEAD --against origin/main || fresh_status=$?
-          printf 'published 0.7.1 consuming check-fresh exit=%s\n' "$fresh_status"
+          printf 'published 0.8.0 consuming check-fresh exit=%s\n' "$fresh_status"
           test "$fresh_status" -eq 0
           test ! -e "$root/.workbench"
           result="$(new_workbench buildable resolve --name compat --platform linux-x86_64 --format json)"
@@ -415,7 +415,7 @@ jobs:
           ! printf '%s\n' "$receipt" | grep -Fq '"sha256"'
 
       - name: Compare the published five-command compatibility matrix
-        # acceptance/release_compatibility.sh prints command/scenario                  0.6.1 exit  0.7.1 exit
+        # acceptance/release_compatibility.sh prints command/scenario                  0.6.1 exit  0.8.0 exit
         # and uses python3 - "$manifest" for the public receipt assertions.
         # Only typed resolve/receipt and digest-only JSON may differ; changed legacy
         # acceptance or any five-command exit mismatch is a release defect.

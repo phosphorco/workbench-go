@@ -1,0 +1,13 @@
+module phosphor.workbench.WorkbenchContext
+
+import "workbench:context-types" as ContextTypes
+
+typealias AiContext = ContextTypes.AiContext
+typealias Executable = ContextTypes.Executable
+typealias ContributorValue = ContextTypes.ContributorValue
+typealias ContributorName = ContextTypes.ContributorName
+
+enabled: Boolean = true
+scope: ContextTypes.Scope = "subtree"
+contributors: Mapping<ContributorName, ContributorValue> = new {}
+profile: ContextTypes.Profile = new {}
