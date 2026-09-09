@@ -206,6 +206,14 @@ jobs:
           activation_status_stdout="$diagnostic_dir/activation-status.stdout"
           activation_status_stderr="$diagnostic_dir/activation-status.stderr"
           activation_status_code="not-run"
+          private_pkl="$PWD/candidate/installed/libexec/workbench/pkl"
+          python3_path="$(command -v python3 || true)"
+          probe_stage="not-run"
+          probe_command="not-run"
+          probe_time_prefix=()
+          if test "${{ matrix.goos }}" = darwin && test -x /usr/bin/time; then
+            probe_time_prefix=(/usr/bin/time -l)
+          fi
           stdout_pipe="$smoke/.diagnostic.stdout.pipe"
           stderr_pipe="$smoke/.diagnostic.stderr.pipe"
           status_stdout_pipe="$smoke/.diagnostic.status.stdout.pipe"
@@ -231,6 +239,166 @@ jobs:
             wait "$stderr_pid" || true
             return "$command_status"
           }
+          run_supervised_probe() {
+            local name="$1"
+            local stdout="$2"
+            local stderr="$3"
+            local status_file="$4"
+            shift 4
+            probe_stage="$name worker probe"
+            probe_command="$* </dev/null (bounded supervisor, 2s)"
+            if test -z "$python3_path"; then
+              printf 'status=not-run\nreason=python3 unavailable\n' > "$status_file"
+              return 0
+            fi
+            set +e
+            "$python3_path" - "$stdout" "$stderr" "$status_file" 2 "$@" > /dev/null 2> "$diagnostic_dir/$name.supervisor.stderr" <<'PY'
+          import os
+          import selectors
+          import signal
+          import subprocess
+          import sys
+          import time
+
+          stdout_path, stderr_path, status_path, timeout_seconds, *command = sys.argv[1:]
+          limit = 65536
+          counts = [0, 0]
+          kept = [0, 0]
+          started = time.monotonic()
+          deadline = started + float(timeout_seconds)
+          hard_deadline = deadline + 1.0
+          timed_out = False
+          drain_timed_out = False
+          group_terminated = False
+          leader_unjoined = False
+          selector = selectors.DefaultSelector()
+          outputs = []
+
+          def terminate_group(force=False):
+              global group_terminated
+              try:
+                  os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+                  group_terminated = True
+              except ProcessLookupError:
+                  group_terminated = True
+
+          try:
+              process = subprocess.Popen(
+                  command,
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  start_new_session=True,
+              )
+          except OSError as error:
+              with open(status_path, "w", encoding="utf-8") as status:
+                  status.write("status=spawn-error\nerror=%s\n" % error)
+              raise SystemExit(127)
+
+          for index, (pipe, output_path) in enumerate(((process.stdout, stdout_path), (process.stderr, stderr_path))):
+              os.set_blocking(pipe.fileno(), False)
+              output = open(output_path, "wb")
+              outputs.append(output)
+              selector.register(pipe, selectors.EVENT_READ, index)
+
+          while True:
+              now = time.monotonic()
+              return_code = process.poll()
+              if return_code is None and now >= deadline:
+                  timed_out = True
+                  terminate_group()
+              elif return_code is not None and not group_terminated:
+                  terminate_group()
+              if now >= hard_deadline:
+                  if return_code is None:
+                      terminate_group(force=True)
+                      try:
+                          return_code = process.wait(timeout=0.5)
+                      except subprocess.TimeoutExpired:
+                          leader_unjoined = True
+                  if selector.get_map():
+                      drain_timed_out = True
+                  break
+              if return_code is not None and not selector.get_map():
+                  break
+              for key, _ in selector.select(timeout=min(0.05, hard_deadline - now)):
+                  pipe = key.fileobj
+                  index = key.data
+                  try:
+                      chunk = pipe.read(8192)
+                  except BlockingIOError:
+                      continue
+                  if not chunk:
+                      selector.unregister(pipe)
+                      pipe.close()
+                      continue
+                  counts[index] += len(chunk)
+                  if kept[index] < limit:
+                      portion = chunk[:limit - kept[index]]
+                      outputs[index].write(portion)
+                      kept[index] += len(portion)
+
+          for pipe in list(selector.get_map().values()):
+              selector.unregister(pipe.fileobj)
+              pipe.fileobj.close()
+          for output in outputs:
+              output.close()
+          if return_code is None:
+              return_code = process.poll()
+          elapsed_ms = int((time.monotonic() - started) * 1000)
+          with open(status_path, "w", encoding="utf-8") as status:
+              status.write("status=timeout\n" if timed_out else "status=complete\n")
+              status.write("exit_status=%s\n" % (return_code if return_code is not None else "unknown"))
+              status.write("elapsed_ms=%s\n" % elapsed_ms)
+              status.write("stdout_bytes=%s\n" % counts[0])
+              status.write("stderr_bytes=%s\n" % counts[1])
+              status.write("group_terminated=%s\n" % str(group_terminated).lower())
+              status.write("leader_joined=%s\n" % str(not leader_unjoined).lower())
+              status.write("cleanup_failure=%s\n" % str(leader_unjoined or drain_timed_out).lower())
+              status.write("drain_timeout=%s\n" % str(drain_timed_out).lower())
+          if leader_unjoined or drain_timed_out or return_code is None:
+              raise SystemExit(125)
+          if timed_out:
+              raise SystemExit(124)
+          raise SystemExit(return_code if return_code >= 0 else 128 - return_code)
+          PY
+            local probe_status=$?
+            set -e
+            printf 'supervisor_exit_status=%s\n' "$probe_status" >> "$status_file"
+            return "$probe_status"
+          }
+          probe_stream_summary() {
+            local name="$1"
+            local stdout="$2"
+            local stderr="$3"
+            local status_file="$4"
+            printf '%s status:\n' "$name"
+            if test -f "$status_file"; then head -c 4096 "$status_file"; else printf '<none>\n'; fi
+            printf '%s stdout_bytes=' "$name"
+            if test -f "$stdout"; then wc -c < "$stdout"; else printf '0\n'; fi
+            printf '%s stdout_sha256=' "$name"
+            if test -f "$stdout"; then shasum -a 256 "$stdout" | awk '{print $1}'; else printf 'none\n'; fi
+            printf '%s stdout_hex_prefix=' "$name"
+            if test -f "$stdout"; then od -An -tx1 -N64 "$stdout" | tr -d '\n '; printf '\n'; else printf 'none\n'; fi
+            printf '%s stderr (first 65536 bytes):\n' "$name"
+            if test -f "$stderr"; then head -c 65536 "$stderr"; else printf '<none>\n'; fi
+          }
+          run_worker_diagnostics() {
+            if test -z "$python3_path"; then
+              printf 'worker diagnostics not run: python3 unavailable\n' >&2
+              return 0
+            fi
+            set +e
+            run_supervised_probe "pkl-control" "$diagnostic_dir/pkl-control.stdout" "$diagnostic_dir/pkl-control.stderr" "$diagnostic_dir/pkl-control.status" "${probe_time_prefix[@]}" "$private_pkl" server
+            pkl_probe_status=$?
+            run_supervised_probe "worker-128m" "$diagnostic_dir/worker-128m.stdout" "$diagnostic_dir/worker-128m.stderr" "$diagnostic_dir/worker-128m.status" "${probe_time_prefix[@]}" candidate/installed/bin/workbench context worker --pkl "$private_pkl" --max-data-bytes 134217728 server
+            worker_128_status=$?
+            if test "$worker_128_status" -ne 0; then
+              run_supervised_probe "worker-256m" "$diagnostic_dir/worker-256m.stdout" "$diagnostic_dir/worker-256m.stderr" "$diagnostic_dir/worker-256m.status" "${probe_time_prefix[@]}" candidate/installed/bin/workbench context worker --pkl "$private_pkl" --max-data-bytes 268435456 server
+              run_supervised_probe "worker-512m" "$diagnostic_dir/worker-512m.stdout" "$diagnostic_dir/worker-512m.stderr" "$diagnostic_dir/worker-512m.status" "${probe_time_prefix[@]}" candidate/installed/bin/workbench context worker --pkl "$private_pkl" --max-data-bytes 536870912 server
+            fi
+            set -e
+          }
           check() {
             current_stage="$1"
             current_command="$2"
@@ -254,6 +422,7 @@ jobs:
           }
           report_failure() {
             local exit_status="$1"
+            run_worker_diagnostics || true
             if test -f "$activation/workbench-context.pkl"; then
               set +e
               run_bounded "$activation_status_stdout" "$activation_status_stderr" "$status_stdout_pipe" "$status_stderr_pipe" candidate/installed/bin/workbench context status --path "$activation" --json "${common[@]}" --whole-hook-deadline 2s
@@ -298,6 +467,15 @@ jobs:
                 head -c 65536 "$activation_status_stderr"
               else
                 printf '<none>\n'
+              fi
+              printf 'worker diagnostic private Pkl=%s python3=%s time=%s\n' "$private_pkl" "${python3_path:-unavailable}" "${probe_time_prefix[*]:-none}"
+              probe_stream_summary "pkl-control" "$diagnostic_dir/pkl-control.stdout" "$diagnostic_dir/pkl-control.stderr" "$diagnostic_dir/pkl-control.status"
+              probe_stream_summary "worker-128m" "$diagnostic_dir/worker-128m.stdout" "$diagnostic_dir/worker-128m.stderr" "$diagnostic_dir/worker-128m.status"
+              if test -f "$diagnostic_dir/worker-256m.status"; then
+                probe_stream_summary "worker-256m" "$diagnostic_dir/worker-256m.stdout" "$diagnostic_dir/worker-256m.stderr" "$diagnostic_dir/worker-256m.status"
+              fi
+              if test -f "$diagnostic_dir/worker-512m.status"; then
+                probe_stream_summary "worker-512m" "$diagnostic_dir/worker-512m.stdout" "$diagnostic_dir/worker-512m.stderr" "$diagnostic_dir/worker-512m.status"
               fi
             } | head -c 262144 > "$failure_report" || true
             printf 'installed context smoke failed; bounded diagnostics: %s\n' "$failure_report" >&2
