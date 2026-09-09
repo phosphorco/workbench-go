@@ -285,6 +285,9 @@ func (c *Client) Contribute(ctx context.Context, request contextapi.Contribution
 	if err := c.validateRequestScope(request.Scope, request.ConfigDigest); err != nil {
 		return contextapi.ContributionResponse{}, err
 	}
+	if !c.hasCapability(contextapi.ProviderCapabilityContribute) {
+		return contextapi.ContributionResponse{}, ErrUnsupportedCapability
+	}
 	request = normalizeContributionRequest(request, c.resource)
 	wire := contextapi.ProviderContributeRequest{Resource: c.resource, Input: request}
 	var output contextapi.ProviderContributeResponse

@@ -5,10 +5,11 @@
 - Decision owner: Cole
 - Scope: Product intent and high-level algorithms for `workbench context`.
 
-This document defines the intended behavior against which implementations,
-reviews, and usability sessions should be evaluated. It does not claim that the
-commands or capabilities described here have shipped. Command spellings and RPC
-examples illustrate the intended surface; their exact contracts belong to the
+This document defines the product behavior against which implementations,
+reviews, and usability sessions are evaluated. The executable Pkl declaration
+schemas, loader, evaluator, and CLI links below provide the exact source and
+test boundaries for details that evolve. Command spellings and RPC examples
+illustrate the user surface; wire-level contracts remain owned by the linked
 implementation.
 
 ## Give agents the right guidance without making users maintain every harness
@@ -89,14 +90,17 @@ scope. A declaration must make its directory/subtree coverage legible, and
 explicit exclusions must be respected. Merely being a Git repository, containing
 guidance files, or having Workbench installed is not consent to activation.
 
-The intended project declaration is a discoverable `workbench-context.pkl`
-file that declares directory coverage, selected contributors, and their
-configuration. Its purpose is to make when context activates, with which
-contributors, and why understandable from one project-owned source, without
-editing global harness settings. Resolution must preserve the silent inactive
-path and fast Go hooks; evaluated configuration is a disposable derivative of
-the declaration. The exact Pkl schema, composition and evaluation rules, and
-implementation plan belong to a separate specification and planning effort.
+The project declaration is a discoverable `workbench-context.pkl` file that
+amends the [`workbench:context`](../../pkl/WorkbenchContext.pkl) schema and
+declares directory coverage, selected contributors, and their configuration.
+The home declaration uses [`workbench:context-home`](../../pkl/WorkbenchContextHome.pkl)
+and shared types from [`WorkbenchContextTypes.pkl`](../../pkl/WorkbenchContextTypes.pkl).
+These sources make when context activates, with which contributors, and why
+understandable without editing global harness settings. Resolution preserves the
+silent inactive path and fast Go hooks; evaluated configuration is a disposable
+derivative of the declaration. The [declaration contract](../context-declarations.md)
+and [loader](../../internal/contextconfig/config.go) define composition and
+evaluation rules.
 
 User-home exclusions constrain project declarations. Within an allowed scope,
 the nearest project declaration owns the complete contributor selection; reuse
@@ -123,18 +127,21 @@ explain the winning declaration, inherited scope, exclusions, and configuration
 conflicts without starting contributors. Explicit inspection can explain an
 inactive directory even though ordinary hooks there produce no history.
 
-The inactive result is a strict fast path: silent successful completion, no
-context output, no daemon startup, no contributor execution, no transcript
-inspection, and no project-local files or explanation records. The unavoidable
-work is only the bounded Go invocation and activation lookup. Inactive hooks do
-not keep an already running daemon or its providers warm.
+With no project or home declaration, the inactive result is a strict fast path:
+silent successful completion, no context output, no evaluator, no daemon
+startup, no contributor execution, no snapshot or trace creation, and no
+project-local files or explanation records. The unavoidable work is only the
+bounded Go invocation and activation lookup. Inactive hooks do not keep an
+already running daemon or its providers warm.
 
 When a declaration exists but its evaluated snapshot is missing or invalid,
 activation lookup may run a bounded temporary Pkl evaluator and write a private
 disposable snapshot, even if the result is inactive. Startup, evaluation and
 joined cleanup share the hook budget. This exception does not permit contributor
 or context-daemon startup, project writes, or explanation history for inactive
-work. With no project or home declaration, no evaluator or cache is created.
+work. A present but disabled, empty, excluded, conflicting, or invalid source is
+therefore configured inactivity, not no-source inactivity; the distinction is
+visible through explicit status/inspection.
 
 For an enabled scope, Workbench derives the selected providers and profile from
 the applicable declarations. Project changes take effect through that resolution;
@@ -236,9 +243,9 @@ applicable to every request; facts from one scope cannot leak into another.
 
 A contributor package may also provide profile identification. That does not
 give it authority to identify another host's receiving context, confirm delivery,
-or merge audience histories. Profile providers are selected from the initial
-configuration; their activation cannot depend on the profile they have yet to
-produce.
+or merge audience histories. Profile capability is derived from the same named
+contributor mapping as contribution capability; there is no second authored
+provider list. Its activation cannot depend on the profile it has yet to produce.
 
 Profile facts may expire or decay only under a declared policy. A decay decision
 must name its inputs and rule, such as time since relevant activity or a
@@ -370,24 +377,30 @@ explain an old decision. If causal evidence has rotated away, inspection says
 so. Inferred facts, provider-reported reasons, and directly observed outcomes
 remain distinguishable.
 
-The intended inspection jobs are represented by commands such as:
+The inspection jobs are represented by commands such as:
 
 ```sh
-workbench context status
-workbench context history --audience A --limit 20
-workbench context inspect contribution C
-workbench context inspect turn T
-workbench context explain profile P
-workbench context cache status
-workbench context cache clear
+workbench context status --path "$PWD"
+workbench context history --path "$PWD" --limit 20
+workbench context inspect contribution C --path "$PWD"
+workbench context inspect turn T --path "$PWD"
+workbench context explain profile P --path "$PWD"
+workbench context cache status --path "$PWD"
+workbench context cache clear --path "$PWD"
 ```
 
 Read surfaces provide bounded, paginated structured output as well as human
 output. Defaults scope to the current directory and disclose the resolved scope;
-explicit options permit wider authorized inspection. A contribution inspection
-answers what, when, why, and delivery outcome together. Missing evidence,
-sampling, dropped records, and retention boundaries are visible. A caller should
-not need to scan a multi-gigabyte log or follow many IDs to answer one question.
+explicit options permit wider authorized inspection. Cache status and clear are
+explicit historical accesses: they reload the current home Pkl policy for that
+cwd before opening or updating trace state. Ordinary status remains observational
+and does not initialize or renew the trace store. A no-cwd explicit `serve`
+starts with compiled idle settings; its first authoritative request supplies the
+cwd and current home policy, after which the current home idle TTL governs
+residency. A contribution inspection answers what, when, why, and delivery
+outcome together. Missing evidence, sampling, dropped records, and retention
+boundaries are visible. A caller should not need to scan a multi-gigabyte log or
+follow many IDs to answer one question.
 
 ## Keep memory and explanation storage independently bounded
 
@@ -419,10 +432,13 @@ Runtime resources follow demand. Effective activation determines what may run;
 observations determine what is needed; a configurable minutes-scale idle TTL
 permits reuse before parsed data, indexes, and external provider processes are
 released. Shared immutable data may be reused across compatible requests, while
-audience-specific delivery state remains isolated. A separate global memory and
-process budget bounds many simultaneously active projects; TTL alone is
-insufficient. Resource eviction must not silently discard accepted pending
-context or manufacture a delivery receipt.
+audience-specific delivery state remains isolated. A separate global bounded
+memory and process budget bounds many simultaneously active projects; TTL alone
+is insufficient. This ADR does not prescribe the native OS mechanism used to
+enforce an evaluator's process-memory limit on every platform; supported
+resource enforcement belongs to the evaluator/resource contract and its measured
+evidence. Resource eviction must not silently discard accepted pending context
+or manufacture a delivery receipt.
 
 Freshness is independent of idleness. Changes to configuration, files, provider
 identity, or relevant dependencies invalidate cached derivations even while a
@@ -454,8 +470,9 @@ and commissioning evidence; they are not a report of completed tests.
 | Leave many projects idle, then return | Unneeded processes and caches are released; demanded resources are rebuilt with correct configuration and audience isolation. |
 
 Performance evidence must cover inactive, cold, and warm hooks for both supported
-harnesses, including concurrent invocations, total process-tree memory, idle
-resource release, and bounded history inspection. Hook integration evidence must
+harnesses, including concurrent invocations, process-tree resource observations,
+idle resource release, and bounded history inspection. Such measurements are
+evidence, not a hard platform memory guarantee. Hook integration evidence must
 exercise real provider boundaries; a mocked successful stdout write alone cannot
 prove that useful context reaches a model request.
 
@@ -500,7 +517,7 @@ wider approach to structured inspection. This ADR applies those principles to
 optional context enrichment; it does not make the daemon a prerequisite for
 ordinary environment reconciliation or source delivery.
 
-The protocol's proposed `workbench context --path` surface is explicit discovery;
+The `workbench context --path` surface is explicit discovery;
 this ADR adds automatic recruitment and inspection of its decisions. Both should
 use the same applicable guidance and profile interpretation where their inputs
 overlap. An explicit query does not establish a model-context delivery receipt

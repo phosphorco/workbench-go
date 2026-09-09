@@ -16,18 +16,98 @@ import (
 	"time"
 
 	"github.com/phosphorco/workbench-go/internal/contextapi"
+	"github.com/phosphorco/workbench-go/internal/contextcache"
 	"github.com/phosphorco/workbench-go/internal/contextconfig"
 	"github.com/phosphorco/workbench-go/internal/contextdaemon"
 	"github.com/phosphorco/workbench-go/internal/contexthook"
 	"github.com/phosphorco/workbench-go/internal/contexttrace"
+	"github.com/phosphorco/workbench-go/internal/evaluate"
+	workbenchruntime "github.com/phosphorco/workbench-go/internal/runtime"
 )
 
 const (
-	defaultContextWholeHookDeadline = 2 * time.Second
-	defaultContextStartupTimeout    = 2 * time.Second
-	defaultContextDialTimeout       = 250 * time.Millisecond
-	defaultContextMaxWireBytes      = 4 * 1024 * 1024
+	defaultContextWholeHookDeadline          = 2 * time.Second
+	defaultContextStartupTimeout             = 2 * time.Second
+	defaultContextDialTimeout                = 250 * time.Millisecond
+	defaultContextMaxWireBytes               = 4 * 1024 * 1024
+	defaultContextMaxProcessDataBytes uint64 = 128 * 1024 * 1024
 )
+
+// contextLoadDependencies is the sole CLI composition point for declaration
+// evaluation and cache ownership. It performs path composition and opens the
+// no-write Pool only; private toolchain files and the runtime lock are read
+// lazily by ContextEvaluator after Load discovers an authored declaration.
+func contextLoadDependencies(paths contextdaemon.Paths) (contextconfig.LoadDependencies, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return contextconfig.LoadDependencies{}, fmt.Errorf("resolve Workbench executable: %w", err)
+	}
+	leasePath, err := defaultContextEvaluatorLeasePath()
+	if err != nil {
+		return contextconfig.LoadDependencies{}, err
+	}
+	return contextLoadDependenciesFor(executable, paths, leasePath)
+}
+
+func contextLoadDependenciesFor(executable string, paths contextdaemon.Paths, leasePath string) (contextconfig.LoadDependencies, error) {
+	toolchain, err := workbenchruntime.ContextFromExecutable(executable)
+	if err != nil {
+		return contextconfig.LoadDependencies{}, err
+	}
+	runtimeEvaluator, err := evaluate.NewEvaluator(toolchain.PklPath)
+	if err != nil {
+		return contextconfig.LoadDependencies{}, fmt.Errorf("construct context evaluator: %w", err)
+	}
+	evaluator, err := evaluate.NewContextEvaluator(runtimeEvaluator, evaluate.ContextOptions{
+		WorkerExecutable:    executable,
+		WorkerArguments:     []string{"context", "worker"},
+		RuntimeLockPath:     toolchain.RuntimeLockPath,
+		EvaluatorLeasePath:  leasePath,
+		MaxProcessDataBytes: defaultContextMaxProcessDataBytes,
+	})
+	if err != nil {
+		return contextconfig.LoadDependencies{}, fmt.Errorf("construct context evaluator: %w", err)
+	}
+	pool, err := contextcache.Open(paths.CacheDir, contextcache.Options{})
+	if err != nil {
+		return contextconfig.LoadDependencies{}, fmt.Errorf("construct context cache: %w", err)
+	}
+	return contextconfig.LoadDependencies{
+		Evaluate:  evaluator.Evaluate,
+		Freshness: evaluator.Freshness,
+		Identity:  evaluator.Identity,
+		Cache:     pool,
+	}, nil
+}
+
+func runContextWorkerCommand(arguments []string) error {
+	if len(arguments) != 5 || arguments[0] != "--pkl" || arguments[2] != "--max-data-bytes" || arguments[4] != "server" {
+		return contextUsageError("worker requires --pkl PATH --max-data-bytes BYTES server")
+	}
+	if !filepath.IsAbs(arguments[1]) {
+		return contextUsageError("worker --pkl must be an absolute path")
+	}
+	maxDataBytes, err := strconv.ParseUint(arguments[3], 10, 64)
+	if err != nil || maxDataBytes == 0 {
+		return contextUsageError("worker --max-data-bytes must be a positive integer")
+	}
+	return evaluate.RunContextWorker(evaluate.ContextWorkerSpec{PklExecutable: filepath.Clean(arguments[1]), MaxProcessDataBytes: maxDataBytes})
+}
+
+func defaultContextEvaluatorLeasePath() (string, error) {
+	if value := os.Getenv("XDG_RUNTIME_DIR"); value != "" {
+		path, err := filepath.Abs(filepath.Join(value, "workbench", "context-evaluator.lock"))
+		if err != nil {
+			return "", fmt.Errorf("resolve context evaluator lease: %w", err)
+		}
+		return path, nil
+	}
+	cacheHome, err := xdgDirectory("XDG_CACHE_HOME", ".cache")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheHome, "workbench", "context-evaluator.lock"), nil
+}
 
 type hookFailureStage string
 
@@ -114,11 +194,16 @@ func runContextHook(parent context.Context, options contextOptions, output, diag
 		writeHookDiagnostic(diagnostics, hookStageRoute, err)
 		return nil
 	}
-	loaded, err := contextconfig.Load(contextconfig.LoadOptions{
+	deps, err := contextLoadDependencies(paths)
+	if err != nil {
+		writeHookDiagnostic(diagnostics, hookStageActivation, err)
+		return nil
+	}
+	loaded, err := contextconfig.Load(hookContext, contextconfig.LoadOptions{
 		WorkingDirectory: route.CWD,
 		HomeConfigPath:   paths.HomeConfigPath,
 		Now:              time.Now().UTC(),
-	})
+	}, deps)
 	if err != nil {
 		writeHookDiagnostic(diagnostics, hookStageActivation, err)
 		return nil
@@ -528,7 +613,11 @@ func contextRuntimeOptions(paths contextdaemon.Paths, options contextOptions) (c
 	if err != nil {
 		return contextdaemon.RuntimeOptions{}, err
 	}
-	return contextdaemon.RuntimeOptions{Paths: paths, LoadLimits: contextconfig.DefaultLoadLimits(), HookDeadline: hookDeadline, WholeHookDeadline: wholeDeadline}, nil
+	deps, err := contextLoadDependencies(paths)
+	if err != nil {
+		return contextdaemon.RuntimeOptions{}, err
+	}
+	return contextdaemon.RuntimeOptions{Paths: paths, LoadDependencies: deps, LoadLimits: contextconfig.DefaultLoadLimits(), HookDeadline: hookDeadline, WholeHookDeadline: wholeDeadline}, nil
 }
 
 func runContextServe(parent context.Context, options contextOptions, output io.Writer) error {
@@ -598,7 +687,7 @@ func runContextRuntimeCommand(ctx context.Context, invocation contextInvocation,
 		if err != nil {
 			return err
 		}
-		result, err := client.Query(ctx, query)
+		result, err := client.Query(ctx, contextdaemon.QueryRequest{WorkingDirectory: root, Query: query})
 		if err != nil {
 			return fmt.Errorf("query context history: %w", err)
 		}
@@ -609,7 +698,7 @@ func runContextRuntimeCommand(ctx context.Context, invocation contextInvocation,
 			return err
 		}
 		id, _ := strconv.ParseUint(invocation.value, 10, 64)
-		result, err := client.Inspect(ctx, contextdaemon.InspectRequest{Kind: contextdaemon.InspectContribution, ContributionID: id, Query: query})
+		result, err := client.Inspect(ctx, contextdaemon.InspectRequest{WorkingDirectory: root, Kind: contextdaemon.InspectContribution, ContributionID: id, Query: query})
 		if err != nil {
 			return fmt.Errorf("inspect contribution %d: %w", id, err)
 		}
@@ -619,7 +708,7 @@ func runContextRuntimeCommand(ctx context.Context, invocation contextInvocation,
 		if err != nil {
 			return err
 		}
-		result, err := client.Inspect(ctx, contextdaemon.InspectRequest{Kind: contextdaemon.InspectTurn, Turn: invocation.value, Query: query})
+		result, err := client.Inspect(ctx, contextdaemon.InspectRequest{WorkingDirectory: root, Kind: contextdaemon.InspectTurn, Turn: invocation.value, Query: query})
 		if err != nil {
 			return fmt.Errorf("inspect turn %q: %w", invocation.value, err)
 		}
@@ -629,22 +718,22 @@ func runContextRuntimeCommand(ctx context.Context, invocation contextInvocation,
 		if err != nil {
 			return err
 		}
-		result, err := client.Inspect(ctx, contextdaemon.InspectRequest{Kind: contextdaemon.InspectProfile, Profile: invocation.value, Query: query})
+		result, err := client.Inspect(ctx, contextdaemon.InspectRequest{WorkingDirectory: root, Kind: contextdaemon.InspectProfile, Profile: invocation.value, Query: query})
 		if err != nil {
 			return fmt.Errorf("explain profile %q: %w", invocation.value, err)
 		}
 		return writeTraceResult(output, result, invocation.options, "profile")
 	case contextCommandCacheStatus:
-		status, err := client.Status(ctx, contextdaemon.StatusRequest{})
+		traceStatus, err := client.CacheStatus(ctx, root)
 		if err != nil {
 			return fmt.Errorf("read context cache status: %w", err)
 		}
 		if invocation.options.json {
-			return writeJSONReport(output, status.Trace)
+			return writeJSONReport(output, traceStatus)
 		}
-		return writeContextCacheStatus(output, status.Trace)
+		return writeContextCacheStatus(output, traceStatus)
 	case contextCommandCacheClear:
-		cleared, err := client.Clear(ctx)
+		cleared, err := client.Clear(ctx, root)
 		if err != nil {
 			return fmt.Errorf("clear context explanation cache: %w", err)
 		}
@@ -657,7 +746,7 @@ func runContextRuntimeCommand(ctx context.Context, invocation contextInvocation,
 	}
 }
 
-func contextTraceQuery(root, homeConfig string, options contextOptions) (contexttrace.Query, error) {
+func contextTraceQuery(_ string, _ string, options contextOptions) (contexttrace.Query, error) {
 	query := contexttrace.Query{After: options.after, Limit: options.limit, MaxBytes: options.maxBytes, MaxScanBytes: options.maxScanBytes, Generation: options.generation, Scope: options.scope, Audience: options.audience}
 	// Leave all query budgets zero unless the caller explicitly supplies them.
 	// The daemon resolves zero against the live store/cache limits; CLI defaults
@@ -677,15 +766,6 @@ func contextTraceQuery(root, homeConfig string, options contextOptions) (context
 			return contexttrace.Query{}, fmt.Errorf("parse cursor record id: %w", err)
 		}
 		query.Cursor = contexttrace.Cursor{BlockSequence: block, RecordID: record}
-	}
-	if query.Scope == "" && root != "" {
-		loaded, err := contextconfig.Load(contextconfig.LoadOptions{WorkingDirectory: root, HomeConfigPath: homeConfig, Now: time.Now().UTC()})
-		if err != nil {
-			return contexttrace.Query{}, fmt.Errorf("load inspection scope: %w", err)
-		}
-		if loaded.Result.Scope.ID != "" {
-			query.Scope = string(loaded.Result.Scope.ID)
-		}
 	}
 	return query, nil
 }

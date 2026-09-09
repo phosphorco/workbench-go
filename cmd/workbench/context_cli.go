@@ -27,7 +27,7 @@ Commands:
   hook --harness claude|codex       Run one bounded host hook (stdin/stdout protocol).
   setup [--harness both|claude|codex]
                                     Reconcile global Claude/Codex hook settings.
-  init [--path DIR]                 Explicitly opt DIR into builtin ai-context guidance.
+  init [--path DIR]                 Create a minimal Pkl project declaration when none applies.
   status [--path DIR]               Explain local activation without starting the runtime.
   history                           Inspect bounded explanation history (JSON or human).
   inspect contribution ID            Inspect one contribution with reasons and outcome.
@@ -60,7 +60,7 @@ Setup overrides:
   --codex-config PATH      WORKBENCH_CONTEXT_CODEX_CONFIG
   --dry-run                Validate and print changes without writing files.
 
-Defaults use XDG_CONFIG_HOME/workbench/context.json, XDG_RUNTIME_DIR/workbench,
+Defaults use XDG_CONFIG_HOME/workbench/workbench-context.pkl, XDG_RUNTIME_DIR/workbench,
 and XDG_CACHE_HOME/workbench/context (with HOME fallbacks). Hook output is empty
 on inactive, conflicting, invalid, or failed input; hook failures are fail-open.
 For deadlines, flag > environment > enabled home Runtime limits > ordinary default;
@@ -374,6 +374,9 @@ func parseContextInt64(values map[string]string, name string, destination *int64
 }
 
 func runContextCommand(ctx context.Context, arguments []string, workingDirectory func() (string, error), output, diagnostics io.Writer) error {
+	if len(arguments) > 0 && arguments[0] == "worker" {
+		return runContextWorkerCommand(arguments[1:])
+	}
 	invocation, err := parseContextInvocation(arguments)
 	if err != nil {
 		return err
@@ -387,7 +390,7 @@ func runContextCommand(ctx context.Context, arguments []string, workingDirectory
 	if invocation.kind == contextCommandSetup {
 		return runContextSetup(ctx, invocation.options, output, diagnostics)
 	}
-	if invocation.kind == contextCommandServe || invocation.kind == contextCommandCacheStatus || invocation.kind == contextCommandCacheClear {
+	if invocation.kind == contextCommandServe {
 		return runContextRuntimeCommand(ctx, invocation, "", output, diagnostics)
 	}
 	root, err := workingDirectory()
@@ -403,9 +406,11 @@ func runContextCommand(ctx context.Context, arguments []string, workingDirectory
 	}
 	switch invocation.kind {
 	case contextCommandInit:
-		return runContextInit(root, invocation.options, output)
+		return runContextInitContext(ctx, root, invocation.options, output)
 	case contextCommandStatus:
 		return runContextStatus(ctx, root, invocation.options, output)
+	case contextCommandCacheStatus, contextCommandCacheClear:
+		return runContextRuntimeCommand(ctx, invocation, root, output, diagnostics)
 	case contextCommandHistory, contextCommandInspectContribution, contextCommandInspectTurn,
 		contextCommandExplainProfile:
 		return runContextRuntimeCommand(ctx, invocation, root, output, diagnostics)
@@ -432,63 +437,126 @@ func absoluteDirectory(path string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
+type contextInitReport struct {
+	Path       string                      `json:"path"`
+	Created    bool                        `json:"created"`
+	Activation contextapi.ActivationResult `json:"activation"`
+}
+
+const minimalProjectDeclaration = `amends "workbench:context"
+
+scope = "subtree"
+
+contributors {
+  ["project-guidance"] = new AiContext {}
+}
+`
+
 func runContextInit(root string, options contextOptions, output io.Writer) error {
-	path := filepath.Join(root, ".workbench", "context.json")
-	raw, err := os.ReadFile(path)
-	exists := err == nil
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read project context declaration %q: %w", path, err)
+	return runContextInitContext(context.Background(), root, options, output)
+}
+
+func runContextInitContext(ctx context.Context, root string, options contextOptions, output io.Writer) error {
+	path := filepath.Join(root, "workbench-context.pkl")
+	paths, err := contextPaths(options)
+	if err != nil {
+		return err
 	}
-	var object map[string]json.RawMessage
-	if exists {
-		if err := decodeJSONObject(raw, &object); err != nil {
-			return fmt.Errorf("validate project context declaration %q: %w", path, err)
-		}
-	} else {
-		object = make(map[string]json.RawMessage)
+	deps, err := contextLoadDependencies(paths)
+	if err != nil {
+		return err
 	}
-	changed := false
-	changed = setJSONBool(object, "optIn", true) || changed
-	if _, present := object["includeChildren"]; !present {
-		changed = setJSONBool(object, "includeChildren", true) || changed
+	_, statErr := os.Lstat(path)
+	exists := statErr == nil
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect project context declaration %q: %w", path, statErr)
 	}
-	if _, present := object["schemaVersion"]; !present {
-		object["schemaVersion"], _ = json.Marshal(1)
-		changed = true
+	loaded, err := contextconfig.Load(ctx, contextconfig.LoadOptions{WorkingDirectory: root, HomeConfigPath: paths.HomeConfigPath, Now: time.Now().UTC()}, deps)
+	if err != nil {
+		return fmt.Errorf("load context activation: %w", err)
 	}
-	if changed {
+	created := false
+	if !exists && !initMustPreserve(loaded) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return fmt.Errorf("create project context directory: %w", err)
 		}
-		encoded, err := json.MarshalIndent(object, "", "  ")
+		published, err := writeAtomicIfAbsent(path, []byte(minimalProjectDeclaration), 0o644)
 		if err != nil {
-			return fmt.Errorf("encode project context declaration: %w", err)
-		}
-		encoded = append(encoded, '\n')
-		if err := writeAtomicPreserving(path, encoded, 0o644); err != nil {
 			return fmt.Errorf("write project context declaration %q: %w", path, err)
 		}
+		created = published
+		loaded, err = contextconfig.Load(ctx, contextconfig.LoadOptions{WorkingDirectory: root, HomeConfigPath: paths.HomeConfigPath, Now: time.Now().UTC()}, deps)
+		if err != nil {
+			return fmt.Errorf("resolve initialized context activation: %w", err)
+		}
 	}
+	report := contextInitReport{Path: path, Created: created, Activation: loaded.Result}
 	if options.json {
-		return writeJSONReport(output, struct {
-			Path    string `json:"path"`
-			OptIn   bool   `json:"optIn"`
-			Changed bool   `json:"changed"`
-		}{Path: path, OptIn: true, Changed: changed})
+		return writeJSONReport(output, report)
 	}
-	if changed {
-		return writeReport(output, fmt.Sprintf("Opted in project scope: %s", path))
+	if created {
+		if err := writeReport(output, fmt.Sprintf("Created project declaration: %s", path)); err != nil {
+			return err
+		}
+	} else if exists {
+		if err := writeReport(output, fmt.Sprintf("Preserved project declaration: %s", path)); err != nil {
+			return err
+		}
+	} else {
+		if err := writeReport(output, "Preserved the applicable ancestor/home declaration; no local project declaration was created."); err != nil {
+			return err
+		}
 	}
-	return writeReport(output, fmt.Sprintf("Project already opted in: %s", path))
+	return writeReport(output, fmt.Sprintf("Activation: %s", report.Activation.State))
 }
 
-func setJSONBool(object map[string]json.RawMessage, key string, value bool) bool {
-	encoded, _ := json.Marshal(value)
-	if bytes.Equal(object[key], encoded) {
-		return false
+// writeAtomicIfAbsent publishes a new declaration without replacing a file
+// that appeared after discovery. The final hard-link is the no-clobber point;
+// a racing actor therefore keeps its authored bytes and init simply reloads.
+func writeAtomicIfAbsent(path string, data []byte, mode os.FileMode) (bool, error) {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".workbench-context-init-")
+	if err != nil {
+		return false, err
 	}
-	object[key] = encoded
-	return true
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(mode); err != nil {
+		_ = temporary.Close()
+		return false, err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return false, err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return false, err
+	}
+	if err := temporary.Close(); err != nil {
+		return false, err
+	}
+	if err := os.Link(temporaryName, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func initMustPreserve(loaded contextconfig.LoadResult) bool {
+	if len(loaded.Input.Config.Projects) > 0 || loaded.Result.Scope.CanonicalRoot != "" {
+		return true
+	}
+	if loaded.Result.State == contextapi.ActivationInvalid {
+		return true
+	}
+	for _, reason := range loaded.Result.Reasons {
+		if reason.Code == contextapi.ReasonExcluded {
+			return true
+		}
+	}
+	return false
 }
 
 type contextStatusReport struct {
@@ -518,11 +586,15 @@ func runContextStatus(ctx context.Context, root string, options contextOptions, 
 	if err != nil {
 		return err
 	}
-	loaded, err := contextconfig.Load(contextconfig.LoadOptions{WorkingDirectory: root, HomeConfigPath: paths.HomeConfigPath, Now: time.Now().UTC()})
+	deps, err := contextLoadDependencies(paths)
+	if err != nil {
+		return err
+	}
+	loaded, err := contextconfig.Load(ctx, contextconfig.LoadOptions{WorkingDirectory: root, HomeConfigPath: paths.HomeConfigPath, Now: time.Now().UTC()}, deps)
 	if err != nil {
 		return fmt.Errorf("load context activation: %w", err)
 	}
-	report := contextStatusReport{WorkingDirectory: loaded.Input.WorkingDirectory, Paths: contextPathReport{HomeConfigPath: paths.HomeConfigPath, RuntimeDir: paths.RuntimeDir, SocketPath: paths.SocketPath, StartLockPath: paths.LockPath, ServerLockPath: paths.ServerLockPath, CacheDir: paths.CacheDir}, Activation: loaded.Result, Runtime: contextRuntimeStatusReport{State: "not-checked"}}
+	report := contextStatusReport{WorkingDirectory: loaded.Input.WorkingDirectory, Paths: contextPathReport{HomeConfigPath: paths.HomeConfigPath, RuntimeDir: paths.RuntimeDir, SocketPath: paths.SocketPath, StartLockPath: paths.LockPath, ServerLockPath: paths.ServerLockPath, CacheDir: paths.CacheDir}, Activation: contextStatusActivation(loaded.Result), Runtime: contextRuntimeStatusReport{State: "not-checked"}}
 	if loaded.Result.State == contextapi.ActivationEnabled {
 		report.Runtime = readExistingRuntimeStatus(ctx, paths, options, loaded.Input.WorkingDirectory)
 	}
@@ -530,6 +602,16 @@ func runContextStatus(ctx context.Context, root string, options contextOptions, 
 		return writeJSONReport(output, report)
 	}
 	return writeContextStatus(output, report)
+}
+
+func contextStatusActivation(result contextapi.ActivationResult) contextapi.ActivationResult {
+	result.Reasons = append([]contextapi.Reason(nil), result.Reasons...)
+	for index := range result.Reasons {
+		if result.Reasons[index].Code == contextapi.ReasonProviderNotSelected && strings.Contains(result.Reasons[index].Summary, "no enabled contributors") {
+			result.Reasons[index].Summary = "empty selection: " + result.Reasons[index].Summary
+		}
+	}
+	return result
 }
 
 func writeContextStatus(output io.Writer, report contextStatusReport) error {
@@ -545,7 +627,16 @@ func writeContextStatus(output io.Writer, report contextStatusReport) error {
 		}
 	}
 	if report.Activation.State == contextapi.ActivationEnabled {
-		if err := writeReport(output, fmt.Sprintf("Providers: %d; profile providers: %d", len(report.Activation.Effective.Providers), len(report.Activation.Effective.ProfileProviders))); err != nil {
+		profileProviders := 0
+		for _, provider := range report.Activation.Effective.Providers {
+			for _, capability := range provider.Capabilities {
+				if capability == contextapi.ProviderCapabilityProfile {
+					profileProviders++
+					break
+				}
+			}
+		}
+		if err := writeReport(output, fmt.Sprintf("Providers: %d; profile providers: %d", len(report.Activation.Effective.Providers), profileProviders)); err != nil {
 			return err
 		}
 	}
@@ -674,6 +765,9 @@ func decodeJSONObject(raw []byte, destination *map[string]json.RawMessage) error
 
 func contextPaths(options contextOptions) (contextdaemon.Paths, error) {
 	homeConfig := optionOrEnv(options.homeConfig, "WORKBENCH_CONTEXT_HOME_CONFIG")
+	if homeConfig != "" && filepath.Ext(homeConfig) == ".json" {
+		return contextdaemon.Paths{}, fmt.Errorf("explicit home path %q is obsolete JSON; use workbench-context.pkl", homeConfig)
+	}
 	runtimeDir := optionOrEnv(options.runtimeDir, "WORKBENCH_CONTEXT_RUNTIME_DIR")
 	socket := optionOrEnv(options.socket, "WORKBENCH_CONTEXT_SOCKET")
 	startLock := optionOrEnv(options.startLock, "WORKBENCH_CONTEXT_START_LOCK")
@@ -684,7 +778,7 @@ func contextPaths(options contextOptions) (contextdaemon.Paths, error) {
 		if err != nil {
 			return contextdaemon.Paths{}, err
 		}
-		homeConfig = filepath.Join(configHome, "workbench", "context.json")
+		homeConfig = filepath.Join(configHome, "workbench", "workbench-context.pkl")
 	}
 	if runtimeDir == "" {
 		if value := os.Getenv("XDG_RUNTIME_DIR"); value != "" {

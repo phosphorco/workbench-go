@@ -17,8 +17,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const builtinProvider contextapi.ProviderID = "ai-context"
-
 // BuiltinLimits bounds one ai-context contribution call. Zero fields use the
 // conservative defaults below. The hard ceilings keep a caller from turning
 // the builtin into an unbounded directory or memory reader.
@@ -71,6 +69,7 @@ const (
 func ContributeBuiltin(
 	ctx context.Context,
 	request contextapi.ContributionRequest,
+	provider contextapi.ProviderID,
 	root string,
 	limits BuiltinLimits,
 ) contextapi.ContributionResponse {
@@ -86,26 +85,25 @@ func ContributeBuiltin(
 		observedMemo: make(map[string]rootFileRead),
 	}
 	if ctx == nil {
-		appendBuiltinReason(&response, builtinReason(contextapi.ReasonInvalidInput, "nil builtin context", request, "builtin-input"), budget)
+		appendBuiltinReason(&response, builtinReason(contextapi.ReasonInvalidInput, "nil builtin context", request, provider, "builtin-input"), budget)
 		return response
 	}
 	if root == "" {
-		appendBuiltinReason(&response, builtinReason(contextapi.ReasonInvalidInput, "builtin root is empty", request, "builtin-root"), budget)
+		appendBuiltinReason(&response, builtinReason(contextapi.ReasonInvalidInput, "builtin root is empty", request, provider, "builtin-root"), budget)
 		return response
 	}
 	rootFS, err := os.OpenRoot(root)
 	if err != nil {
-		appendBuiltinReason(&response, builtinReason(contextapi.ReasonProviderFailed, "open builtin root: "+err.Error(), request, "builtin-root"), budget)
+		appendBuiltinReason(&response, builtinReason(contextapi.ReasonProviderFailed, "open builtin root: "+err.Error(), request, provider, "builtin-root"), budget)
 		return response
 	}
 	defer rootFS.Close()
 
-	provider := builtinProvider
 	request.Observation.Selectors = boundedSelectors(request.Observation.Selectors, limits)
 
 	attentions := builtinAttentions(request, limits)
 	if len(attentions) == 0 {
-		appendBuiltinReason(&response, builtinReason(contextapi.ReasonNoMatch, "no usable file or selector attention", request, "builtin-attention"), budget)
+		appendBuiltinReason(&response, builtinReason(contextapi.ReasonNoMatch, "no usable file or selector attention", request, provider, "builtin-attention"), budget)
 		return response
 	}
 	maxContributions := minUint32NonZero(limits.MaxContributions, request.Limits.MaxContributions)
@@ -116,16 +114,16 @@ func ContributeBuiltin(
 	var outputBytes uint64
 	for _, attention := range attentions {
 		if err := ctx.Err(); err != nil {
-			appendBuiltinReason(&response, builtinReason(contextapi.ReasonProviderFailed, "builtin contribution canceled", request, "builtin-cancel"), budget)
+			appendBuiltinReason(&response, builtinReason(contextapi.ReasonProviderFailed, "builtin contribution canceled", request, provider, "builtin-cancel"), budget)
 			break
 		}
-		reads, readReasons := readManifests(ctx, rootFS, attention, limits, request, budget)
+		reads, readReasons := readManifests(ctx, rootFS, attention, limits, request, provider, budget)
 		appendBuiltinReasons(&response, readReasons, budget)
 		observedText := observedTextFor(ctx, rootFS, attention, reads, limits, budget)
 		for _, read := range reads {
 			if read.kind != manifestParsed {
 				if read.kind == manifestUnavailable {
-					appendBuiltinContribution(&response, diagnosticContribution(read, request, provider), maxContributions, maxBodyBytes, limits.MaxOutputBytes, &outputBytes, budget)
+					appendBuiltinContribution(&response, diagnosticContribution(read, request, provider), provider, maxContributions, maxBodyBytes, limits.MaxOutputBytes, &outputBytes, budget)
 				}
 				continue
 			}
@@ -134,8 +132,8 @@ func ContributeBuiltin(
 					continue
 				}
 				body := docsBody(section, read.includes)
-				contribution := builtinContribution(read, request, provider, "docs", index, body, matchedReason(request, read.path, "docs", index))
-				appendBuiltinContribution(&response, contribution, maxContributions, maxBodyBytes, limits.MaxOutputBytes, &outputBytes, budget)
+				contribution := builtinContribution(read, request, provider, "docs", index, body, matchedReason(request, read.path, provider, "docs", index))
+				appendBuiltinContribution(&response, contribution, provider, maxContributions, maxBodyBytes, limits.MaxOutputBytes, &outputBytes, budget)
 			}
 			for index, section := range read.manifest.Commands {
 				if read.target.kind == attentionSelectors && hasFileCommandVariable(section.Command) {
@@ -145,11 +143,11 @@ func ContributeBuiltin(
 					continue
 				}
 				body := commandBody(section, read.target)
-				contribution := builtinContribution(read, request, provider, "command", index, body, matchedReason(request, read.path, "command", index))
+				contribution := builtinContribution(read, request, provider, "command", index, body, matchedReason(request, read.path, provider, "command", index))
 				contribution.Slot.Key = contextapi.SlotKey(fmt.Sprintf("%s:command:%d:%s", read.path, index, read.target.subject()))
 				contribution.Source.Identity.ID = contextapi.SourceID(contribution.Slot.Key)
 				contribution.SourceRevision.Source.ID = contribution.Source.Identity.ID
-				appendBuiltinContribution(&response, contribution, maxContributions, maxBodyBytes, limits.MaxOutputBytes, &outputBytes, budget)
+				appendBuiltinContribution(&response, contribution, provider, maxContributions, maxBodyBytes, limits.MaxOutputBytes, &outputBytes, budget)
 			}
 		}
 		if maxContributions != 0 && uint32(len(response.Contributions)) >= maxContributions {
@@ -157,7 +155,7 @@ func ContributeBuiltin(
 		}
 	}
 	if len(response.Contributions) == 0 {
-		appendBuiltinReason(&response, builtinReason(contextapi.ReasonNoMatch, "no ai-context rule matched the observed attention", request, "builtin-match"), budget)
+		appendBuiltinReason(&response, builtinReason(contextapi.ReasonNoMatch, "no ai-context rule matched the observed attention", request, provider, "builtin-match"), budget)
 	}
 	return response
 }
@@ -169,6 +167,7 @@ func ContributeBuiltin(
 // A deleted manifest returns (false, nil); it is a normal freshness result.
 func Revalidate(
 	ctx context.Context,
+	provider contextapi.ProviderID,
 	root string,
 	source contextapi.SourceRef,
 	expected contextapi.SourceRevision,
@@ -177,7 +176,7 @@ func Revalidate(
 	if ctx == nil {
 		return false, errors.New("contextprovider: nil revalidation context")
 	}
-	if source.Identity.Provider != builtinProvider || expected.Source != source.Identity || source.Path == "" {
+	if provider == "" || source.Identity.Provider != provider || expected.Source != source.Identity || source.Path == "" {
 		return false, fmt.Errorf("%w: builtin source identity is invalid", ErrInvalidProviderConfig)
 	}
 	relative, ok := safeRelative(source.Path)
@@ -343,6 +342,7 @@ func readManifests(
 	attention builtinAttention,
 	limits BuiltinLimits,
 	request contextapi.ContributionRequest,
+	provider contextapi.ProviderID,
 	budget *builtinBudget,
 ) ([]manifestRead, []contextapi.Reason) {
 	directory := "."
@@ -360,7 +360,7 @@ func readManifests(
 			}
 			file, err := readRootText(ctx, root, candidate, limits.MaxManifestBytes)
 			if err != nil {
-				reasons = append(reasons, builtinReason(contextapi.ReasonProviderFailed, "read "+candidate+": "+err.Error(), request, "builtin-read"))
+				reasons = append(reasons, builtinReason(contextapi.ReasonProviderFailed, "read "+candidate+": "+err.Error(), request, provider, "builtin-read"))
 				break
 			}
 			// Count every uncached candidate lookup, including a missing
@@ -382,7 +382,7 @@ func readManifests(
 				manifest, parseErr := parseManifest(file.body)
 				if parseErr != nil {
 					cached.kind = manifestMalformed
-					reasons = append(reasons, builtinReason(contextapi.ReasonMalformedContribution, candidate+": "+parseErr.Error(), request, "ai-context-frontmatter"))
+					reasons = append(reasons, builtinReason(contextapi.ReasonMalformedContribution, candidate+": "+parseErr.Error(), request, provider, "ai-context-frontmatter"))
 				} else {
 					cached.kind = manifestParsed
 					cached.manifest = manifest
@@ -638,7 +638,7 @@ func builtinContribution(
 
 func diagnosticContribution(read manifestRead, request contextapi.ContributionRequest, provider contextapi.ProviderID) contextapi.Contribution {
 	body := "Context Magnet diagnostic: " + read.diagnostic
-	return builtinContribution(read, request, provider, "diagnostic", 0, body, matchedReason(request, read.path, "diagnostic", 0))
+	return builtinContribution(read, request, provider, "diagnostic", 0, body, matchedReason(request, read.path, provider, "diagnostic", 0))
 }
 
 func recruitmentFor(target manifestTarget) contextapi.SourceRecruitment {
@@ -648,7 +648,7 @@ func recruitmentFor(target manifestTarget) contextapi.SourceRecruitment {
 	return contextapi.SourceRecruitment{Kind: contextapi.RecruitmentObservedFile, Resource: target.repoObserved}
 }
 
-func matchedReason(request contextapi.ContributionRequest, sourcePath, kind string, index int) contextapi.Reason {
+func matchedReason(request contextapi.ContributionRequest, sourcePath string, provider contextapi.ProviderID, kind string, index int) contextapi.Reason {
 	params := []contextapi.ReasonParameter{
 		{Key: "source", Value: contextapi.ReasonValue{Kind: contextapi.ReasonValueText, Text: sourcePath}},
 		{Key: "section", Value: contextapi.ReasonValue{Kind: contextapi.ReasonValueText, Text: kind}},
@@ -657,7 +657,7 @@ func matchedReason(request contextapi.ContributionRequest, sourcePath, kind stri
 	return contextapi.Reason{
 		Code:     contextapi.ReasonNoMatch,
 		Origin:   contextapi.ReasonProvider,
-		Provider: builtinProvider,
+		Provider: provider,
 		Rule:     "ai-context." + kind,
 		Summary:  "matched ai-context rule",
 		Params:   params,
@@ -669,6 +669,7 @@ func matchedReason(request contextapi.ContributionRequest, sourcePath, kind stri
 func appendBuiltinContribution(
 	response *contextapi.ContributionResponse,
 	contribution contextapi.Contribution,
+	provider contextapi.ProviderID,
 	maxContributions uint32,
 	maxBodyBytes, maxOutputBytes uint64,
 	outputBytes *uint64,
@@ -680,14 +681,14 @@ func appendBuiltinContribution(
 	}
 	if maxBodyBytes != 0 && bodyBytes > maxBodyBytes {
 		appendBuiltinReason(response, contextapi.Reason{
-			Code: contextapi.ReasonMalformedContribution, Origin: contextapi.ReasonProvider, Provider: builtinProvider,
+			Code: contextapi.ReasonMalformedContribution, Origin: contextapi.ReasonProvider, Provider: provider,
 			Rule: "ai-context.body", Summary: "complete builtin contribution exceeds body bound", At: time.Now().UTC(),
 		}, budget)
 		return
 	}
 	if maxOutputBytes != 0 && bodyBytes > maxOutputBytes-*outputBytes {
 		appendBuiltinReason(response, contextapi.Reason{
-			Code: contextapi.ReasonMalformedContribution, Origin: contextapi.ReasonProvider, Provider: builtinProvider,
+			Code: contextapi.ReasonMalformedContribution, Origin: contextapi.ReasonProvider, Provider: provider,
 			Rule: "ai-context.output", Summary: "complete builtin output exceeds output bound", At: time.Now().UTC(),
 		}, budget)
 		return
@@ -1047,8 +1048,8 @@ func minBuiltin64(a, b uint64) uint64 {
 	return b
 }
 
-func builtinReason(code contextapi.ReasonCode, summary string, request contextapi.ContributionRequest, rule string) contextapi.Reason {
-	return contextapi.Reason{Code: code, Origin: contextapi.ReasonProvider, Provider: builtinProvider, Rule: rule, Summary: summary, Evidence: evidenceForRequest(request), At: requestAt(request)}
+func builtinReason(code contextapi.ReasonCode, summary string, request contextapi.ContributionRequest, provider contextapi.ProviderID, rule string) contextapi.Reason {
+	return contextapi.Reason{Code: code, Origin: contextapi.ReasonProvider, Provider: provider, Rule: rule, Summary: summary, Evidence: evidenceForRequest(request), At: requestAt(request)}
 }
 
 func shortDiagnostic(err error) string {

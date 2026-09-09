@@ -130,6 +130,9 @@ func TestReleasePackageCandidate(t *testing.T) {
 		"pkl/Plan.pkl",
 		"pkl/Repository.pkl",
 		"pkl/WorkbenchCommitPlan.pkl",
+		"pkl/WorkbenchContext.pkl",
+		"pkl/WorkbenchContextHome.pkl",
+		"pkl/WorkbenchContextTypes.pkl",
 		"pkl/WorkbenchSnapshot.pkl",
 		"pkl/WorkbenchSubject.pkl",
 	}

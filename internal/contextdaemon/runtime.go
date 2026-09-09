@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/phosphorco/workbench-go/internal/contextapi"
+	"github.com/phosphorco/workbench-go/internal/contextcache"
 	"github.com/phosphorco/workbench-go/internal/contextconfig"
 	"github.com/phosphorco/workbench-go/internal/contextengine"
 	"github.com/phosphorco/workbench-go/internal/contextprovider"
@@ -228,13 +229,13 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 		runtime.mu.Unlock()
 		return nil
 	}
-	paths := runtime.paths
 	options := runtime.options
 	runtime.mu.Unlock()
 
-	store, openErr := contexttrace.Open(paths.CacheDir, traceOptions(options))
-	trace := newTraceRuntime(store, openErr, options.TraceQueueItems, options.TraceQueueBytes)
-	idleTTL := homeIdleTTL(options)
+	// The current policy is cwd-dependent and is established by Load after a
+	// request arrives. Start owns only the mailbox/worker until then; this keeps
+	// no-source implicit paths from creating the shared cache.
+	trace := newTraceRuntime(nil, nil, options.TraceQueueItems, options.TraceQueueBytes)
 	runtime.mu.Lock()
 	if runtime.closed || runtime.closing {
 		runtime.mu.Unlock()
@@ -243,7 +244,6 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	}
 	runtime.stop = make(chan struct{})
 	runtime.trace = trace
-	runtime.idleTTL = idleTTL
 	runtime.started = true
 	runtime.workerWG.Add(1)
 	stop := runtime.stop
@@ -327,7 +327,7 @@ func (runtime *Runtime) Observe(ctx context.Context, input ObserveInput) (Observ
 	// Local activation is normally performed by the hook before Ensure. Keep
 	// this preflight as a safety fence: an inactive caller must not start a
 	// daemon merely to report that it has no work to do.
-	_, initialActivation, err := runtime.loadCurrentActivation(directory, time.Now().UTC())
+	_, initialActivation, _, err := runtime.loadCurrentActivation(ctx, directory, time.Now().UTC())
 	if err != nil {
 		return ObserveResult{}, err
 	}
@@ -346,7 +346,7 @@ func (runtime *Runtime) Observe(ctx context.Context, input ObserveInput) (Observ
 	}
 	defer runtime.endRequest()
 	now := time.Now().UTC()
-	_, activation, err := runtime.loadCurrentActivation(directory, now)
+	_, activation, policy, err := runtime.loadCurrentActivation(ctx, directory, now)
 	if err != nil {
 		return ObserveResult{}, err
 	}
@@ -358,6 +358,11 @@ func (runtime *Runtime) Observe(ctx context.Context, input ObserveInput) (Observ
 			State: contextapi.DeliveryWithdrawn, Reasons: cloneReasons(activation.Reasons),
 		}}, nil
 	}
+	// A failed/stale policy disables trace writes but does not turn an enabled
+	// delivery hook into a cache-dependent failure. The loader/evaluator work
+	// remains outside Store and pool locks. Inactive warm observations return
+	// above so no-source hooks cannot lazily create the trace namespace.
+	_ = runtime.prepareTrace(ctx, policy)
 	if err := validateObservationInput(input, directory, activation.Scope); err != nil {
 		return ObserveResult{}, err
 	}
@@ -403,7 +408,7 @@ func (runtime *Runtime) Confirm(ctx context.Context, input ConfirmInput) context
 	// input.At is historical adapter evidence only. It can never extend the
 	// live-offer/profile deadlines.
 	now := time.Now().UTC()
-	_, activation, err := runtime.loadCurrentActivation(input.WorkingDirectory, now)
+	_, activation, policy, err := runtime.loadCurrentActivation(ctx, input.WorkingDirectory, now)
 	if err != nil {
 		return confirmationFailure(err, "reload current activation")
 	}
@@ -419,10 +424,11 @@ func (runtime *Runtime) Confirm(ctx context.Context, input ConfirmInput) context
 	// admission so a declaration withdrawn while startup was in progress is
 	// handled as inactive without touching an offer from the old scope.
 	now = time.Now().UTC()
-	_, activation, err = runtime.loadCurrentActivation(input.WorkingDirectory, now)
+	_, activation, policy, err = runtime.loadCurrentActivation(ctx, input.WorkingDirectory, now)
 	if err != nil {
 		return confirmationFailure(err, "reload current activation")
 	}
+	_ = runtime.prepareTrace(ctx, policy)
 	if activation.State != contextapi.ActivationEnabled {
 		return runtime.withdrawInactiveConfirmation(input.WorkingDirectory, input.Identity, now, activation.Reasons)
 	}
@@ -485,10 +491,6 @@ func (runtime *Runtime) Status(ctx context.Context, request StatusRequest) (Stat
 	if ctx == nil {
 		return Status{}, fmt.Errorf("%w: nil status context", ErrRuntimeInput)
 	}
-	if err := runtime.beginRequest(ctx); err != nil {
-		return Status{}, err
-	}
-	defer runtime.endRequest()
 	now := time.Now().UTC()
 	runtime.evictIdle(now)
 	status := Status{Generation: runtime.generationValue(), SocketPath: runtime.paths.SocketPath, Running: runtime.running()}
@@ -503,12 +505,29 @@ func (runtime *Runtime) Status(ctx context.Context, request StatusRequest) (Stat
 	}
 	trace := runtime.trace
 	runtime.mu.Unlock()
+	tracePolicyUnavailable := false
 	if request.WorkingDirectory != "" {
-		_, activation, err := runtime.loadCurrentActivation(request.WorkingDirectory, now)
+		_, activation, policy, err := runtime.loadCurrentActivation(ctx, request.WorkingDirectory, now)
 		if err != nil {
 			return Status{}, err
 		}
 		status.Reasons = cloneReasons(activation.Reasons)
+		if policy == nil {
+			// A scoped status must not present an already-open Store's old
+			// statistics as governed by an invalid or stale current policy.
+			// Status remains non-starting: it only suppresses those statistics.
+			trace = nil
+			tracePolicyUnavailable = true
+			status.Reasons = append(status.Reasons, runtimeReason(contextapi.ReasonEvidenceUnavailable, now, "current context cache policy is unavailable"))
+		} else if trace != nil {
+			// Refresh an existing Store through its owner mailbox, but never
+			// prepare/open one from observational Status.
+			if err := runtime.refreshTracePolicy(ctx, trace, *policy); err != nil {
+				trace = nil
+				tracePolicyUnavailable = true
+				status.Reasons = append(status.Reasons, runtimeReason(contextapi.ReasonEvidenceUnavailable, now, "current context cache policy could not be applied"))
+			}
+		}
 	}
 	seenScopes := make(map[contextapi.ScopeID]struct{}, len(states))
 	seenAudiences := make(map[contextapi.AudienceID]struct{}, len(states))
@@ -543,23 +562,23 @@ func (runtime *Runtime) Status(ctx context.Context, request StatusRequest) (Stat
 		} else {
 			status.Trace = traceStats
 		}
-	} else {
+	} else if !tracePolicyUnavailable {
 		status.Reasons = append(status.Reasons, runtimeReason(contextapi.ReasonEvidenceUnavailable, now, "context explanation cache is not initialized"))
 	}
 	return status, nil
 }
 
-func (runtime *Runtime) Query(ctx context.Context, query contexttrace.Query) (contexttrace.QueryResult, error) {
-	release, err := runtime.inspectionLease(ctx)
+func (runtime *Runtime) Query(ctx context.Context, request QueryRequest) (contexttrace.QueryResult, error) {
+	release, err := runtime.explicitTraceLease(ctx, request.WorkingDirectory)
 	if err != nil {
 		return contexttrace.QueryResult{}, err
 	}
 	defer release()
-	return runtime.trace.query(ctx, query)
+	return runtime.trace.query(ctx, request.Query)
 }
 
 func (runtime *Runtime) Inspect(ctx context.Context, request InspectRequest) (contexttrace.QueryResult, error) {
-	release, err := runtime.inspectionLease(ctx)
+	release, err := runtime.explicitTraceLease(ctx, request.WorkingDirectory)
 	if err != nil {
 		return contexttrace.QueryResult{}, err
 	}
@@ -585,8 +604,8 @@ func (runtime *Runtime) Inspect(ctx context.Context, request InspectRequest) (co
 	}
 }
 
-func (runtime *Runtime) Clear(ctx context.Context) (contexttrace.ClearResult, error) {
-	release, err := runtime.inspectionLease(ctx)
+func (runtime *Runtime) Clear(ctx context.Context, workingDirectory string) (contexttrace.ClearResult, error) {
+	release, err := runtime.explicitTraceLease(ctx, workingDirectory)
 	if err != nil {
 		return contexttrace.ClearResult{}, err
 	}
@@ -594,17 +613,52 @@ func (runtime *Runtime) Clear(ctx context.Context) (contexttrace.ClearResult, er
 	return runtime.trace.clear(ctx)
 }
 
-func (runtime *Runtime) inspectionLease(ctx context.Context) (func(), error) {
+// CacheStatus is explicit history access: it loads current cwd policy and may
+// initialize the lazy trace Store after a daemon restart. Ordinary Status is
+// intentionally observational and does not do this.
+func (runtime *Runtime) CacheStatus(ctx context.Context, workingDirectory string) (contexttrace.Stats, error) {
+	release, err := runtime.explicitTraceLease(ctx, workingDirectory)
+	if err != nil {
+		return contexttrace.Stats{}, err
+	}
+	defer release()
+	return runtime.trace.stats(ctx)
+}
+
+func (runtime *Runtime) explicitTraceLease(ctx context.Context, workingDirectory string) (func(), error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: nil inspection context", ErrRuntimeInput)
 	}
+	if workingDirectory == "" || !filepath.IsAbs(workingDirectory) {
+		return nil, fmt.Errorf("%w: explicit trace access requires an absolute working directory", ErrRuntimeInput)
+	}
 	if err := runtime.beginRequest(ctx); err != nil {
+		return nil, err
+	}
+	_, _, policy, err := runtime.loadCurrentActivation(ctx, workingDirectory, time.Now().UTC())
+	if err != nil {
+		runtime.endRequest()
+		return nil, err
+	}
+	if policy == nil {
+		runtime.endRequest()
+		return nil, fmt.Errorf("%w: current home policy is unavailable", ErrRuntimeInput)
+	}
+	if err := runtime.prepareTrace(ctx, policy); err != nil {
+		runtime.endRequest()
 		return nil, err
 	}
 	runtime.mu.Lock()
 	trace := runtime.trace
 	runtime.mu.Unlock()
-	if trace == nil || trace.store == nil {
+	if trace == nil {
+		runtime.endRequest()
+		return nil, fmt.Errorf("%w: context explanation cache is unavailable", ErrRuntimeInput)
+	}
+	trace.mu.Lock()
+	storeReady := trace.store != nil
+	trace.mu.Unlock()
+	if !storeReady {
 		runtime.endRequest()
 		return nil, fmt.Errorf("%w: context explanation cache is unavailable", ErrRuntimeInput)
 	}
@@ -656,15 +710,52 @@ func (runtime *Runtime) endRequest() {
 	runtime.requestWG.Done()
 }
 
-func (runtime *Runtime) loadCurrentActivation(directory string, now time.Time) (contextapi.ActivationInput, contextapi.ActivationResult, error) {
+func (runtime *Runtime) loadCurrentActivation(ctx context.Context, directory string, now time.Time) (contextapi.ActivationInput, contextapi.ActivationResult, *contextcache.Policy, error) {
 	if directory == "" || !filepath.IsAbs(directory) {
-		return contextapi.ActivationInput{}, contextapi.ActivationResult{State: contextapi.ActivationInvalid}, fmt.Errorf("%w: working directory must be absolute", ErrRuntimeInput)
+		return contextapi.ActivationInput{}, contextapi.ActivationResult{State: contextapi.ActivationInvalid}, nil, fmt.Errorf("%w: working directory must be absolute", ErrRuntimeInput)
 	}
-	loaded, err := contextconfig.Load(contextconfig.LoadOptions{WorkingDirectory: directory, HomeConfigPath: runtime.paths.HomeConfigPath, Now: now, Limits: runtime.options.LoadLimits})
+	loaded, err := contextconfig.Load(ctx, contextconfig.LoadOptions{WorkingDirectory: directory, HomeConfigPath: runtime.paths.HomeConfigPath, Now: now, Limits: runtime.options.LoadLimits}, runtime.options.LoadDependencies)
 	if err != nil {
-		return contextapi.ActivationInput{}, contextapi.ActivationResult{}, fmt.Errorf("load current context activation: %w", err)
+		return contextapi.ActivationInput{}, contextapi.ActivationResult{}, nil, fmt.Errorf("load current context activation: %w", err)
 	}
-	return loaded.Input, loaded.Result, nil
+	// Runtime residency is a numeric home policy, not cache capacity. Keep it
+	// current for Serve's idle decision without copying or interpreting the
+	// loader-owned cache policy.
+	runtime.mu.Lock()
+	runtime.idleTTL = runtimeIdleTTL(loaded.Input.Config.Home.Runtime)
+	runtime.mu.Unlock()
+	return loaded.Input, loaded.Result, loaded.CachePolicy, nil
+}
+
+func (runtime *Runtime) prepareTrace(ctx context.Context, policy *contextcache.Policy) error {
+	runtime.mu.Lock()
+	trace := runtime.trace
+	options := runtime.options
+	runtime.mu.Unlock()
+	if trace == nil {
+		return nil
+	}
+	if policy == nil {
+		trace.disable()
+		return nil
+	}
+	trace.mu.Lock()
+	storeReady := trace.store != nil
+	trace.mu.Unlock()
+	if !storeReady {
+		return trace.open(ctx, options.TraceOptions, options.LoadDependencies.Cache, *policy)
+	}
+	return trace.updatePolicy(ctx, *policy)
+}
+
+func (runtime *Runtime) refreshTracePolicy(ctx context.Context, trace *traceRuntime, policy contextcache.Policy) error {
+	trace.mu.Lock()
+	ready := trace.store != nil && trace.started && !trace.stopped
+	trace.mu.Unlock()
+	if !ready {
+		return errTraceUnavailable
+	}
+	return trace.updatePolicy(ctx, policy)
 }
 
 func validateObservationInput(input ObserveInput, directory string, scope contextapi.ScopeIdentity) error {
@@ -1017,8 +1108,11 @@ func (runtime *Runtime) validateOfferItems(ctx context.Context, state *partition
 		request := cloneContributionRequest(value.request)
 		request.Scope, request.Audience, request.Profile, request.ConfigDigest = activation.Scope, state.audience, cloneProfileSnapshot(profile), activation.Effective.ConfigDigest
 		request.Observation.Scope, request.Observation.Audience, request.Observation.At = activation.Scope, state.audience, now
+		if !declaresProviderCapability(value.provider, contextapi.ProviderCapabilityContribute) {
+			return false, value.item, runtimeReasonForProvider(contextapi.ReasonProviderNotSelected, value.provider.ID, now, "provider no longer declares contribute capability")
+		}
 		if value.provider.Kind == contextapi.ProviderKindBuiltin {
-			fresh, err := contextprovider.Revalidate(ctx, activation.Scope.CanonicalRoot, value.source, value.item.SourceRevision, builtinLimits(value.provider.Limits, activation.Effective.Runtime))
+			fresh, err := contextprovider.Revalidate(ctx, value.provider.ID, activation.Scope.CanonicalRoot, value.source, value.item.SourceRevision, builtinLimits(value.provider.Limits, activation.Effective.Runtime))
 			if err != nil {
 				return false, value.item, runtimeReasonForProvider(contextapi.ReasonEvidenceUnavailable, value.provider.ID, now, "builtin source freshness could not be established: "+err.Error())
 			}
@@ -1069,10 +1163,14 @@ func (runtime *Runtime) collectContributions(ctx context.Context, activation con
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
+			if !declaresProviderCapability(config, contextapi.ProviderCapabilityContribute) {
+				results <- result{index: index, config: config, reasons: []contextapi.Reason{runtimeReasonForProvider(contextapi.ReasonProviderNotSelected, config.ID, now, "provider does not declare contribute capability")}}
+				return
+			}
 			request := contextapi.ContributionRequest{RequestID: contextapi.RequestID(now.UnixNano() + int64(index)), Scope: activation.Scope, Audience: audience, Task: input.Host.Task, Observation: cloneObservation(input.Observation), Profile: cloneProfileSnapshot(profile), ConfigDigest: activation.Effective.ConfigDigest, Limits: contextapi.ContributionLimits{MaxContributions: activation.Effective.Runtime.MaxContributions, MaxBodyBytes: activation.Effective.Runtime.MaxContributionBodyBytes}}
 			request.Observation.Scope, request.Observation.Audience, request.Observation.At = activation.Scope, audience, now
 			if config.Kind == contextapi.ProviderKindBuiltin {
-				response := contextprovider.ContributeBuiltin(ctx, request, activation.Scope.CanonicalRoot, builtinLimits(config.Limits, activation.Effective.Runtime))
+				response := contextprovider.ContributeBuiltin(ctx, request, config.ID, activation.Scope.CanonicalRoot, builtinLimits(config.Limits, activation.Effective.Runtime))
 				results <- result{index: index, config: config, request: request, contributions: response.Contributions, reasons: response.Reasons}
 				return
 			}
@@ -1118,7 +1216,7 @@ func (runtime *Runtime) composeProfile(ctx context.Context, activation contextap
 }
 
 func (runtime *Runtime) profileFacts(ctx context.Context, activation contextapi.ActivationResult, host contextapi.HostSnapshot, directory string, audience contextapi.Audience, now time.Time) ([]contextapi.ProfileFact, []contextapi.Reason) {
-	configs := selectedProviderConfigs(activation.Effective.Providers, activation.Effective.ProfileProviders)
+	configs := providerConfigsWithCapability(activation.Effective.Providers, contextapi.ProviderCapabilityProfile)
 	if len(configs) == 0 {
 		return nil, nil
 	}
@@ -1134,6 +1232,10 @@ func (runtime *Runtime) profileFacts(ctx context.Context, activation contextapi.
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
+			if !declaresProviderCapability(config, contextapi.ProviderCapabilityProfile) {
+				results <- result{index: index, reasons: []contextapi.Reason{runtimeReasonForProvider(contextapi.ReasonProviderNotSelected, config.ID, now, "provider does not declare profile capability")}}
+				return
+			}
 			if config.Kind == contextapi.ProviderKindBuiltin {
 				results <- result{index: index, reasons: []contextapi.Reason{runtimeReasonForProvider(contextapi.ReasonProviderNotSelected, config.ID, now, "builtin provider has no profile capability")}}
 				return
@@ -1295,13 +1397,13 @@ func (runtime *Runtime) providerRelease(key providerKey, state *providerState) f
 func (runtime *Runtime) revokeSessionPartitions(harness contextapi.Harness, audience contextapi.AudienceID, epoch contextapi.EpochID, now time.Time, reasons []contextapi.Reason) {
 	runtime.revokePartitions(func(key partitionKey) bool {
 		return key.harness == harness && key.audience == audience && key.epoch == epoch
-	}, now, reasons)
+	}, now, reasons, true)
 }
 
 func (runtime *Runtime) revokeChangedConfigPartitions(harness contextapi.Harness, scope contextapi.ScopeIdentity, audience contextapi.AudienceID, digest contextapi.ConfigDigest, now time.Time) {
 	runtime.revokePartitions(func(key partitionKey) bool {
 		return key.harness == harness && key.scope == scope.ID && key.root == scope.CanonicalRoot && key.audience == audience && key.configDigest != digest
-	}, now, []contextapi.Reason{runtimeReason(contextapi.ReasonWithdrawn, now, "configuration digest changed; old partition withdrawn")})
+	}, now, []contextapi.Reason{runtimeReason(contextapi.ReasonWithdrawn, now, "configuration digest changed; old partition withdrawn")}, true)
 }
 
 func (runtime *Runtime) withdrawInactive(harness contextapi.Harness, observation contextapi.Observation, now time.Time, reasons []contextapi.Reason) {
@@ -1310,7 +1412,7 @@ func (runtime *Runtime) withdrawInactive(harness contextapi.Harness, observation
 	}
 	runtime.revokePartitions(func(key partitionKey) bool {
 		return key.harness == harness && key.scope == observation.Scope.ID && key.root == observation.Scope.CanonicalRoot && key.audience == observation.Audience.ID
-	}, now, reasons)
+	}, now, reasons, false)
 }
 
 // findOfferPartition resolves a partition-local OfferID from the bounded
@@ -1406,7 +1508,7 @@ func pathWithin(directory, root string) bool {
 	return directory == root || strings.HasPrefix(directory, root+string(filepath.Separator))
 }
 
-func (runtime *Runtime) revokePartitions(match func(partitionKey) bool, now time.Time, reasons []contextapi.Reason) {
+func (runtime *Runtime) revokePartitions(match func(partitionKey) bool, now time.Time, reasons []contextapi.Reason, record bool) {
 	runtime.admissionMu.Lock()
 	runtime.mu.Lock()
 	removed := make([]*partitionState, 0)
@@ -1423,7 +1525,9 @@ func (runtime *Runtime) revokePartitions(match func(partitionKey) bool, now time
 		profile, scope, audience := cloneProfileSnapshot(state.profile), state.scope, state.audience
 		state.sourceEvidence = make(map[contextapi.OfferItemIdentity]freshnessEvidence)
 		state.mu.Unlock()
-		runtime.traceDecision(state, contextapi.Observation{At: now, Scope: scope, Audience: audience}, profile, contextapi.DeliveryDecision{State: contextapi.DeliveryWithdrawn, Reasons: cloneReasons(reasons)}, nil, now)
+		if record {
+			runtime.traceDecision(state, contextapi.Observation{At: now, Scope: scope, Audience: audience}, profile, contextapi.DeliveryDecision{State: contextapi.DeliveryWithdrawn, Reasons: cloneReasons(reasons)}, nil, now)
+		}
 	}
 }
 
@@ -1528,21 +1632,23 @@ func statusRequestMatches(request StatusRequest, state *partitionState) bool {
 	return true
 }
 
-func selectedProviderConfigs(configs []contextapi.ProviderConfig, ids []contextapi.ProviderID) []contextapi.ProviderConfig {
-	if len(ids) == 0 {
-		return nil
-	}
-	wanted := make(map[contextapi.ProviderID]struct{}, len(ids))
-	for _, id := range ids {
-		wanted[id] = struct{}{}
-	}
-	result := make([]contextapi.ProviderConfig, 0, len(ids))
+func providerConfigsWithCapability(configs []contextapi.ProviderConfig, capability contextapi.ProviderCapability) []contextapi.ProviderConfig {
+	result := make([]contextapi.ProviderConfig, 0, len(configs))
 	for _, config := range configs {
-		if _, ok := wanted[config.ID]; ok {
+		if declaresProviderCapability(config, capability) {
 			result = append(result, cloneProviderConfig(config))
 		}
 	}
 	return result
+}
+
+func declaresProviderCapability(config contextapi.ProviderConfig, capability contextapi.ProviderCapability) bool {
+	for _, declared := range config.Capabilities {
+		if declared == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func filterContributions(input []contextapi.Contribution, blocked map[contextapi.OfferItemIdentity]struct{}) []contextapi.Contribution {
@@ -1968,68 +2074,6 @@ func normalizePaths(input Paths) (Paths, error) {
 		return Paths{}, fmt.Errorf("%w: home configuration path must be absolute", ErrRuntimeInput)
 	}
 	return input, nil
-}
-
-func traceOptions(options RuntimeOptions) contexttrace.Options {
-	result := options.TraceOptions
-	if options.Paths.HomeConfigPath == "" {
-		return result
-	}
-	// Loading the explicit home file from its own directory is enough to
-	// obtain machine-wide cache limits without guessing a cwd. Failure is
-	// handled by the runtime's unavailable-cache diagnostic.
-	loaded, err := contextconfig.Load(contextconfig.LoadOptions{WorkingDirectory: filepath.Dir(options.Paths.HomeConfigPath), HomeConfigPath: options.Paths.HomeConfigPath, Now: time.Now().UTC(), Limits: options.LoadLimits})
-	if err == nil {
-		cache := loaded.Input.Config.Home.Cache
-		if cache.DiskCapBytes > 0 {
-			result.DiskCap = int64(cache.DiskCapBytes)
-		}
-		if cache.MaxRecordBytes > 0 {
-			result.MaxRecordBytes = int(cache.MaxRecordBytes)
-		}
-		if cache.MaxInputBytes > 0 {
-			result.MaxInputBytes = int(cache.MaxInputBytes)
-		}
-		if cache.MaxStringBytes > 0 {
-			result.MaxStringBytes = int(cache.MaxStringBytes)
-		}
-		if cache.MaxReasons > 0 {
-			result.MaxReasons = int(cache.MaxReasons)
-		}
-		if cache.MaxReasonParameters > 0 {
-			result.MaxParameters = int(cache.MaxReasonParameters)
-		}
-		if cache.MaxQueryRecords > 0 {
-			result.MaxQueryRecords = int(cache.MaxQueryRecords)
-		}
-		if cache.MaxQueryBytes > 0 {
-			result.MaxQueryBytes = int(cache.MaxQueryBytes)
-		}
-		if cache.MaxScanBytes > 0 {
-			result.MaxScanBytes = int(cache.MaxScanBytes)
-		}
-		if cache.MaxBlockBytes > 0 {
-			result.MaxBlockBytes = int(cache.MaxBlockBytes)
-		}
-		if cache.MaxBlockRecords > 0 {
-			result.MaxBlockRecords = int(cache.MaxBlockRecords)
-		}
-		if cache.MaxBlocks > 0 {
-			result.MaxBlocks = int(cache.MaxBlocks)
-		}
-	}
-	return result
-}
-
-func homeIdleTTL(options RuntimeOptions) time.Duration {
-	if options.Paths.HomeConfigPath == "" {
-		return defaultIdleTTL
-	}
-	loaded, err := contextconfig.Load(contextconfig.LoadOptions{WorkingDirectory: filepath.Dir(options.Paths.HomeConfigPath), HomeConfigPath: options.Paths.HomeConfigPath, Now: time.Now().UTC(), Limits: options.LoadLimits})
-	if err == nil && loaded.Input.Config.Home.Runtime.IdleTTLMs > 0 {
-		return time.Duration(loaded.Input.Config.Home.Runtime.IdleTTLMs) * time.Millisecond
-	}
-	return defaultIdleTTL
 }
 
 func stableContributionID(item contextapi.OfferItemIdentity) uint64 {

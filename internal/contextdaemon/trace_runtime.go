@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/phosphorco/workbench-go/internal/contextcache"
 	"github.com/phosphorco/workbench-go/internal/contexttrace"
 )
 
@@ -31,8 +32,78 @@ type traceRuntime struct {
 	done        chan struct{}
 	doneOnce    sync.Once
 	storeOnce   sync.Once
-	started     bool
-	stopped     bool
+	// openMu is a one-token gate rather than a sync.Mutex so request context
+	// cancellation can bound lazy Store construction behind another opener.
+	openMu  chan struct{}
+	enabled bool
+	started bool
+	stopped bool
+}
+
+// open installs the one Store owned by this trace worker. It is deliberately
+// separate from Runtime.Start because Start has no request cwd from which the
+// loader can establish the current policy. Callers must complete this before
+// allowing trace publication.
+func (trace *traceRuntime) open(ctx context.Context, options contexttrace.Options, pool *contextcache.Pool, policy contextcache.Policy) error {
+	if err := trace.acquireOpen(ctx); err != nil {
+		return err
+	}
+	defer trace.releaseOpen()
+	trace.mu.Lock()
+	if trace.stopped {
+		trace.mu.Unlock()
+		return errTraceUnavailable
+	}
+	if trace.store != nil {
+		trace.mu.Unlock()
+		// A store may already exist when a second concurrent request loads a
+		// newer home policy. Route that handoff through the same mailbox as
+		// every other Store mutation; merely re-enabling would lose policy.
+		return trace.updatePolicy(ctx, policy)
+	}
+	trace.mu.Unlock()
+	store, err := contexttrace.Open(ctx, options, pool, policy)
+	trace.mu.Lock()
+	if err != nil {
+		trace.openErr = err
+		trace.enabled = false
+		trace.mu.Unlock()
+		return err
+	}
+	if trace.stopped {
+		trace.mu.Unlock()
+		// Store.Close can take the pool lock and join filesystem work. Never
+		// hold the trace mailbox mutex across that I/O.
+		_ = store.Close()
+		return errTraceUnavailable
+	}
+	trace.store = store
+	trace.openErr = nil
+	trace.enabled = true
+	trace.mu.Unlock()
+	return nil
+}
+
+func (trace *traceRuntime) acquireOpen(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-trace.openMu:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (trace *traceRuntime) releaseOpen() {
+	trace.openMu <- struct{}{}
+}
+
+func (trace *traceRuntime) disable() {
+	trace.mu.Lock()
+	trace.enabled = false
+	trace.mu.Unlock()
 }
 
 type traceEntry struct {
@@ -61,6 +132,7 @@ type traceCall struct {
 	fn            func(*contexttrace.Store) (any, error)
 	result        chan traceCallResult
 	droppedBefore traceDropSummary
+	allowDisabled bool
 }
 
 type traceCallResult struct {
@@ -78,9 +150,17 @@ func newTraceRuntime(store *contexttrace.Store, openErr error, maxItems uint32, 
 	return &traceRuntime{
 		store: store, openErr: openErr,
 		mailbox: make(chan traceMessage, maxItems), queueCap: maxBytes,
-		space: make(chan struct{}, 1),
-		done:  make(chan struct{}),
+		space:   make(chan struct{}, 1),
+		done:    make(chan struct{}),
+		openMu:  initializedOpenGate(),
+		enabled: store != nil,
 	}
+}
+
+func initializedOpenGate() chan struct{} {
+	gate := make(chan struct{}, 1)
+	gate <- struct{}{}
+	return gate
 }
 
 func (trace *traceRuntime) run(stop <-chan struct{}) {
@@ -122,6 +202,17 @@ func (trace *traceRuntime) write(entry traceEntry) {
 		trace.mu.Unlock()
 		return
 	}
+	trace.mu.Lock()
+	enabled := trace.enabled
+	trace.mu.Unlock()
+	if !enabled {
+		trace.mu.Lock()
+		if trace.dropped != ^uint64(0) {
+			trace.dropped++
+		}
+		trace.mu.Unlock()
+		return
+	}
 	trace.writeDropMarker(store, entry.droppedBefore)
 	if _, err := store.Append(entry.record); err != nil {
 		trace.mu.Lock()
@@ -160,8 +251,9 @@ func (trace *traceRuntime) execute(call traceCall) {
 	trace.mu.Lock()
 	store := trace.store
 	openErr := trace.openErr
+	enabled := trace.enabled
 	trace.mu.Unlock()
-	if store == nil {
+	if store == nil || (!enabled && !call.allowDisabled) {
 		call.result <- traceCallResult{err: errors.Join(errTraceUnavailable, openErr)}
 		return
 	}
@@ -227,7 +319,7 @@ func (trace *traceRuntime) append(record contexttrace.Record) {
 	} else {
 		entryBytes += markerBytes
 	}
-	if trace.stopped {
+	if trace.stopped || !trace.enabled {
 		if trace.dropped != ^uint64(0) {
 			trace.dropped++
 		}
@@ -248,18 +340,22 @@ func (trace *traceRuntime) append(record contexttrace.Record) {
 }
 
 func (trace *traceRuntime) call(ctx context.Context, fn func(*contexttrace.Store) (any, error)) (any, error) {
+	return trace.callWithOptions(ctx, fn, false)
+}
+
+func (trace *traceRuntime) callWithOptions(ctx context.Context, fn func(*contexttrace.Store) (any, error), allowDisabled bool) (any, error) {
 	if ctx == nil {
 		return nil, errTraceUnavailable
 	}
 	result := make(chan traceCallResult, 1)
 	for {
 		trace.mu.Lock()
-		if trace.stopped || trace.store == nil {
+		if trace.stopped || trace.store == nil || (!trace.enabled && !allowDisabled) {
 			err := errors.Join(errTraceUnavailable, trace.openErr)
 			trace.mu.Unlock()
 			return nil, err
 		}
-		call := &traceCall{fn: fn, result: result, droppedBefore: trace.pendingDrop}
+		call := &traceCall{fn: fn, result: result, droppedBefore: trace.pendingDrop, allowDisabled: allowDisabled}
 		message := traceMessage{call: call}
 		select {
 		case trace.mailbox <- message:
@@ -303,8 +399,25 @@ func (trace *traceRuntime) stats(ctx context.Context) (contexttrace.Stats, error
 	return value.(contexttrace.Stats), nil
 }
 
+// updatePolicy is ordered with every queued trace operation. The Store owns
+// validation and policy state; this method only transports the loader-owned
+// value through the trace mailbox.
+func (trace *traceRuntime) updatePolicy(ctx context.Context, policy contextcache.Policy) error {
+	_, err := trace.callWithOptions(ctx, func(store *contexttrace.Store) (any, error) {
+		return nil, store.UpdatePolicy(ctx, policy)
+	}, true)
+	if err != nil {
+		trace.disable()
+	} else {
+		trace.mu.Lock()
+		trace.enabled = true
+		trace.mu.Unlock()
+	}
+	return err
+}
+
 func (trace *traceRuntime) query(ctx context.Context, query contexttrace.Query) (contexttrace.QueryResult, error) {
-	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.Query(query) })
+	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.Query(ctx, query) })
 	if err != nil {
 		return contexttrace.QueryResult{}, err
 	}
@@ -312,7 +425,7 @@ func (trace *traceRuntime) query(ctx context.Context, query contexttrace.Query) 
 }
 
 func (trace *traceRuntime) inspectContribution(ctx context.Context, id uint64, query contexttrace.Query) (contexttrace.QueryResult, error) {
-	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.InspectContribution(id, query) })
+	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.InspectContribution(ctx, id, query) })
 	if err != nil {
 		return contexttrace.QueryResult{}, err
 	}
@@ -320,7 +433,7 @@ func (trace *traceRuntime) inspectContribution(ctx context.Context, id uint64, q
 }
 
 func (trace *traceRuntime) inspectTurn(ctx context.Context, turn string, query contexttrace.Query) (contexttrace.QueryResult, error) {
-	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.InspectTurn(turn, query) })
+	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.InspectTurn(ctx, turn, query) })
 	if err != nil {
 		return contexttrace.QueryResult{}, err
 	}
@@ -328,7 +441,7 @@ func (trace *traceRuntime) inspectTurn(ctx context.Context, turn string, query c
 }
 
 func (trace *traceRuntime) inspectProfile(ctx context.Context, profile string, query contexttrace.Query) (contexttrace.QueryResult, error) {
-	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.InspectProfile(profile, query) })
+	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.InspectProfile(ctx, profile, query) })
 	if err != nil {
 		return contexttrace.QueryResult{}, err
 	}
@@ -336,7 +449,7 @@ func (trace *traceRuntime) inspectProfile(ctx context.Context, profile string, q
 }
 
 func (trace *traceRuntime) clear(ctx context.Context) (contexttrace.ClearResult, error) {
-	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.Clear() })
+	value, err := trace.call(ctx, func(store *contexttrace.Store) (any, error) { return store.Clear(ctx) })
 	if err != nil {
 		return contexttrace.ClearResult{}, err
 	}

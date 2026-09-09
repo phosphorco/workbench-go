@@ -114,6 +114,12 @@ func censusFiles(t *testing.T, workbenchRoot string) []censusFile {
 		if err != nil || workbenchRelative == ".." || strings.HasPrefix(workbenchRelative, ".."+string(filepath.Separator)) {
 			t.Fatalf("census source escaped Workbench root: %q", repositoryRelative)
 		}
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("inspect census source %q: %v", repositoryRelative, err)
+		}
 		files = append(files, censusFile{
 			name: filepath.ToSlash(filepath.Join("tools/workbench-go", workbenchRelative)),
 			path: path,

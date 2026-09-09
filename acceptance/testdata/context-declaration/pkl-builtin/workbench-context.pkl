@@ -1,0 +1,7 @@
+amends "workbench:context"
+
+scope = "subtree"
+
+contributors {
+  ["project-guidance"] = new AiContext {}
+}

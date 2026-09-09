@@ -128,11 +128,20 @@ const (
 // InspectRequest is deliberately typed around the three trace-owned lookup
 // keys. Exactly one key must be supplied for the selected kind.
 type InspectRequest struct {
-	Kind           InspectKind        `json:"kind"`
-	ContributionID uint64             `json:"contributionId,omitempty"`
-	Turn           string             `json:"turn,omitempty"`
-	Profile        string             `json:"profile,omitempty"`
-	Query          contexttrace.Query `json:"query"`
+	WorkingDirectory string             `json:"workingDirectory"`
+	Kind             InspectKind        `json:"kind"`
+	ContributionID   uint64             `json:"contributionId,omitempty"`
+	Turn             string             `json:"turn,omitempty"`
+	Profile          string             `json:"profile,omitempty"`
+	Query            contexttrace.Query `json:"query"`
+}
+
+// QueryRequest carries the explicit cwd needed to reload the current home
+// policy before opening history after a daemon restart. The trace store never
+// guesses policy from its pool root.
+type QueryRequest struct {
+	WorkingDirectory string             `json:"workingDirectory"`
+	Query            contexttrace.Query `json:"query"`
 }
 
 // RuntimeOptions supplies all effects and bounds needed to construct one
@@ -141,6 +150,10 @@ type InspectRequest struct {
 // user isolation and acceptance-test isolation.
 type RuntimeOptions struct {
 	Paths Paths
+	// LoadDependencies is the one injected declaration/evaluator/cache seam.
+	// The same Cache pool is passed to contexttrace; the runtime never creates a
+	// second pool or reloads home policy through a private adapter.
+	LoadDependencies contextconfig.LoadDependencies
 	// LoadLimits may narrow the bounded activation lookup. Home runtime
 	// limits narrow it further after the home file has been read.
 	LoadLimits contextconfig.LoadLimits
@@ -153,8 +166,8 @@ type RuntimeOptions struct {
 	// the trace worker. Bodies are copied and sampled before enqueue.
 	TraceQueueItems uint32
 	TraceQueueBytes uint64
-	// TraceOptions is an explicit test/embedding seam. Non-zero fields are
-	// overlaid by the resolved home cache limits when the runtime starts.
+	// TraceOptions is an explicit test/embedding seam for trace semantic bounds;
+	// disk capacity comes only from LoadDependencies' current CachePolicy.
 	TraceOptions contexttrace.Options
 }
 

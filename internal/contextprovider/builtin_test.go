@@ -96,7 +96,7 @@ This markdown body is deliberately not a contribution.
 	request := builtinRequest([]contextapi.ObservedResource{
 		observedFile("src/main.go", contextapi.ResourceOutcomeUnknown, contextapi.ConfidenceInferred),
 	}, nil)
-	response := ContributeBuiltin(context.Background(), request, root, builtinTestLimits())
+	response := ContributeBuiltin(context.Background(), request, "ai-context", root, builtinTestLimits())
 	if len(response.Contributions) != 2 {
 		t.Fatalf("got %d contributions, want docs and command: %#v", len(response.Contributions), response)
 	}
@@ -122,19 +122,48 @@ This markdown body is deliberately not a contribution.
 	}
 }
 
+func TestNamedBuiltinIdentityIsPreservedAcrossContributionAndRevalidation(t *testing.T) {
+	root := t.TempDir()
+	writeBuiltinFile(t, root, "ai-context.md", "---\ndocs:\n  - message: named guidance\n---\n")
+	request := builtinRequest([]contextapi.ObservedResource{
+		observedFile("README.md", contextapi.ResourceResolved, contextapi.ConfidenceObserved),
+	}, nil)
+	first := ContributeBuiltin(context.Background(), request, "named-one", root, builtinTestLimits())
+	second := ContributeBuiltin(context.Background(), request, "named-two", root, builtinTestLimits())
+	if len(first.Contributions) != 1 || len(second.Contributions) != 1 {
+		t.Fatalf("named builtin fixture did not contribute once: first=%#v second=%#v", first, second)
+	}
+	for _, item := range []struct {
+		name     string
+		response contextapi.ContributionResponse
+	}{{"named-one", first}, {"named-two", second}} {
+		contribution := item.response.Contributions[0]
+		if contribution.Contributor != contextapi.ProviderID(item.name) || contribution.Slot.Provider != contextapi.ProviderID(item.name) || contribution.Source.Identity.Provider != contextapi.ProviderID(item.name) {
+			t.Fatalf("builtin %q identity collided: %#v", item.name, contribution)
+		}
+		if len(contribution.Reasons) != 1 || contribution.Reasons[0].Provider != contextapi.ProviderID(item.name) {
+			t.Fatalf("builtin %q reason identity collided: %#v", item.name, contribution.Reasons)
+		}
+		fresh, err := Revalidate(context.Background(), contextapi.ProviderID(item.name), root, contribution.Source, contribution.SourceRevision, builtinTestLimits())
+		if err != nil || !fresh {
+			t.Fatalf("builtin %q did not revalidate under its configured identity: fresh=%v err=%v", item.name, fresh, err)
+		}
+	}
+}
+
 func TestBuiltinRootStopsAncestorRecruitmentAndSupportsSelectorOnlyAttention(t *testing.T) {
 	root := t.TempDir()
 	writeBuiltinFile(t, root, "ai-context.md", "---\nroot: true\ndocs:\n  - message: root\n---\n")
 	writeBuiltinFile(t, root, "pkg/ai-context.md", "---\nroot: true\ndocs:\n  - message: nested\n---\n")
 	request := builtinRequest([]contextapi.ObservedResource{observedFile("pkg/file.go", contextapi.ResourceResolved, contextapi.ConfidenceObserved)}, nil)
-	response := ContributeBuiltin(context.Background(), request, root, builtinTestLimits())
+	response := ContributeBuiltin(context.Background(), request, "ai-context", root, builtinTestLimits())
 	if len(response.Contributions) != 1 || response.Contributions[0].Body != "nested" {
 		t.Fatalf("root stopping selected the wrong manifest: %#v", response)
 	}
 
 	selectorRequest := builtinRequest(nil, []contextapi.ObservedSelector{{Raw: "deploy", ObservedAs: contextapi.SelectorToolArgument}})
 	writeBuiltinFile(t, root, "ai-context.md", "---\ndocs:\n  - mentions: [deploy]\n    message: selector guidance\ncommands:\n  - command: \"run {file}\"\n---\n")
-	selectorResponse := ContributeBuiltin(context.Background(), selectorRequest, root, builtinTestLimits())
+	selectorResponse := ContributeBuiltin(context.Background(), selectorRequest, "ai-context", root, builtinTestLimits())
 	if len(selectorResponse.Contributions) != 1 || selectorResponse.Contributions[0].Body != "selector guidance" {
 		t.Fatalf("selector-only recruitment failed or executed a file command: %#v", selectorResponse)
 	}
@@ -159,7 +188,7 @@ ignored markdown
 `)
 	response := ContributeBuiltin(context.Background(), builtinRequest([]contextapi.ObservedResource{
 		observedFile("pkg/api.go", contextapi.ResourceOutcomeUnknown, contextapi.ConfidenceCandidate),
-	}, nil), root, builtinTestLimits())
+	}, nil), "ai-context", root, builtinTestLimits())
 	if len(response.Contributions) != 2 {
 		t.Fatalf("TOML manifest did not produce declared docs and command: %#v", response)
 	}
@@ -176,7 +205,7 @@ func TestBuiltinExcludesExplicitFailureAndHonorsWholeCallReadBudget(t *testing.T
 	writeBuiltinFile(t, root, "ai-context.md", "---\ndocs:\n  - message: root guidance\n---\n")
 	failed := ContributeBuiltin(context.Background(), builtinRequest([]contextapi.ObservedResource{
 		observedFile("failed.go", contextapi.ResourceFailed, contextapi.ConfidenceObserved),
-	}, nil), root, builtinTestLimits())
+	}, nil), "ai-context", root, builtinTestLimits())
 	if len(failed.Contributions) != 0 {
 		t.Fatalf("explicitly failed read was recruited: %#v", failed.Contributions)
 	}
@@ -189,7 +218,7 @@ func TestBuiltinExcludesExplicitFailureAndHonorsWholeCallReadBudget(t *testing.T
 	response := ContributeBuiltin(context.Background(), builtinRequest([]contextapi.ObservedResource{
 		observedFile("a/one.go", contextapi.ResourceOutcomeUnknown, contextapi.ConfidenceInferred),
 		observedFile("b/two.go", contextapi.ResourceOutcomeUnknown, contextapi.ConfidenceInferred),
-	}, nil), root, limited)
+	}, nil), "ai-context", root, limited)
 	if len(response.Contributions) != 1 {
 		t.Fatalf("manifest budget was multiplied per attention: got %d contributions (%#v)", len(response.Contributions), response)
 	}
@@ -204,7 +233,7 @@ func TestBuiltinReusesIncludedBytesAcrossManifestsWithinOneCallBudget(t *testing
 	limits.MaxIncludes = 1
 	response := ContributeBuiltin(context.Background(), builtinRequest([]contextapi.ObservedResource{
 		observedFile("pkg/file.go", contextapi.ResourceOutcomeUnknown, contextapi.ConfidenceInferred),
-	}, nil), root, limits)
+	}, nil), "ai-context", root, limits)
 	if len(response.Contributions) != 2 {
 		t.Fatalf("expected both ancestor rules: %#v", response)
 	}
@@ -221,24 +250,24 @@ func TestBuiltinRevalidateDetectsManifestIncludeAndDeletionChanges(t *testing.T)
 	writeBuiltinFile(t, root, "guide.txt", "one\n")
 	response := ContributeBuiltin(context.Background(), builtinRequest([]contextapi.ObservedResource{
 		observedFile("src/file.go", contextapi.ResourceOutcomeUnknown, contextapi.ConfidenceInferred),
-	}, nil), root, builtinTestLimits())
+	}, nil), "ai-context", root, builtinTestLimits())
 	if len(response.Contributions) != 1 {
 		t.Fatalf("expected one contribution for revalidation fixture: %#v", response)
 	}
 	contribution := response.Contributions[0]
-	current, err := Revalidate(context.Background(), root, contribution.Source, contribution.SourceRevision, builtinTestLimits())
+	current, err := Revalidate(context.Background(), "ai-context", root, contribution.Source, contribution.SourceRevision, builtinTestLimits())
 	if err != nil || !current {
 		t.Fatalf("unchanged builtin source was not fresh: current=%v err=%v", current, err)
 	}
 	writeBuiltinFile(t, root, "guide.txt", "two\n")
-	current, err = Revalidate(context.Background(), root, contribution.Source, contribution.SourceRevision, builtinTestLimits())
+	current, err = Revalidate(context.Background(), "ai-context", root, contribution.Source, contribution.SourceRevision, builtinTestLimits())
 	if err != nil || current {
 		t.Fatalf("include change did not invalidate source: current=%v err=%v", current, err)
 	}
 	if err := os.Remove(filepath.Join(root, "ai-context.md")); err != nil {
 		t.Fatal(err)
 	}
-	current, err = Revalidate(context.Background(), root, contribution.Source, contribution.SourceRevision, builtinTestLimits())
+	current, err = Revalidate(context.Background(), "ai-context", root, contribution.Source, contribution.SourceRevision, builtinTestLimits())
 	if err != nil || current {
 		t.Fatalf("manifest deletion did not withdraw freshness: current=%v err=%v", current, err)
 	}
@@ -251,7 +280,7 @@ func TestBuiltinBoundsReasonsAndPathContainment(t *testing.T) {
 	limits.MaxReasonBytes = 1
 	response := ContributeBuiltin(context.Background(), builtinRequest([]contextapi.ObservedResource{
 		observedFile("file.go", contextapi.ResourceOutcomeUnknown, contextapi.ConfidenceInferred),
-	}, nil), root, limits)
+	}, nil), "ai-context", root, limits)
 	if len(response.Contributions) != 1 || !strings.Contains(response.Contributions[0].Body, "out-of-root") {
 		t.Fatalf("out-of-root include was not represented safely: %#v", response)
 	}

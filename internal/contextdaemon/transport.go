@@ -19,13 +19,14 @@ import (
 )
 
 const (
-	rpcObserve = "runtime.observe"
-	rpcConfirm = "runtime.confirm"
-	rpcStatus  = "runtime.status"
-	rpcQuery   = "runtime.query"
-	rpcInspect = "runtime.inspect"
-	rpcClear   = "runtime.clear"
-	rpcPing    = "runtime.ping"
+	rpcObserve     = "runtime.observe"
+	rpcConfirm     = "runtime.confirm"
+	rpcStatus      = "runtime.status"
+	rpcQuery       = "runtime.query"
+	rpcInspect     = "runtime.inspect"
+	rpcClear       = "runtime.clear"
+	rpcCacheStatus = "runtime.cacheStatus"
+	rpcPing        = "runtime.ping"
 )
 
 // Ensure connects to the existing per-user daemon or starts one under the
@@ -204,7 +205,7 @@ func (client *Client) Status(ctx context.Context, input StatusRequest) (Status, 
 	return result, err
 }
 
-func (client *Client) Query(ctx context.Context, input contexttrace.Query) (contexttrace.QueryResult, error) {
+func (client *Client) Query(ctx context.Context, input QueryRequest) (contexttrace.QueryResult, error) {
 	var result contexttrace.QueryResult
 	err := client.call(ctx, rpcQuery, input, &result)
 	return result, err
@@ -216,9 +217,15 @@ func (client *Client) Inspect(ctx context.Context, input InspectRequest) (contex
 	return result, err
 }
 
-func (client *Client) Clear(ctx context.Context) (contexttrace.ClearResult, error) {
+func (client *Client) Clear(ctx context.Context, workingDirectory string) (contexttrace.ClearResult, error) {
 	var result contexttrace.ClearResult
-	err := client.call(ctx, rpcClear, struct{}{}, &result)
+	err := client.call(ctx, rpcClear, workingDirectory, &result)
+	return result, err
+}
+
+func (client *Client) CacheStatus(ctx context.Context, workingDirectory string) (contexttrace.Stats, error) {
+	var result contexttrace.Stats
+	err := client.call(ctx, rpcCacheStatus, workingDirectory, &result)
 	return result, err
 }
 
@@ -489,7 +496,7 @@ func (runtime *Runtime) dispatch(ctx context.Context, request contextapi.JSONRPC
 		}
 		response.Result, _ = json.Marshal(result)
 	case rpcQuery:
-		var input contexttrace.Query
+		var input QueryRequest
 		if err := json.Unmarshal(request.Params, &input); err != nil {
 			return fail(-32602, err)
 		}
@@ -509,7 +516,21 @@ func (runtime *Runtime) dispatch(ctx context.Context, request contextapi.JSONRPC
 		}
 		response.Result, _ = json.Marshal(result)
 	case rpcClear:
-		result, err := runtime.Clear(ctx)
+		var workingDirectory string
+		if err := json.Unmarshal(request.Params, &workingDirectory); err != nil {
+			return fail(-32602, err)
+		}
+		result, err := runtime.Clear(ctx, workingDirectory)
+		if err != nil {
+			return fail(-32001, err)
+		}
+		response.Result, _ = json.Marshal(result)
+	case rpcCacheStatus:
+		var workingDirectory string
+		if err := json.Unmarshal(request.Params, &workingDirectory); err != nil {
+			return fail(-32602, err)
+		}
+		result, err := runtime.CacheStatus(ctx, workingDirectory)
 		if err != nil {
 			return fail(-32001, err)
 		}

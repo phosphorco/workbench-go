@@ -1,7 +1,10 @@
 package contexttrace
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,11 +14,12 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/phosphorco/workbench-go/internal/contextcache"
 )
 
 func testOptions() Options {
 	return Options{
-		DiskCap:         32_000,
 		MaxBlockBytes:   20_000,
 		MaxBlockRecords: 2,
 		MaxBlocks:       128,
@@ -33,13 +37,42 @@ func testOptions() Options {
 
 func openTestStore(t *testing.T, options Options) (*Store, string) {
 	t.Helper()
-	directory := t.TempDir()
-	store, err := Open(directory, options)
+	return openTestStoreWithCap(t, options, 32_000)
+}
+
+func openTestStoreWithCap(t *testing.T, options Options, capBytes int64) (*Store, string) {
+	t.Helper()
+	root := t.TempDir()
+	store, err := openTestStoreAt(t, root, options, capBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return store, directory
+	return store, filepath.Join(root, "trace")
+}
+
+func openTestStoreAt(t *testing.T, root string, options Options, capBytes int64) (*Store, error) {
+	t.Helper()
+	pool, err := newTestPool(t, root, options)
+	if err != nil {
+		return nil, err
+	}
+	return Open(context.Background(), options, pool, contextcache.Policy{
+		CapBytes: capBytes,
+		Validate: func(context.Context) error { return nil },
+	})
+}
+
+func newTestPool(t *testing.T, root string, options Options) (*contextcache.Pool, error) {
+	t.Helper()
+	return contextcache.Open(root, contextcache.Options{
+		MaxScanEntries:     options.MaxDirectoryEntries + 16,
+		MaxScanDepth:       8,
+		MaxSnapshotBytes:   1 << 20,
+		MaxSnapshotEntries: 16,
+		LockWait:           2 * time.Second,
+		LockPoll:           time.Millisecond,
+	})
 }
 
 func TestSampleIsBoundedValidAndDistributedForMultibyteContent(t *testing.T) {
@@ -51,7 +84,7 @@ func TestSampleIsBoundedValidAndDistributedForMultibyteContent(t *testing.T) {
 	if _, err := store.Append(Record{Kind: KindContribution, Content: content}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.Query(Query{Limit: 1})
+	result, err := store.Query(context.Background(), Query{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +126,7 @@ func TestAppendRetainsTypedReasonsAndCopiesCallerStorage(t *testing.T) {
 	inputs[0].Value.Int64 = 99
 	reasons[0].Rule = "mutated-rule"
 	reasons[0].Params[0].Value.Bool = false
-	result, err := store.Query(Query{Limit: 1})
+	result, err := store.Query(context.Background(), Query{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +147,7 @@ func TestAppendRetainsTypedReasonsAndCopiesCallerStorage(t *testing.T) {
 	record.Sample.Excerpts[0].Text = "changed result"
 	record.Inputs[0].Key = "changed result"
 	record.Reasons[0].Params[0].Value.Bool = false
-	again, err := store.Query(Query{Limit: 1})
+	again, err := store.Query(context.Background(), Query{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +166,7 @@ func TestQueryFiltersPaginationAndPartialScan(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	first, err := store.Query(Query{Scope: "scope-a", Turn: "turn-a", Profile: "profile-a", Limit: 2})
+	first, err := store.Query(context.Background(), Query{Scope: "scope-a", Turn: "turn-a", Profile: "profile-a", Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,18 +176,18 @@ func TestQueryFiltersPaginationAndPartialScan(t *testing.T) {
 	if first.NextCursor.RecordID != first.Records[len(first.Records)-1].ID {
 		t.Fatalf("cursor skipped an unreturned in-block match: %+v", first.NextCursor)
 	}
-	second, err := store.Query(Query{Scope: "scope-a", Turn: "turn-a", Profile: "profile-a", After: first.NextAfter, Cursor: first.NextCursor, Limit: 10})
+	second, err := store.Query(context.Background(), Query{Scope: "scope-a", Turn: "turn-a", Profile: "profile-a", After: first.NextAfter, Cursor: first.NextCursor, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(second.Records) != 3 || second.Records[0].ID <= first.NextAfter {
 		t.Fatalf("unexpected second page: %+v", second)
 	}
-	partialPage, err := store.Query(Query{Scope: "scope-a", Limit: 10, MaxBytes: 400})
+	partialPage, err := store.Query(context.Background(), Query{Scope: "scope-a", Limit: 10, MaxBytes: 400})
 	if err != nil || len(partialPage.Records) != 1 || !partialPage.PartialPage || !partialPage.HasMore || partialPage.NextCursor.RecordID != partialPage.Records[0].ID {
 		t.Fatalf("result byte bound did not preserve resumable progress: err=%v result=%+v", err, partialPage)
 	}
-	inspected, err := store.InspectTurn("turn-a", Query{Scope: "scope-a", Profile: "profile-a", Limit: 1})
+	inspected, err := store.InspectTurn(context.Background(), "turn-a", Query{Scope: "scope-a", Profile: "profile-a", Limit: 1})
 	if err != nil || len(inspected.Records) != 1 {
 		t.Fatalf("named turn inspection failed: err=%v result=%+v", err, inspected)
 	}
@@ -166,18 +199,18 @@ func TestQueryFiltersPaginationAndPartialScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	partial, err := store.Query(Query{Scope: "scope-a", Limit: 32, MaxScanBytes: int(firstInfo.Size())})
+	partial, err := store.Query(context.Background(), Query{Scope: "scope-a", Limit: 32, MaxScanBytes: int(firstInfo.Size())})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !partial.PartialScan || partial.NextCursor.BlockSequence == 0 {
 		t.Fatalf("scan budget did not produce an explicit continuation: %+v", partial)
 	}
-	resumed, err := store.Query(Query{Scope: "scope-a", Limit: 32, Cursor: partial.NextCursor, MaxScanBytes: options.MaxScanBytes})
+	resumed, err := store.Query(context.Background(), Query{Scope: "scope-a", Limit: 32, Cursor: partial.NextCursor, MaxScanBytes: options.MaxScanBytes})
 	if err != nil || len(resumed.Records) == 0 || resumed.Records[0].ID <= partial.NextCursor.RecordID {
 		t.Fatalf("cross-block scan continuation did not progress: err=%v result=%+v", err, resumed)
 	}
-	tooSmall, err := store.Query(Query{Scope: "scope-a", Limit: 1, MaxScanBytes: int(firstInfo.Size()) - 1})
+	tooSmall, err := store.Query(context.Background(), Query{Scope: "scope-a", Limit: 1, MaxScanBytes: int(firstInfo.Size()) - 1})
 	var scanErr ScanBudgetError
 	if err == nil || !errors.As(err, &scanErr) || !errors.Is(err, ErrScanBudgetTooSmall) || scanErr.RequiredBytes != firstInfo.Size() {
 		t.Fatalf("undersized first segment did not return its minimum: err=%v typed=%+v", err, tooSmall)
@@ -187,9 +220,10 @@ func TestQueryFiltersPaginationAndPartialScan(t *testing.T) {
 func TestStatsUsesBoundedAuthoritativeMetadata(t *testing.T) {
 	options := testOptions()
 	options.MaxBlockRecords = 4
+	capBytes := int64(32_000)
 	store, _ := openTestStore(t, options)
 	initial := store.Stats()
-	if initial.Generation == 0 || initial.DiskCap != options.DiskCap || initial.BlockCount != 0 || initial.PendingRecords != 0 || initial.KnownLoss {
+	if initial.Generation == 0 || initial.DiskCap != capBytes || initial.BlockCount != 0 || initial.PendingRecords != 0 || initial.KnownLoss {
 		t.Fatalf("unexpected initial stats: %+v", initial)
 	}
 	if _, err := store.Append(Record{Kind: KindObservation, Content: []byte("pending")}); err != nil {
@@ -212,34 +246,34 @@ func TestStatsUsesBoundedAuthoritativeMetadata(t *testing.T) {
 
 func TestRotationClearReopenAndGeneration(t *testing.T) {
 	options := testOptions()
-	options.DiskCap = 4_000
+	capBytes := int64(4_000)
 	options.MaxBlockRecords = 1
 	options.MaxBlockBytes = 2_048
-	store, directory := openTestStore(t, options)
+	store, directory := openTestStoreWithCap(t, options, capBytes)
 	firstGeneration := store.Generation()
 	for index := 0; index < 30; index++ {
 		if _, err := store.Append(Record{Kind: KindObservation, Scope: "rotating", Content: []byte("small")}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	result, err := store.Query(Query{Scope: "rotating", Limit: 32})
+	result, err := store.Query(context.Background(), Query{Scope: "rotating", Limit: 32})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Records) == 0 || len(result.Records) >= 30 || !hasGap(result.Gaps, GapRotated) {
 		t.Fatalf("rotation was not explicit/bounded: records=%d gaps=%+v", len(result.Records), result.Gaps)
 	}
-	if usage := directoryUsage(t, directory); usage > options.DiskCap {
-		t.Fatalf("disk cap exceeded: %d > %d", usage, options.DiskCap)
+	if usage := directoryUsage(t, directory); usage > capBytes {
+		t.Fatalf("disk cap exceeded: %d > %d", usage, capBytes)
 	}
-	cleared, err := store.Clear()
+	cleared, err := store.Clear(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cleared.PreviousGeneration != firstGeneration || cleared.Generation == firstGeneration || cleared.RemovedRecords == 0 {
 		t.Fatalf("unexpected clear result: %+v", cleared)
 	}
-	empty, err := store.Query(Query{Limit: 1})
+	empty, err := store.Query(context.Background(), Query{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +283,7 @@ func TestRotationClearReopenAndGeneration(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(directory, options)
+	reopened, err := openTestStoreAt(t, filepath.Dir(directory), options, capBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,10 +294,11 @@ func TestRotationClearReopenAndGeneration(t *testing.T) {
 }
 
 func TestFirstRotationAccountsForStateAndIncomingBlock(t *testing.T) {
-	directory := t.TempDir()
+	root := t.TempDir()
+	directory := filepath.Join(root, "trace")
 	options := testOptions()
 	options.MaxBlockRecords = 1
-	store, err := Open(directory, options)
+	store, err := openTestStoreAt(t, root, options, 32_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,8 +317,8 @@ func TestFirstRotationAccountsForStateAndIncomingBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	blockBytes := blockInfo.Size()
-	options.DiskCap = 2 * blockBytes
-	reopened, err := Open(directory, options)
+	capBytes := 2 * blockBytes
+	reopened, err := openTestStoreAt(t, root, options, capBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,14 +326,14 @@ func TestFirstRotationAccountsForStateAndIncomingBlock(t *testing.T) {
 	if _, err := reopened.Append(Record{Kind: KindObservation, Content: []byte("same-size")}); err != nil {
 		t.Fatal(err)
 	}
-	if got := reopened.Stats().DiskBytes; got > options.DiskCap {
-		t.Fatalf("two measured blocks already exceed exact cap: %d > %d", got, options.DiskCap)
+	if got := reopened.Stats().DiskBytes; got > capBytes {
+		t.Fatalf("two measured blocks already exceed exact cap: %d > %d", got, capBytes)
 	}
 	if _, err := reopened.Append(Record{Kind: KindObservation, Content: []byte("same-size")}); !errors.Is(err, ErrDiskCap) {
 		t.Fatalf("third append exceeded exact cap instead of being rejected: %v", err)
 	}
-	if got := reopened.Stats().DiskBytes; got > options.DiskCap || directoryUsage(t, directory) > options.DiskCap {
-		t.Fatalf("first-rotation accounting exceeded exact cap: stats=%d dir=%d cap=%d", got, directoryUsage(t, directory), options.DiskCap)
+	if got := reopened.Stats().DiskBytes; got > capBytes || directoryUsage(t, directory) > capBytes {
+		t.Fatalf("first-rotation accounting exceeded exact cap: stats=%d dir=%d cap=%d", got, directoryUsage(t, directory), capBytes)
 	}
 }
 
@@ -313,7 +348,7 @@ func TestLiveFlushEnforcesMaxBlocksAndReportsRotation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result, err := store.Query(Query{Scope: "bounded-blocks", Limit: 32})
+	result, err := store.Query(context.Background(), Query{Scope: "bounded-blocks", Limit: 32})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,17 +359,17 @@ func TestLiveFlushEnforcesMaxBlocksAndReportsRotation(t *testing.T) {
 	if len(files) > options.MaxBlocks || len(result.Records) > options.MaxBlocks || !hasGap(result.Gaps, GapRotated) {
 		t.Fatalf("live max-block bound failed: files=%d records=%d gaps=%+v", len(files), len(result.Records), result.Gaps)
 	}
-	if usage := directoryUsage(t, directory); usage > options.DiskCap {
-		t.Fatalf("live block rotation exceeded disk cap: %d > %d", usage, options.DiskCap)
+	if usage := directoryUsage(t, directory); usage > 32_000 {
+		t.Fatalf("live block rotation exceeded disk cap: %d > %d", usage, 32_000)
 	}
 }
 
 func TestOpenReclaimsOwnedTempsAndTrimsExistingOverCap(t *testing.T) {
-	directory := t.TempDir()
+	root := t.TempDir()
+	directory := filepath.Join(root, "trace")
 	options := testOptions()
 	options.MaxBlockRecords = 1
-	options.DiskCap = 8_000
-	store, err := Open(directory, options)
+	store, err := openTestStoreAt(t, root, options, 8_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,8 +387,8 @@ func TestOpenReclaimsOwnedTempsAndTrimsExistingOverCap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, blockFilename(999)+".tmp"), make([]byte, 100_000), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	options.DiskCap = 1_500
-	reopened, err := Open(directory, options)
+	capBytes := int64(1_500)
+	reopened, err := openTestStoreAt(t, root, options, capBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,10 +399,10 @@ func TestOpenReclaimsOwnedTempsAndTrimsExistingOverCap(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(directory, blockFilename(999)+".tmp")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("block temp was not reclaimed: %v", err)
 	}
-	if usage := directoryUsage(t, directory); usage > options.DiskCap {
-		t.Fatalf("startup did not trim existing cache: %d > %d", usage, options.DiskCap)
+	if usage := directoryUsage(t, directory); usage > capBytes {
+		t.Fatalf("startup did not trim existing cache: %d > %d", usage, capBytes)
 	}
-	result, err := reopened.Query(Query{Limit: 32})
+	result, err := reopened.Query(context.Background(), Query{Limit: 32})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +412,11 @@ func TestOpenReclaimsOwnedTempsAndTrimsExistingOverCap(t *testing.T) {
 }
 
 func TestZeroLengthCorruptBlocksConsumeScanBudgetAndGapBound(t *testing.T) {
-	directory := t.TempDir()
+	root := t.TempDir()
+	directory := filepath.Join(root, "trace")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	options := testOptions()
 	options.MaxScanBytes = 256
 	options.MaxDirectoryEntries = 512
@@ -386,12 +425,12 @@ func TestZeroLengthCorruptBlocksConsumeScanBudgetAndGapBound(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := Open(directory, options)
+	store, err := openTestStoreAt(t, root, options, 32_000)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	result, err := store.Query(Query{Limit: 1})
+	result, err := store.Query(context.Background(), Query{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +467,7 @@ func TestCorruptTailIsReportedWithoutBlockingOlderRecords(t *testing.T) {
 	if err := os.WriteFile(files[len(files)-1], contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.Query(Query{Limit: 10})
+	result, err := store.Query(context.Background(), Query{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,11 +491,11 @@ func TestBoundsRejectBeforeRetainingAndCloseIsSafe(t *testing.T) {
 	if _, err := store.Append(Record{Kind: KindContribution, Content: []byte("too long")}); !errors.Is(err, ErrInputTooLarge) {
 		t.Fatalf("got %v, want input bound error", err)
 	}
-	trace, err := store.Query(Query{Limit: 1})
+	trace, err := store.Query(context.Background(), Query{Limit: 1})
 	if err != nil || !hasGap(trace.Gaps, GapDropped) {
 		t.Fatalf("rejected admissions were not inspectable as gaps: err=%v result=%+v", err, trace)
 	}
-	if _, err := store.Query(Query{Limit: options.MaxQueryRecords + 1}); !errors.Is(err, ErrQueryBounds) {
+	if _, err := store.Query(context.Background(), Query{Limit: options.MaxQueryRecords + 1}); !errors.Is(err, ErrQueryBounds) {
 		t.Fatalf("got %v, want query bound error", err)
 	}
 	if err := store.Close(); err != nil {
@@ -476,7 +515,7 @@ func TestInactiveTaggedValueDoesNotRetainItsLargeString(t *testing.T) {
 	if _, err := store.Append(Record{Kind: KindObservation, Inputs: []Input{{Key: "number", Value: Value{Kind: ValueInt64, Int64: 1, String: huge}}}}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.Query(Query{Limit: 1})
+	result, err := store.Query(context.Background(), Query{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,12 +536,12 @@ func TestConcurrentAppendQueryAndClearAreRaceSafe(t *testing.T) {
 			defer group.Done()
 			for index := 0; index < 50; index++ {
 				_, _ = store.Append(Record{Kind: KindObservation, Scope: "race", Turn: "turn", Content: []byte("bounded")})
-				_, _ = store.Query(Query{Scope: "race", Limit: 2, MaxScanBytes: options.MaxScanBytes})
+				_, _ = store.Query(context.Background(), Query{Scope: "race", Limit: 2, MaxScanBytes: options.MaxScanBytes})
 			}
 		}(worker)
 	}
 	group.Wait()
-	if _, err := store.Query(Query{Scope: "race", Limit: 1}); err != nil {
+	if _, err := store.Query(context.Background(), Query{Scope: "race", Limit: 1}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -542,11 +581,258 @@ func TestRecordTimeIsCopiedIntoUTC(t *testing.T) {
 	if _, err := store.Append(Record{Kind: KindObservation, At: when}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.Query(Query{Limit: 1})
+	result, err := store.Query(context.Background(), Query{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.Records[0].At.Equal(when) || result.Records[0].At.Location() != time.UTC {
 		t.Fatalf("timestamp was not normalized: %v", result.Records[0].At)
+	}
+}
+
+func testPolicy(capBytes int64) contextcache.Policy {
+	return contextcache.Policy{CapBytes: capBytes, Validate: func(context.Context) error { return nil }}
+}
+
+func poolUsage(t *testing.T, pool *contextcache.Pool, policy contextcache.Policy) contextcache.Usage {
+	t.Helper()
+	lease, err := pool.Begin(context.Background(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := lease.Usage()
+	if err := lease.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	return usage
+}
+
+func snapshotKey(t *testing.T, name string) contextcache.SnapshotKey {
+	t.Helper()
+	digest := sha256.Sum256([]byte(name))
+	key, err := contextcache.NewSnapshotKey(hex.EncodeToString(digest[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+func TestSharedPoolSerializesSnapshotAndTraceAdmission(t *testing.T) {
+	root := t.TempDir()
+	options := testOptions()
+	options.MaxBlockRecords = 1
+	pool, err := newTestPool(t, root, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy(20_000)
+	store, err := Open(context.Background(), options, pool, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	key := snapshotKey(t, "shared-capacity")
+	payload := bytes.Repeat([]byte("s"), 12_000)
+	traceBody := bytes.Repeat([]byte("t"), 9_500)
+	errs := make(chan error, 2)
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		errs <- pool.SnapshotPublish(context.Background(), policy, key, payload)
+	}()
+	go func() {
+		defer group.Done()
+		_, appendErr := store.Append(Record{Kind: KindObservation, Content: traceBody})
+		errs <- appendErr
+	}()
+	group.Wait()
+	close(errs)
+	successes := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+			continue
+		}
+		if err != nil && !errors.Is(err, ErrDiskCap) && !errors.Is(err, contextcache.ErrCapacity) {
+			t.Fatalf("shared admission returned unexpected error: %v", err)
+		}
+	}
+	if successes == 2 {
+		t.Fatal("independent snapshot and trace writes both succeeded beyond the shared cap")
+	}
+	usage := poolUsage(t, pool, policy)
+	if usage.Bytes > policy.CapBytes {
+		t.Fatalf("shared pool was overspent: usage=%d cap=%d", usage.Bytes, policy.CapBytes)
+	}
+}
+
+func TestReducedPolicyClosesTraceGrowth(t *testing.T) {
+	root := t.TempDir()
+	options := testOptions()
+	options.MaxBlockRecords = 1
+	pool, err := newTestPool(t, root, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialPolicy := testPolicy(20_000)
+	store, err := Open(context.Background(), options, pool, initialPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.Append(Record{Kind: KindObservation, Content: bytes.Repeat([]byte("r"), 4_000)}); err != nil {
+		t.Fatal(err)
+	}
+	reduced := testPolicy(64)
+	if err := store.UpdatePolicy(context.Background(), reduced); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Stats().DiskCap; got != reduced.CapBytes {
+		t.Fatalf("reduced policy was not installed: got=%d want=%d", got, reduced.CapBytes)
+	}
+	if _, err := store.Append(Record{Kind: KindObservation, Content: []byte("must-not-grow")}); !errors.Is(err, ErrDiskCap) {
+		t.Fatalf("append under reduced policy returned %v, want ErrDiskCap", err)
+	}
+	if usage := poolUsage(t, pool, reduced); usage.Bytes > initialPolicy.CapBytes {
+		t.Fatalf("reduced-policy cleanup exceeded prior cap: %d", usage.Bytes)
+	}
+}
+
+func TestUpdatePolicyRejectsStaleCallbackWithoutReplacement(t *testing.T) {
+	root := t.TempDir()
+	options := testOptions()
+	pool, err := newTestPool(t, root, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := testPolicy(20_000)
+	store, err := Open(context.Background(), options, pool, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	stale := errors.New("captured home changed")
+	if err := store.UpdatePolicy(context.Background(), contextcache.Policy{
+		CapBytes: 64,
+		Validate: func(context.Context) error { return stale },
+	}); !errors.Is(err, stale) {
+		t.Fatalf("stale policy returned %v, want callback error", err)
+	}
+	if got := store.Stats().DiskCap; got != initial.CapBytes {
+		t.Fatalf("stale policy replaced current cap: got=%d want=%d", got, initial.CapBytes)
+	}
+}
+
+func TestClearPreservesSnapshotNamespace(t *testing.T) {
+	root := t.TempDir()
+	options := testOptions()
+	options.MaxBlockRecords = 1
+	pool, err := newTestPool(t, root, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy(20_000)
+	store, err := Open(context.Background(), options, pool, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key := snapshotKey(t, "clear-preservation")
+	payload := []byte("snapshot survives trace clear")
+	if err := pool.SnapshotPublish(context.Background(), policy, key, payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(Record{Kind: KindObservation, Content: []byte("trace-only")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Clear(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, hit, err := pool.SnapshotRead(context.Background(), key)
+	if err != nil || !hit || !bytes.Equal(got, payload) {
+		t.Fatalf("trace clear damaged snapshot: hit=%t err=%v payload=%q", hit, err, got)
+	}
+	traceFiles, err := filepath.Glob(filepath.Join(root, "trace", blockNamePrefix+"*"+blockNameSuffix))
+	if err != nil || len(traceFiles) != 0 {
+		t.Fatalf("trace blocks survived clear: err=%v files=%v", err, traceFiles)
+	}
+	if usage := poolUsage(t, pool, policy); usage.Bytes > policy.CapBytes {
+		t.Fatalf("clear left pool over cap: %d > %d", usage.Bytes, policy.CapBytes)
+	}
+}
+
+func TestTraceMutationHonorsSharedLockTimeout(t *testing.T) {
+	root := t.TempDir()
+	options := testOptions()
+	options.MaxBlockRecords = 1
+	pool, err := contextcache.Open(root, contextcache.Options{
+		MaxScanEntries:     options.MaxDirectoryEntries + 16,
+		MaxScanDepth:       8,
+		MaxSnapshotBytes:   1 << 20,
+		MaxSnapshotEntries: 16,
+		LockWait:           25 * time.Millisecond,
+		LockPoll:           time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy(20_000)
+	store, err := Open(context.Background(), options, pool, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	hold, err := pool.Begin(context.Background(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, appendErr := store.Append(Record{Kind: KindObservation, Content: []byte("lock timeout")})
+	if err := hold.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(appendErr, contextcache.ErrLockTimeout) {
+		t.Fatalf("blocked trace mutation returned %v, want shared lock timeout", appendErr)
+	}
+}
+
+func TestQueryHonorsCallerContextWhileSharedLockIsHeld(t *testing.T) {
+	root := t.TempDir()
+	options := testOptions()
+	options.MaxBlockRecords = 1
+	pool, err := contextcache.Open(root, contextcache.Options{
+		MaxScanEntries:     options.MaxDirectoryEntries + 16,
+		MaxScanDepth:       8,
+		MaxSnapshotBytes:   1 << 20,
+		MaxSnapshotEntries: 16,
+		LockWait:           2 * time.Second,
+		LockPoll:           time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy(20_000)
+	store, err := Open(context.Background(), options, pool, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	hold, err := pool.Begin(context.Background(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, queryErr := store.Query(ctx, Query{Limit: 1})
+	if !errors.Is(queryErr, context.DeadlineExceeded) {
+		t.Fatalf("contextual query returned %v, want context deadline", queryErr)
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("contextual query exceeded caller bound: %s", elapsed)
+	}
+	if err := hold.Finish(); err != nil {
+		t.Fatal(err)
 	}
 }

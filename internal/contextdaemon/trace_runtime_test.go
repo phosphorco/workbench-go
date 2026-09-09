@@ -10,12 +10,12 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/phosphorco/workbench-go/internal/contextcache"
 	"github.com/phosphorco/workbench-go/internal/contexttrace"
 )
 
 func traceTestOptions() contexttrace.Options {
 	return contexttrace.Options{
-		DiskCap:             2_000_000,
 		MaxBlockBytes:       32 * 1024,
 		MaxBlockRecords:     64,
 		MaxBlocks:           16,
@@ -35,7 +35,12 @@ func traceTestOptions() contexttrace.Options {
 func openTraceTestStore(t *testing.T) (*contexttrace.Store, string) {
 	t.Helper()
 	directory := t.TempDir()
-	store, err := contexttrace.Open(directory, traceTestOptions())
+	pool, err := contextcache.Open(directory, contextcache.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := contextcache.Policy{CapBytes: 2_000_000, Validate: func(context.Context) error { return nil }}
+	store, err := contexttrace.Open(context.Background(), traceTestOptions(), pool, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +131,9 @@ func TestCloneTraceRecordOwnsNestedValuesAndNormalizesInactiveFields(t *testing.
 
 func TestTraceAdmissionBoundsMetadataBeforeCopying(t *testing.T) {
 	trace := newTraceRuntime(nil, nil, 4, 512)
+	// This is a queue-admission unit test, not a production lazy runtime. A
+	// daemon-created trace remains disabled until its Store/policy is opened.
+	trace.enabled = true
 	trace.append(contexttrace.Record{Kind: contexttrace.KindObservation, Content: []byte("small")})
 	trace.append(contexttrace.Record{
 		Kind:   contexttrace.KindObservation,
@@ -244,7 +252,7 @@ func TestTraceCallCapturesDropSummaryAtAdmission(t *testing.T) {
 	completed := make(chan callResult, 1)
 	go func() {
 		value, err := trace.call(context.Background(), func(store *contexttrace.Store) (any, error) {
-			return store.Query(contexttrace.Query{Limit: 4, MaxBytes: 64 * 1024, MaxScanBytes: 64 * 1024})
+			return store.Query(context.Background(), contexttrace.Query{Limit: 4, MaxBytes: 64 * 1024, MaxScanBytes: 64 * 1024})
 		})
 		completed <- callResult{value: value, err: err}
 	}()
@@ -295,6 +303,101 @@ func TestTraceCallTimeoutOnFullMailboxReleasesMutex(t *testing.T) {
 	trace.wait()
 }
 
+func TestTraceOpenExistingStoreAppliesCurrentPolicyThroughMailbox(t *testing.T) {
+	store, directory := openTraceTestStore(t)
+	trace := newTraceRuntime(store, nil, 4, 4096)
+	startTraceTestWorker(t, trace)
+
+	pool, err := contextcache.Open(directory, contextcache.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := contextcache.Policy{CapBytes: 123456, Validate: func(context.Context) error { return nil }}
+	if err := trace.open(context.Background(), traceTestOptions(), pool, policy); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := trace.stats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.DiskCap != policy.CapBytes {
+		t.Fatalf("existing trace store kept old policy cap %d, want %d", stats.DiskCap, policy.CapBytes)
+	}
+}
+
+func TestTraceLazyOpenRacingCloseDoesNotHoldMailboxMutex(t *testing.T) {
+	directory := t.TempDir()
+	pool, err := contextcache.Open(directory, contextcache.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := contextcache.Policy{CapBytes: 2_000_000, Validate: func(context.Context) error { return nil }}
+	trace := newTraceRuntime(nil, nil, 4, 4096)
+	stop := make(chan struct{})
+	go trace.run(stop)
+
+	opened := make(chan error, 1)
+	go func() { opened <- trace.open(context.Background(), traceTestOptions(), pool, policy) }()
+	close(stop)
+	select {
+	case err := <-opened:
+		if err != nil && !errors.Is(err, errTraceUnavailable) {
+			t.Fatalf("lazy open returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("lazy open did not join concurrent trace shutdown")
+	}
+	select {
+	case <-trace.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("trace shutdown did not complete after lazy open race")
+	}
+}
+
+func TestTraceOpenHonorsContextWhileOpenGateIsContended(t *testing.T) {
+	directory := t.TempDir()
+	pool, err := contextcache.Open(directory, contextcache.Options{
+		LockWait: 2 * time.Second,
+		LockPoll: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := contextcache.Policy{CapBytes: 2_000_000, Validate: func(context.Context) error { return nil }}
+	trace := newTraceRuntime(nil, nil, 4, 4096)
+	if err := trace.acquireOpen(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	gateLocked := true
+	defer func() {
+		if gateLocked {
+			trace.releaseOpen()
+		}
+		trace.stopAndWait()
+		trace.wait()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	opened := make(chan error, 1)
+	go func() { opened <- trace.open(ctx, traceTestOptions(), pool, policy) }()
+
+	var errOpen error
+	select {
+	case errOpen = <-opened:
+	case <-time.After(150 * time.Millisecond):
+		trace.releaseOpen()
+		gateLocked = false
+		errOpen = <-opened
+		trace.stopAndWait()
+		trace.wait()
+		t.Fatalf("contended trace open did not honor context before gate release; eventual result was %v", errOpen)
+	}
+	if !errors.Is(errOpen, context.DeadlineExceeded) {
+		t.Fatalf("contended trace open returned %v, want context deadline", errOpen)
+	}
+}
+
 func TestTraceShutdownFlushesLossOnlyAggregate(t *testing.T) {
 	store, directory := openTraceTestStore(t)
 	trace := newTraceRuntime(store, nil, 4, 512)
@@ -302,11 +405,16 @@ func TestTraceShutdownFlushesLossOnlyAggregate(t *testing.T) {
 	trace.stopAndWait()
 	trace.wait()
 
-	reopened, err := contexttrace.Open(directory, traceTestOptions())
+	pool, err := contextcache.Open(directory, contextcache.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := reopened.Query(contexttrace.Query{Limit: 4, MaxBytes: 64 * 1024, MaxScanBytes: 64 * 1024})
+	policy := contextcache.Policy{CapBytes: 2_000_000, Validate: func(context.Context) error { return nil }}
+	reopened, err := contexttrace.Open(context.Background(), traceTestOptions(), pool, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := reopened.Query(context.Background(), contexttrace.Query{Limit: 4, MaxBytes: 64 * 1024, MaxScanBytes: 64 * 1024})
 	if err != nil {
 		t.Fatal(err)
 	}

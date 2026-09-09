@@ -1,9 +1,10 @@
 # Workbench context declarations
 
-Design proposal for the declaration mechanism described in the
-[context ADR](adr/2026-09-wokbench-context.md). This document specifies intended
-behavior for a separate implementation effort; it does not describe a shipped
-Pkl loader. The ADR remains the authority for the wider context product.
+This is the user-facing contract for the executable declaration mechanism
+described in the [context ADR](adr/2026-09-wokbench-context.md). Authored
+project and home sources use the bundled schemas below; the canonical values,
+loader, and evaluator linked here are the implementation boundaries. The ADR
+remains the authority for the wider context product.
 
 ## One project source and one activation decision
 
@@ -32,11 +33,13 @@ Project declarations cannot author runtime, delivery-cache, or user-policy limit
 
 ## Declaration shape
 
-The proposed project contract is `WorkbenchContext.pkl`; the home contract is
-`WorkbenchContextHome.pkl`. Both reuse the same contributor and selection types.
-Workbench supplies these contracts with its existing bundled Pkl distribution;
-normal hook execution never downloads a schema or resolves an ambient Pkl binary.
-Contract URI/version spellings are finalized with the executable schema.
+The project contract is [`WorkbenchContext.pkl`](../pkl/WorkbenchContext.pkl)
+amending `workbench:context`; the home contract is
+[`WorkbenchContextHome.pkl`](../pkl/WorkbenchContextHome.pkl) amending
+`workbench:context-home`. Both reuse the contributor and selection types from
+[`WorkbenchContextTypes.pkl`](../pkl/WorkbenchContextTypes.pkl). Workbench
+supplies these contracts with its pinned private Pkl distribution; normal hook
+execution never downloads a schema or resolves an ambient Pkl binary.
 
 | Project field | Meaning and default |
 | --- | --- |
@@ -45,10 +48,11 @@ Contract URI/version spellings are finalized with the executable schema.
 | `contributors` | Mapping from stable local names to typed contributor declarations; default empty. There is no implicit builtin. |
 | `profile` | Optional configured role, guidance set and preferences; default empty. |
 
-The smallest useful declaration explicitly selects the builtin. This is a
-schema sketch; the implementation must supply and validate its amended contract:
+The smallest useful declaration explicitly selects the builtin:
 
 ```pkl
+amends "workbench:context"
+
 scope = "subtree"
 
 contributors {
@@ -103,6 +107,9 @@ ancestor-refinement fallback in the target design.
 | Conflicting home declarations for the same canonical root | No admission; explain the conflict. |
 
 Home exclusions and limits constrain every project, including nearer files.
+An applicable disabled home scope is also a constraint; a more-specific
+selection does not re-enable it. Most-specific home selection applies after
+these constraints, and duplicate declarations for the same root remain a conflict.
 Home policy may remove disallowed contributors; status names each removal. An
 empty result cannot start the daemon or providers. Optional user profile defaults
 may fill unconfigured fields through the same resolver, but must not select
@@ -123,12 +130,17 @@ cwd + bounded directory discovery + home source
   -> existing runtime admission and delivery
 ```
 
-`internal/contextconfig` remains the owner of activation meaning. Evolving its
-load seam to accept cancellation and explicit evaluator/cache dependencies must
-replace its existing implementation, not leave `LoadJSON` and `LoadPkl` runtime
-branches. `internal/evaluate` supplies constrained evaluation, using the existing
-bundled-toolchain boundary. Shared data contracts must cease exposing JSON file
-presence/nil semantics as domain values.
+`internal/contextconfig` remains the owner of activation meaning through its
+concrete `Load(ctx, options, dependencies)` seam and pure `Resolve` function.
+It accepts the evaluator and freshness dependency supplied by the caller and
+the one shared cache pool; it has no JSON activation reader or compatibility
+alias. `internal/evaluate` supplies constrained evaluation through
+`ContextEvaluator.Evaluate`, `Freshness`, and `Identity`, using the pinned
+private toolchain boundary. Shared data contracts use explicit typed values,
+not JSON file-presence or nil semantics. See the
+[loader](../internal/contextconfig/config.go),
+[evaluator](../internal/evaluate/context.go), and
+[canonical values](../internal/contextapi/declaration.go).
 
 The first version permits the bundled schema, required Pkl standard modules,
 and explicitly named local `.pkl` imports confined to the declaration root.
@@ -139,11 +151,17 @@ complete dependency set finite and observable. Cross-root template distribution
 is a separate capability; it cannot appear through an unrestricted import escape.
 
 An evaluated snapshot owns its canonical values and the dependency manifest:
-each import's designation and importing origin, resolved canonical target,
+each requested module's resolved designation and declaration authority root,
+canonical target,
 digest of the exact bytes supplied to the evaluator, schema/evaluator identity
 and bounded evaluation diagnostics. Capture these at the module reader boundary;
-do not evaluate one read and hash a later read. Resolve each dependency once
-within an evaluation and serve repeated reads from that captured value. Cache
+do not evaluate one read and hash a later read. The Pkl reader protocol supplies
+a resolved module URI, not the importing module or original import literal.
+Record those unavailable edges as unknown rather than guessing them. Freshness
+uses the complete captured module closure and re-resolves its designations
+under the same authority root; it does not require a second Pkl source parser.
+Resolve each dependency once within an evaluation and serve repeated reads from
+that captured value. Cache
 keys also include declaration origin and authority. Declaration provenance
 includes its import closure; effective revision additionally includes applicable
 home policy. Do not confuse either revision with stable scope identity or a
@@ -170,30 +188,32 @@ configured total context-cache cap; they cannot create a second unbounded cache.
 Clearing the explanation history still changes no delivery truth; a snapshot
 eviction only requires evaluation again.
 
-All writers must participate in one shared capacity-accounting protocol before
-snapshot storage is implemented. Define reservation, temporary publication,
-atomic replacement, eviction and crash recovery across hooks and the daemon's
-trace writer. Two concurrent evaluations cannot independently spend the same
-free bytes, and capacity remains charged until owned files and temporary writes
-are removed. Test simultaneous snapshot publication and trace rotation, tiny
-or reduced caps, cancelled writers and abandoned reservations. A process-local
-trace mutex alone cannot establish this guarantee. The contract may partition
-or reserve the budget, but cannot give each cache the full cap independently.
+All writers participate in the one shared byte-oriented cache pool. The loader
+passes the current typed policy and its freshness callback to the pool before
+snapshot or trace publication; the pool owns reservation, temporary
+publication, atomic replacement, eviction, and crash recovery accounting. Two
+concurrent evaluations cannot independently spend the same free bytes, and
+capacity remains charged until owned files and temporary writes are removed.
+The [cache pool](../internal/contextcache) and
+[trace store](../internal/contexttrace/contexttrace.go) define the storage
+boundary; neither decides declaration freshness or activation.
 
-Evaluation bootstraps under finite compiled limits for evaluator processes,
-memory, input/output, imports and diagnostics. Before the home policy has been
-successfully evaluated, no snapshot is published using an assumed user disk
-allowance. Changed home limits must be validated before new reservations;
-reduced limits prevent new admission until owned usage satisfies the new cap.
+Evaluation bootstraps under finite compiled limits for process/resource policy,
+input/output, imports, and diagnostics. This declaration contract does not
+promise a platform-specific RSS or hard process-memory ceiling. Before the home
+policy has been successfully evaluated, no snapshot is published using an
+assumed user disk allowance. Changed home limits must be validated before new
+reservations; reduced limits prevent new admission until owned usage satisfies
+the new cap.
 
-On a cache miss, the proposed route is bounded, automatically owned evaluation
+On a cache miss, the loader performs bounded, automatically owned evaluation
 before starting context contributors. No permanent evaluator per directory and
-no required manual compile step. No discovered project or home source means no Pkl process,
-daemon, provider, or cache creation. A present home Pkl source is a special cold
-case: evaluating its policy may be necessary to establish that cwd is inactive.
-That temporary evaluation must not start the context daemon or create context
-history. The feasibility probe must make its latency, memory and cache-write
-behavior explicit; it may not quietly weaken the ADR's inactive contract.
+no manual compile step is required. No discovered project or home source means
+no Pkl process, daemon, provider, or cache creation. A present home Pkl source
+is a special cold case: evaluating its policy may be necessary to establish that
+the cwd is inactive. That temporary evaluation does not start the context daemon
+or create context history. The evaluator and cache contracts keep startup,
+input/output, freshness, and cleanup bounded.
 
 The adopted cold policy permits a bounded temporary evaluator and private derived
 snapshot writes when a declaration exists but its snapshot is missing or invalid,
@@ -203,49 +223,33 @@ inactivity remains silent and creates no process or cache. This settles permitte
 behavior; it does not establish that the latency and resource targets are feasible.
 The `cold-inactive-policy` ruling records the choice separately from probe evidence.
 
-The probe must separately measure no-source inactivity and uncached home-only
-inactivity, including eight simultaneous misses with a nearly full shared cache.
-Cover executable/version discovery, startup/handshake, evaluation, cancellation,
-output decoding and joined cleanup, not just Pkl evaluation time. Use blocked
-version/handshake and oversized output/diagnostic fixtures with explicit process,
-memory, input and output budgets. The existing evaluator's uncancelled handshake
-and pkl-go version discovery are not ready-made bounded hook implementations.
-A failed probe blocks
-the affected implementation: do not add background watchers, stale fallback,
-permanent evaluators or an extra activation registry as a local workaround.
+The [declaration proof matrix](../.context/workbench-context-declaration/acceptance/proof-matrix.md)
+owns workload evidence for no-source inactivity, uncached home-only inactivity,
+concurrent misses, cancellation, output bounds, and joined cleanup. Those
+measurements do not change the source-of-truth rule: do not add background
+watchers, stale fallback, permanent evaluators, or an extra activation registry.
 
-## Migration removes the old activation path
+## Greenfield cutover removes the old activation path
 
 The target release reads only Pkl for authored project and home activation.
-`.workbench/context.json` and the old home `context.json` never act as runtime
-fallbacks or overrides, even when both formats exist. JSON remains appropriate
-for CLI output, contributor RPC and internal serialization; those are not
-activation declarations.
+There is no converter, dual reader, compatibility registry or legacy fallback.
+`.workbench/context.json` and the old home `context.json` are inert, including
+when both formats exist. Existing user files are not deleted. JSON remains
+appropriate for contributor RPC, CLI output, and internal serialization, but not
+for activation declarations.
 
-Provide an explicit conversion operation, with preview and no overwrite of an
-existing Pkl target. It reads old JSON only as conversion input and emits one
-Pkl source; normal hooks never invoke the converter. Resolve the effective legacy
-selection before converting: an omitted provider field may inherit an executable
-from an ancestor and is not itself a request for the builtin. Emit an explicit
-builtin entry only when legacy resolution selects it; explicit empty selections
-stay empty. Materialize inherited selection or refuse with an explanation of
-the unresolved dependency. Preserve executable origins when relocating relative
-references. Compare coverage for affected descendants as well as the root,
-including nearer directory-only, disabled and empty declarations. If the chosen
-target semantics cannot preserve a region's behavior, refuse conversion of that
-region and show the difference; do not silently drop guidance. Bound the scope
-analysis, and treat incomplete enumeration as unproven preservation. Provider
-paths, capabilities, exclusions and home bounds must not silently change. Old
-files remain user data; removal is explicit, and their presence after conversion
-is inert.
+`context init` creates the explicit Pkl declaration when no applicable Pkl
+selection exists. An old JSON file does not influence the result. Setup writes
+the new default home Pkl path and reconciles the known generated hook command;
+unrelated harness settings are preserved. An explicitly supplied home path must
+name a Pkl declaration: reject an old JSON path with an actionable error rather
+than interpreting it or silently switching homes. No legacy-source scan is
+required on the normal activation path.
 
-Status can identify a legacy file as migration information without using its
-contents to activate anything. If both formats are present, Pkl is the sole
-authority and status says the legacy file is ignored. Installed hooks may contain
-an old explicit `--home-config` path: reconciliation must replace known generated
-defaults while preserving unrelated harness settings; a custom old JSON path
-must produce actionable migration guidance, never silently select another home.
-This one-time reconciliation is a format upgrade, not per-project registration.
+The [CLI](../cmd/workbench/context_cli.go) and
+[acceptance witnesses](../acceptance/context_declaration_test.go) exercise this
+boundary with the bundled schemas and pinned private evaluator. Build failures
+and missing tests are not activation evidence.
 
 ## User-facing behavior and acceptance
 
@@ -255,9 +259,9 @@ contributors with the builtin. Its behavior is:
 
 | Initial state | Initialization outcome |
 | --- | --- |
-| No local file, no applicable inherited/home selection, no legacy file | Create the minimal explicit builtin declaration, then report the actual resolved result. |
+| No local Pkl file and no applicable ancestor/home selection | Create the minimal explicit builtin declaration, then report the actual resolved result. |
 | Effective selection comes only from an ancestor or home declaration | Report its source and preserve it; creating a replacement local selection requires an explicit scope/selection change with the displaced contributors shown. |
-| Only a legacy JSON file exists | Preserve it and direct the user to explicit conversion; do not generate a builtin declaration over its intended behavior. |
+| Only a legacy JSON file exists | Ignore it as activation input; preserve the file and create the same explicit Pkl declaration as for a fresh directory. |
 | Existing Pkl is enabled, disabled, empty or invalid | Preserve the authored module and explain its resolved state; never flatten imports, rewrite expressions or implicitly enable it. |
 | Home policy excludes the directory | Report the exclusion and do not create a misleading activation file. |
 
@@ -266,6 +270,21 @@ coverage, contributors/capabilities, blocked entries, policy origin and evaluati
 diagnostics without starting contributors. Under nearest ownership, a descendant
 blocked by a directory-only declaration must see that declaration and the reason
 ancestor fallback was not used.
+
+No-source inactivity and configured inactivity are distinct. With no project or
+home Pkl source, bounded Go discovery returns without evaluator, provider,
+daemon, snapshot, or trace creation. A present but disabled, empty, excluded,
+conflicting, or otherwise invalid declaration is configured input: it may need
+bounded evaluation and a private snapshot for current policy, but it cannot
+start contributors, the daemon, or explanation history. Explicit `history`,
+`inspect`, `explain`, `cache status`, and `cache clear` requests are scoped to
+their working directory and reload the current home Pkl policy before opening
+or updating trace state. `status` separately uses the same resolver to report
+activation and only observes an already-running runtime; it does not initialize
+or renew the trace store. An explicit `serve` with no
+working-directory argument starts with compiled idle settings; its first
+authoritative request supplies the cwd and current home policy, after which the
+current home idle TTL governs residency.
 
 History must preserve the declaration/dependency revision and contributor name
 used for a historical decision. It must not reinterpret history using today's
@@ -282,7 +301,7 @@ Implementation acceptance must demonstrate:
 - Imported-template edits/deletion, same-length edits, new nearer declarations,
   symlink retargeting, ABA reads, corrupt/removed snapshots, races during evaluation
   and withdrawal of queued guidance before further admission.
-- Real CLI init/status/conversion preservation, actionable error output, and
+- Real CLI init/status authored-Pkl preservation, actionable error output, and
   contributor/profile delivery through the assembled Pkl path.
 - Measured no-source inactive, configured-home inactive, cold, warm and concurrent
   hook budgets; total evaluator/daemon process-tree resources and joined cleanup.
@@ -294,7 +313,7 @@ Implementation acceptance must demonstrate:
 - Native Claude/Codex admission and an outcome-only discovery/diagnosis session
   using Pkl declarations; old JSON-only proof does not prove the replacement.
 
-The separate executable plan is
+The executable plan is
 [declaration.plan.pkl](../.context/workbench-context-declaration/declaration.plan.pkl).
-Implementation begins only after its feasibility and contract gates are met;
-this proposal itself adds no activation behavior.
+Source and test links above are the durable pointers for behavior that evolves;
+this contract does not duplicate runtime status or test results.

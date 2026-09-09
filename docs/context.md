@@ -28,51 +28,64 @@ project file. Use `--dry-run` to inspect the planned changes, or provide
 `--executable`, `--claude-settings`, `--codex-home`, and `--codex-config` for an
 isolated installation. Running setup again is intended to be idempotent.
 
-Activation is a separate, explicit choice in either a directory or the user
-home configuration. The shortest project activation is:
+Project and home Pkl declarations feed one activation decision. The shortest
+project activation is:
 
 ```sh
 workbench context init --path "$PWD"
 ```
 
-This creates or updates `$PWD/.workbench/context.json`, setting `optIn` to
-`true`, adding `includeChildren: true` when absent, and adding
-`schemaVersion: 1` when absent. Existing JSON fields are retained; formatting
-may be normalized. To opt in only one directory, set `includeChildren` to
-`false` after initialization. A nearer `.workbench/context.json` wins while
-walking toward the filesystem root, so a nearer `optIn: false` can withdraw an
-ancestor declaration.
+This creates `workbench-context.pkl` when no applicable declaration already
+owns the directory. A fresh project gets an explicit builtin selection:
 
-The project file has this deliberately small authored shape:
+```pkl
+amends "workbench:context"
+scope = "subtree"
 
-```json
-{
-  "schemaVersion": 1,
-  "optIn": true,
-  "includeChildren": true
+contributors {
+  ["project-guidance"] = new AiContext {}
 }
 ```
 
-The home file defaults to `XDG_CONFIG_HOME/workbench/context.json` (falling
-back to `$HOME/.config/workbench/context.json`). It can name explicit
-directory scopes without rewriting project files:
+`init` preserves existing declarations, including expressions, imports,
+`enabled = false`, and empty contributor selections. It reports file creation
+separately from effective activation. A nearer project declaration supplies the
+complete selection; it does not merge contributors from ancestors. Use
+`scope = "directory"` for the declaration's directory only. Disabled, empty,
+invalid, and directory-only boundaries prevent fallback to an ancestor or home
+selection. Compose shared values explicitly through local Pkl imports.
 
-```json
-{
-  "schemaVersion": 1,
-  "scopes": [
-    {"root": "/work/repo", "optIn": true, "includeChildren": true}
-  ],
-  "exclusions": [
-    {"root": "/work/repo/vendor", "includeChildren": true}
-  ]
+The optional home declaration defaults to
+`$XDG_CONFIG_HOME/workbench/workbench-context.pkl`, falling back to
+`$HOME/.config/workbench/workbench-context.pkl`. It can select directories that
+you cannot edit and apply limits or exclusions to project selections:
+
+```pkl
+amends "workbench:context-home"
+
+directories {
+  new {
+    root = "/work/repo"
+    scope = "subtree"
+    contributors { ["project-guidance"] = new AiContext {} }
+  }
+}
+
+exclusions {
+  new { root = "/work/repo/vendor"; scope = "subtree" }
 }
 ```
 
-An enabled project with no `providers` field uses the builtin `ai-context`
-provider. An explicit `"providers": []` disables providers for that scope.
-Home settings are machine-wide limits and optional directory declarations;
-they are not a replacement for deliberate project activation.
+Replace the example roots with existing absolute directories on the machine;
+home declaration validation fails closed when a selected or excluded root does
+not exist.
+
+Home policy alone does not activate a directory. Applicable exclusions and
+disabled home scopes dominate project selections; duplicate home roots are a
+conflict. An omitted or empty `contributors` mapping selects nothing, including
+no implicit builtin. Authored `.workbench/context.json` files remain inert.
+Explicit obsolete JSON home paths are rejected; JSON remains supported for hook
+payloads, provider RPC, and command output.
 
 ## Audience and profile are different
 
@@ -142,25 +155,27 @@ child processes in the scope's canonical root. The provider owns its opaque
 `settings` value and its facts or contribution bodies; Workbench owns scope,
 audience, configuration, profile, content, and source revisions.
 
-This is the exact configuration shape; use an absolute executable path:
+Select an executable by a stable contributor name. Its path is absolute or
+relative to the consuming declaration root; Workbench does not search `PATH` or
+interpret arguments through a shell:
 
-```json
-{
-  "id": "my-guidance",
-  "kind": "executable",
-  "executable": "/absolute/path/to/provider",
-  "arguments": [],
-  "settings": {"mode": "review"},
-  "capabilities": ["profile", "contribute"],
-  "limits": {
-    "deadlineMs": 500,
-    "maxResponseBytes": 262144,
-    "maxFacts": 32,
-    "maxContributions": 64,
-    "maxBodyBytes": 262144
+```pkl
+amends "workbench:context"
+
+contributors {
+  ["my-guidance"] = new Executable {
+    executable = "./provider"
+    arguments { "--review" }
+    capabilities { "profile"; "contribute" }
+    settings { ["mode"] = "review" }
+    limits { deadlineMs = 500; maxBodyBytes = 262144 }
   }
 }
 ```
+
+Limits can narrow home policy. Capabilities select operations: a profile-only
+contributor is never asked to contribute guidance. Profile selection is derived
+from these same entries; there is no authored `profileProviders` list.
 
 The client sends one newline-delimited JSON-RPC 2.0 request and expects one
 newline-delimited response. Initialization is:
@@ -198,8 +213,8 @@ workbench context history --path "$PWD" --json
 workbench context inspect contribution 123 --path "$PWD"
 workbench context inspect turn turn-123 --path "$PWD"
 workbench context explain profile sha256:... --path "$PWD"
-workbench context cache status
-workbench context cache clear
+workbench context cache status --path "$PWD"
+workbench context cache clear --path "$PWD"
 ```
 
 `status` reports resolved activation and, when enabled, checks an existing
@@ -207,9 +222,13 @@ runtime without starting one. `history` answers what happened in a bounded
 page. `inspect contribution` combines source, content sample, reasons, and
 delivery outcomes. `inspect turn` groups retained observations and outcomes.
 `explain profile` reports profile evidence and transitions. `cache status`
-reports the explanation generation, disk usage, blocks, and known gaps.
-`cache clear` starts a new explanation-history generation and does not clear
-delivery suppression, pending offers, or the host conversation.
+reports the explanation generation, disk usage, blocks, and known gaps. These
+explicit cache reads use the supplied working directory (the current directory
+when `--path` is omitted), reload the current home Pkl policy, and then open or
+update the trace store with that policy. They do not reuse an old home allowance
+after the home declaration changes. `cache clear` uses the same current policy
+before clearing explanation history; it does not clear delivery suppression,
+pending offers, or the host conversation.
 
 The raw hook command is normally installed by `setup`, but it can be exercised
 directly with the host's JSON payload:
@@ -226,6 +245,13 @@ The daemon can also be run explicitly for diagnostics:
 ```sh
 workbench context serve
 ```
+
+An explicit `serve` command has no working-directory argument. It starts with
+the compiled idle policy and does not evaluate a project or renew residency at
+startup. The first authoritative request supplies its working directory and
+current home policy; from that request onward, the current home idle TTL governs
+runtime residency. Ordinary `status` remains observational and does not start
+or renew the runtime or initialize the trace store.
 
 Setup is configuration, not host trust. In Codex app-server inspection, a
 reconciled hook can be reported as `enabled: true` while its `trustStatus` is
@@ -249,13 +275,17 @@ results, or a transcript. The sample limit is 10,000 UTF-8 bytes per
 contribution; small bodies may fit in full, while larger bodies retain bounded
 head, middle, and tail excerpts with original size and omitted-byte counts.
 
-The default cache cap is 5,000,000,000 decimal bytes. It includes segment and
-index overhead; oldest blocks rotate out and queries disclose rotated, dropped,
-corrupt, or unreadable gaps. History queries have bounded record, page-byte,
-and scan-byte budgets. A bare `history --json` uses the live store policy for
-its byte budgets, so a smaller configured cache remains usable; pass explicit
-`--limit`, `--max-bytes`, or `--max-scan-bytes` only when a smaller bounded page
-is desired.
+The default pool cap is 5,000,000,000 decimal bytes, shared by explanation
+history and disposable evaluated-declaration snapshots. Admission includes
+state, metadata, and temporary-write peaks. Snapshots retain captured
+declaration and local-import bytes for freshness checks; they cannot authorize
+activation when current source bytes or targets differ. History rotates its own
+blocks and queries disclose rotated, dropped, corrupt, or unreadable gaps. A
+reduced current home cap prevents admission under the old allowance. History
+queries have bounded record, page-byte, and scan-byte budgets. A bare
+`history --json` uses the live store policy for its byte budgets, so a smaller
+configured cache remains usable; pass explicit `--limit`, `--max-bytes`, or
+`--max-scan-bytes` only when a smaller bounded page is desired.
 
 Pending offers, receipts, and suppression are runtime delivery state. They are
 not made durable by the explanation cache and may be lost on runtime restart;
@@ -279,21 +309,28 @@ proves only the local handoff to the host adapter. It does not prove that the
 native host accepted the envelope or that a model request contained the
 context; those are separate host/model tests.
 
-The inactive path is intentionally silent: it does not start the runtime,
-providers, or create project, socket, lock, or cache artifacts. Enabled hooks
-have a default two-second whole-hook bound, bounded stdin and JSON decoding,
-bounded provider and wire I/O, and bounded output writes. Inactive, conflicting,
-invalid, and failed input is fail-open with empty stdout; diagnostics, when
-available, go to stderr. A failed stdout write cannot create a confirmed
-receipt.
+With no project or home declaration, the hook performs bounded Go discovery
+only: no evaluator, runtime, provider, or cache artifacts. A present declaration
+may require bounded cold Pkl evaluation and a disposable snapshot even when its
+selection is inactive. Warm snapshots are validated against current source and
+import bytes. Configured inactive, conflicting, or invalid selections do not
+start the daemon or providers and are explained by explicit reads; an ordinary
+inactive hook remains silent. Enabled hooks have a default two-second whole-hook
+bound, bounded stdin and JSON decoding, bounded provider and wire I/O, and
+bounded output writes. Inactive, conflicting, invalid, and failed input is
+fail-open with empty stdout; diagnostics, when available, go to stderr. A failed
+stdout write cannot create a confirmed receipt.
 
 These bounds are product behavior, not performance promises for every machine.
-The acceptance lane measures representative cold concurrency and cleanup and
-keeps inactive smoke timing separate from the proposed p95 target. The native
+Measured thresholds belong to the acceptance proof matrix; the native
 Claude/Codex model-admission proof and independent runtime lifecycle proof are
 separate acceptance responsibilities.
 
 For exact schemas and rationale, use the [accepted ADR](adr/2026-09-wokbench-context.md),
+[declaration contract](context-declarations.md),
+[project schema](../pkl/WorkbenchContext.pkl),
+[home schema](../pkl/WorkbenchContextHome.pkl),
+[activation loader](../internal/contextconfig/config.go),
 [runtime contract](../.context/workbench-context/runtime-contract.md),
 [provider API](../internal/contextapi/contribution.go), and
 [trace implementation](../internal/contexttrace/contexttrace.go).

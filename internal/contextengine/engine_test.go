@@ -1,11 +1,15 @@
 package contextengine
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +17,38 @@ import (
 
 	"github.com/phosphorco/workbench-go/internal/contextapi"
 	"github.com/phosphorco/workbench-go/internal/contextconfig"
+	"github.com/phosphorco/workbench-go/internal/evaluate"
 )
+
+func TestMain(m *testing.M) {
+	for index, argument := range os.Args {
+		if argument != "--engine-context-worker" {
+			continue
+		}
+		var pkl string
+		var maximum uint64
+		for index++; index < len(os.Args); index++ {
+			switch os.Args[index] {
+			case "--pkl":
+				if index+1 < len(os.Args) {
+					pkl = os.Args[index+1]
+					index++
+				}
+			case "--max-data-bytes":
+				if index+1 < len(os.Args) {
+					maximum, _ = strconv.ParseUint(os.Args[index+1], 10, 64)
+					index++
+				}
+			}
+		}
+		if err := evaluate.RunContextWorker(evaluate.ContextWorkerSpec{PklExecutable: pkl, MaxProcessDataBytes: maximum}); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 func testEngine(t *testing.T) (*Engine, contextapi.ScopeIdentity, contextapi.Audience, time.Time) {
 	t.Helper()
@@ -146,16 +181,63 @@ func TestNewEngineRequiresPartitionAndBoundedDurations(t *testing.T) {
 
 func TestLoadedDeclarationAndEffectiveDigestsReachEngine(t *testing.T) {
 	root := t.TempDir()
-	configPath := filepath.Join(root, ".workbench", "context.json")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+	pkl := os.Getenv("PKL_EXECUTABLE")
+	if pkl == "" {
+		t.Skip("set PKL_EXECUTABLE to the exact pinned Pkl executable for evaluator-backed engine review")
+	}
+	pkl, err := filepath.Abs(pkl)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":1,"optIn":true,"includeChildren":true}`), 0o600); err != nil {
+	pkl, err = filepath.EvalSymlinks(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(root, "context-runtime-lock.json")
+	lock := map[string]any{
+		"runtimes": map[string]any{
+			"pkl": map[string]any{
+				"version":   "0.32.1",
+				"artifacts": map[string]any{engineContextPlatform(): map[string]string{"sha256": strings.Repeat("a", 64)}},
+			},
+		},
+	}
+	encodedLock, err := json.Marshal(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, encodedLock, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEvaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextEvaluator, err := evaluate.NewContextEvaluator(runtimeEvaluator, evaluate.ContextOptions{
+		WorkerExecutable:   worker,
+		WorkerArguments:    []string{"--engine-context-worker"},
+		RuntimeLockPath:    lockPath,
+		EvaluatorLeasePath: filepath.Join(root, "context-evaluator.lock"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte("amends \"workbench:context\"\ncontributors { [\"project-guidance\"] = new AiContext {} }\n")
+	entryPath := filepath.Join(root, "workbench-context.pkl")
+	if err := os.WriteFile(entryPath, source, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
-	loaded, err := contextconfig.Load(contextconfig.LoadOptions{WorkingDirectory: root, Now: now})
+	loaded, err := contextconfig.Load(context.Background(), contextconfig.LoadOptions{WorkingDirectory: root, Now: now}, contextconfig.LoadDependencies{
+		Evaluate:  contextEvaluator.Evaluate,
+		Freshness: contextEvaluator.Freshness,
+		Identity:  contextEvaluator.Identity,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +274,21 @@ func TestLoadedDeclarationAndEffectiveDigestsReachEngine(t *testing.T) {
 	confirmed := testConfirmForEngine(engine, confirmation)
 	if confirmed.State != contextapi.DeliveryConfirmed {
 		t.Fatalf("Confirm with Load output = %#v", confirmed)
+	}
+}
+
+func engineContextPlatform() string {
+	switch {
+	case runtime.GOOS == "linux" && runtime.GOARCH == "amd64":
+		return "linux-x64"
+	case runtime.GOOS == "linux" && runtime.GOARCH == "arm64":
+		return "linux-arm64"
+	case runtime.GOOS == "darwin" && runtime.GOARCH == "amd64":
+		return "macos-x64"
+	case runtime.GOOS == "darwin" && runtime.GOARCH == "arm64":
+		return "macos-arm64"
+	default:
+		return runtime.GOOS + "-" + runtime.GOARCH
 	}
 }
 

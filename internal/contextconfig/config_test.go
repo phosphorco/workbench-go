@@ -1,7 +1,8 @@
 package contextconfig
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/phosphorco/workbench-go/internal/contextapi"
+	"github.com/phosphorco/workbench-go/internal/contextcache"
 )
 
 var testNow = time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
@@ -23,21 +25,113 @@ func writeTestFile(t *testing.T, path, contents string) {
 	}
 }
 
-func loadTest(t *testing.T, directory, home string) LoadResult {
+func projectPath(root string) string { return filepath.Join(root, projectDeclarationRelativePath) }
+
+func testIdentity() contextapi.EvaluatorIdentity {
+	return contextapi.EvaluatorIdentity{Name: "test-evaluator", Version: "1", Digest: "sha256:test-evaluator"}
+}
+
+func testDependencies(t *testing.T, calls *int) LoadDependencies {
 	t.Helper()
-	loaded, err := Load(LoadOptions{
-		WorkingDirectory: directory,
-		HomeConfigPath:   home,
-		Now:              testNow,
-	})
+	return LoadDependencies{
+		Identity: func(context.Context) (contextapi.EvaluatorIdentity, error) { return testIdentity(), nil },
+		Freshness: func(_ context.Context, input contextapi.EvaluationInput, value contextapi.EvaluatedDeclaration) error {
+			if value.Origin != input.Origin {
+				return errors.New("origin changed")
+			}
+			if value.Evaluator != testIdentity() {
+				return errors.New("identity changed")
+			}
+			return nil
+		},
+		Evaluate: func(_ context.Context, input contextapi.EvaluationInput) (contextapi.EvaluatedDeclaration, error) {
+			if calls != nil {
+				*calls++
+			}
+			if strings.Contains(string(input.SourceBytes), "malformed") {
+				return contextapi.EvaluatedDeclaration{}, errors.New("malformed evaluator fixture")
+			}
+			value := contextapi.EvaluatedDeclaration{Origin: input.Origin, Evaluator: testIdentity(), Revision: contextapi.ConfigDigest("sha256:" + digestString(string(input.SourceBytes)))}
+			if input.Origin.Authority == contextapi.ScopeAuthorityHome {
+				value.Kind = contextapi.DeclarationKindHome
+				value.Home = homeForSource(string(input.SourceBytes), input.Origin.Root)
+			} else {
+				value.Kind = contextapi.DeclarationKindProject
+				value.Project = projectForSource(string(input.SourceBytes))
+			}
+			return value, nil
+		},
+	}
+}
+
+func projectForSource(source string) contextapi.ProjectDeclaration {
+	declaration := contextapi.ProjectDeclaration{Enabled: true, Scope: contextapi.DeclarationScopeSubtree, Contributors: map[contextapi.ContributorName]contextapi.Contributor{
+		"project-guidance": {Enabled: true, Kind: contextapi.ContributorKindAiContext},
+	}}
+	switch {
+	case strings.Contains(source, "disabled"):
+		declaration.Enabled = false
+	case strings.Contains(source, "empty"):
+		declaration.Contributors = map[contextapi.ContributorName]contextapi.Contributor{}
+	case strings.Contains(source, "directory"):
+		declaration.Scope = contextapi.DeclarationScopeDirectory
+	case strings.Contains(source, "external"):
+		declaration.Contributors = map[contextapi.ContributorName]contextapi.Contributor{
+			"external": {Enabled: true, Kind: contextapi.ContributorKindExecutable, Executable: contextapi.Executable{Executable: "bin/provider", Arguments: []string{"--safe"}, Capabilities: []contextapi.ProviderCapability{contextapi.ProviderCapabilityProfile, contextapi.ProviderCapabilityContribute}, Settings: []byte(`{"mode":"safe"}`), Limits: contextapi.ProviderLimits{DeadlineMs: 77}}},
+		}
+		declaration.Profile = contextapi.ProfileSelection{Role: "project-role"}
+	}
+	return declaration
+}
+
+func homeForSource(source, root string) contextapi.HomeDeclaration {
+	selectionRoot := root
+	declaration := contextapi.HomeDeclaration{Limits: contextapi.HomeLimits{Defaults: contextapi.ProfileDefaults{Selection: contextapi.ProfileSelection{Role: "home-role"}}}, Directories: []contextapi.HomeDirectorySelection{{Root: selectionRoot, Enabled: true, Scope: contextapi.DeclarationScopeSubtree, Contributors: map[contextapi.ContributorName]contextapi.Contributor{"home-guidance": {Enabled: true, Kind: contextapi.ContributorKindAiContext}}}}}
+	if strings.Contains(source, "exclude") {
+		declaration.Exclusions = []contextapi.PathRule{{Root: filepath.Join(root, "excluded"), IncludeChildren: true}}
+	}
+	if strings.Contains(source, "disabled") {
+		declaration.Directories[0].Enabled = false
+	}
+	if strings.Contains(source, "allow-external") {
+		declaration.Limits.ProviderPolicy = contextapi.ProviderPolicy{Mode: contextapi.ProviderPolicyAllowlist, Allowed: []contextapi.ProviderID{"external"}}
+	}
+	if strings.Contains(source, "deny-external") {
+		declaration.Limits.ProviderPolicy = contextapi.ProviderPolicy{Mode: contextapi.ProviderPolicyAllowlist, Allowed: []contextapi.ProviderID{"home-guidance"}}
+	}
+	if strings.Contains(source, "retained") {
+		declaration.Limits.Runtime.MaxPendingMemoryBytes = 1_000_000
+		declaration.Limits.Delivery.MaxRetainedBytes = 99_000_000
+	}
+	if strings.Contains(source, "runtime-count-overflow") {
+		declaration.Limits.Runtime.MaxProfileFacts = maxConfiguredCount + 1
+	}
+	if strings.Contains(source, "provider-overflow") {
+		declaration.Limits.Runtime.ProviderDefaults.MaxFacts = maxConfiguredCount + 1
+	}
+	if strings.Contains(source, "cache-overflow") {
+		declaration.Limits.Cache.MaxReasons = maxConfiguredCount + 1
+	}
+	if strings.Contains(source, "delivery-overflow") {
+		declaration.Limits.Delivery.Queue.MaxPendingItems = maxConfiguredCount + 1
+	}
+	if strings.TrimSpace(source) == "overflow" {
+		declaration.Limits.Runtime.HookDeadlineMs = ^uint64(0)
+		declaration.Limits.Runtime.WholeHookDeadlineMs = ^uint64(0)
+	}
+	if strings.Contains(source, "many-home") {
+		declaration.Directories = append(declaration.Directories, contextapi.HomeDirectorySelection{Root: filepath.Join(root, "child"), Enabled: true, Scope: contextapi.DeclarationScopeSubtree, Contributors: map[contextapi.ContributorName]contextapi.Contributor{"home-guidance": {Enabled: true, Kind: contextapi.ContributorKindAiContext}}})
+	}
+	return declaration
+}
+
+func loadTest(t *testing.T, directory, home string, deps LoadDependencies) LoadResult {
+	t.Helper()
+	loaded, err := Load(context.Background(), LoadOptions{WorkingDirectory: directory, HomeConfigPath: home, Now: testNow}, deps)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return loaded
-}
-
-func projectConfig(root string) string {
-	return filepath.Join(root, projectConfigRelativePath)
 }
 
 func reasonSummaryContains(result contextapi.ActivationResult, needle string) bool {
@@ -49,340 +143,433 @@ func reasonSummaryContains(result contextapi.ActivationResult, needle string) bo
 	return false
 }
 
-func TestLoadMinimalOptInDefaultsAndProviderLimits(t *testing.T) {
+func TestLoadNoSourceIsSilentAndDoesNotUseDependencies(t *testing.T) {
 	root := t.TempDir()
-	work := filepath.Join(root, "repo", "child")
-	if err := os.MkdirAll(work, 0o755); err != nil {
-		t.Fatal(err)
+	evaluateCalls, freshnessCalls, identityCalls := 0, 0, 0
+	loaded := loadTest(t, root, "", LoadDependencies{
+		Identity: func(context.Context) (contextapi.EvaluatorIdentity, error) {
+			identityCalls++
+			return testIdentity(), nil
+		},
+		Freshness: func(context.Context, contextapi.EvaluationInput, contextapi.EvaluatedDeclaration) error {
+			freshnessCalls++
+			return nil
+		},
+		Evaluate: func(context.Context, contextapi.EvaluationInput) (contextapi.EvaluatedDeclaration, error) {
+			evaluateCalls++
+			return contextapi.EvaluatedDeclaration{}, errors.New("must not evaluate")
+		},
+	})
+	if loaded.Result.State != contextapi.ActivationInactive || len(loaded.Captures) != 0 || evaluateCalls != 0 || freshnessCalls != 0 || identityCalls != 0 {
+		t.Fatalf("no-source result = %#v, evaluate=%d freshness=%d identity=%d captures=%d", loaded.Result, evaluateCalls, freshnessCalls, identityCalls, len(loaded.Captures))
 	}
-	writeTestFile(t, projectConfig(filepath.Join(root, "repo")), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`)
+	if !reasonSummaryContains(loaded.Result, "no applicable") {
+		t.Fatalf("no-source reason = %#v", loaded.Result.Reasons)
+	}
+}
 
-	loaded := loadTest(t, work, "")
-	if loaded.Result.State != contextapi.ActivationEnabled {
-		t.Fatalf("state = %q, reasons = %#v", loaded.Result.State, loaded.Result.Reasons)
+func TestLegacyJSONIsInertAndPklSourceActivates(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".workbench", "context.json"), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`)
+	calls := 0
+	legacy := loadTest(t, root, "", testDependencies(t, &calls))
+	if legacy.Result.State != contextapi.ActivationInactive || calls != 0 {
+		t.Fatalf("legacy JSON was not inert: result=%#v calls=%d", legacy.Result, calls)
 	}
-	if !strings.HasPrefix(string(loaded.Input.Config.ConfigDigest), sha256Prefix) {
-		t.Fatalf("activation digest is not canonical: %q", loaded.Input.Config.ConfigDigest)
+	if legacy.CachePolicy == nil || legacy.CachePolicy.Validate(context.Background()) != nil {
+		t.Fatal("absent-home cache policy was not returned")
 	}
-	if loaded.Input.WorkingDirectory != work {
-		t.Fatalf("working directory = %q, want %q", loaded.Input.WorkingDirectory, work)
+	writeTestFile(t, projectPath(root), "enabled")
+	loaded := loadTest(t, root, "", testDependencies(t, &calls))
+	if loaded.Result.State != contextapi.ActivationEnabled || len(loaded.Result.Effective.Providers) != 1 || loaded.Result.Effective.Providers[0].ID != "project-guidance" {
+		t.Fatalf("Pkl source result = %#v", loaded.Result)
 	}
-	providers := loaded.Result.Effective.Providers
-	if len(providers) != 1 || providers[0].ID != "ai-context" {
-		t.Fatalf("providers = %#v", providers)
-	}
-	if providers[0].Limits != defaultProviderLimits() {
-		t.Fatalf("provider limits = %#v, want defaults %#v", providers[0].Limits, defaultProviderLimits())
-	}
-	if loaded.Result.Effective.Runtime.MaxProviderProcesses != 4 {
-		t.Fatalf("MaxProviderProcesses = %d, want 4", loaded.Result.Effective.Runtime.MaxProviderProcesses)
-	}
-	if loaded.Result.Effective.Cache.DiskCapBytes != 5_000_000_000 {
-		t.Fatalf("DiskCapBytes = %d", loaded.Result.Effective.Cache.DiskCapBytes)
+	if loaded.Result.Effective.Runtime.MaxProviderProcesses != 4 || loaded.Result.Effective.Cache.DiskCapBytes != 5_000_000_000 {
+		t.Fatalf("defaults were not retained: %#v", loaded.Result.Effective)
 	}
 	if loaded.Result.Effective.Delivery.MaxRetainedBytes != defaultMaxRetainedBytes {
-		t.Fatalf("MaxRetainedBytes = %d, want %d", loaded.Result.Effective.Delivery.MaxRetainedBytes, defaultMaxRetainedBytes)
+		t.Fatalf("retained-byte default = %d, want %d", loaded.Result.Effective.Delivery.MaxRetainedBytes, defaultMaxRetainedBytes)
 	}
 }
 
-func TestProviderListAbsenceAndExplicitEmptyAreDistinct(t *testing.T) {
+func TestNearestCompleteProjectStopsAncestorEvaluation(t *testing.T) {
 	root := t.TempDir()
-	writeTestFile(t, projectConfig(root), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`)
-	first := loadTest(t, root, "")
-	if first.Result.State != contextapi.ActivationEnabled {
-		t.Fatalf("absent providers state = %q", first.Result.State)
-	}
-
-	writeTestFile(t, projectConfig(root), `{"schemaVersion":1,"optIn":true,"includeChildren":true,"providers":[]}`)
-	second := loadTest(t, root, "")
-	if second.Result.State != contextapi.ActivationInactive {
-		t.Fatalf("empty providers state = %q, reasons = %#v", second.Result.State, second.Result.Reasons)
-	}
-	if !reasonSummaryContains(second.Result, "explicit empty provider list") {
-		t.Fatalf("empty-provider explanation missing: %#v", second.Result.Reasons)
-	}
-}
-
-func TestNearestDeclarationWithdrawalAndSymlinkCanonicalization(t *testing.T) {
-	root := t.TempDir()
-	parent := filepath.Join(root, "parent")
-	child := filepath.Join(parent, "child")
+	ancestor := filepath.Join(root, "ancestor")
+	child := filepath.Join(ancestor, "child")
 	if err := os.MkdirAll(child, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	first := loadTest(t, child, "")
-	if first.Result.State != contextapi.ActivationInactive {
-		t.Fatalf("without declaration state = %q", first.Result.State)
+	writeTestFile(t, projectPath(ancestor), "malformed")
+	writeTestFile(t, projectPath(child), "enabled")
+	calls := 0
+	loaded := loadTest(t, child, "", testDependencies(t, &calls))
+	if loaded.Result.State != contextapi.ActivationEnabled || calls != 1 {
+		t.Fatalf("nearest project did not own resolution: state=%q calls=%d result=%#v", loaded.Result.State, calls, loaded.Result)
 	}
-
-	writeTestFile(t, projectConfig(parent), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`)
-	second := loadTest(t, child, "")
-	if second.Result.State != contextapi.ActivationEnabled {
-		t.Fatalf("parent declaration state = %q, reasons = %#v", second.Result.State, second.Result.Reasons)
-	}
-	originalScopeID := second.Result.Scope.ID
-	originalDigest := second.Result.Scope.ConfigDigest
-	writeTestFile(t, projectConfig(parent), `{"schemaVersion":1,"optIn":true,"includeChildren":true,"profile":{"role":"edited"}}`)
-	edited := loadTest(t, child, "")
-	if edited.Result.Scope.ID != originalScopeID || edited.Result.Scope.ConfigDigest == originalDigest {
-		t.Fatalf("edited declaration identity = (%q, %q), original = (%q, %q)", edited.Result.Scope.ID, edited.Result.Scope.ConfigDigest, originalScopeID, originalDigest)
-	}
-
-	writeTestFile(t, projectConfig(child), `{"schemaVersion":1,"optIn":false,"includeChildren":true}`)
-	third := loadTest(t, child, "")
-	if third.Result.State != contextapi.ActivationInactive || !reasonSummaryContains(third.Result, "opts out") {
-		t.Fatalf("nearer opt-out result = %#v", third.Result)
-	}
-	if err := os.Remove(projectConfig(child)); err != nil {
-		t.Fatal(err)
-	}
-	fourth := loadTest(t, child, "")
-	if fourth.Result.State != contextapi.ActivationEnabled {
-		t.Fatalf("withdrawn nearer declaration state = %q", fourth.Result.State)
-	}
-
 	alias := filepath.Join(root, "alias")
-	if err := os.Symlink(parent, alias); err != nil {
+	if err := os.Symlink(ancestor, alias); err != nil {
 		t.Fatal(err)
 	}
-	viaAlias := loadTest(t, filepath.Join(alias, "child"), "")
-	if viaAlias.Input.WorkingDirectory != child {
-		t.Fatalf("symlink working directory = %q, want %q", viaAlias.Input.WorkingDirectory, child)
-	}
-	if viaAlias.Result.Scope.ID != fourth.Result.Scope.ID || viaAlias.Result.State != fourth.Result.State {
-		t.Fatalf("symlink result = %#v, canonical result = %#v", viaAlias.Result, fourth.Result)
+	viaAlias := loadTest(t, filepath.Join(alias, "child"), "", testDependencies(t, nil))
+	if viaAlias.Input.WorkingDirectory != child || viaAlias.Result.State != contextapi.ActivationEnabled || viaAlias.Result.Scope.CanonicalRoot != child {
+		t.Fatalf("canonical Pkl alias result = %#v, input=%#v", viaAlias.Result, viaAlias.Input)
 	}
 
-	otherParent := filepath.Join(root, "other")
-	otherChild := filepath.Join(otherParent, "child")
-	if err := os.MkdirAll(otherChild, 0o755); err != nil {
+	writeTestFile(t, projectPath(child), "disabled")
+	loaded = loadTest(t, child, "", testDependencies(t, nil))
+	if loaded.Result.State != contextapi.ActivationInactive || !reasonSummaryContains(loaded.Result, "disabled") || loaded.Result.Scope.CanonicalRoot != child {
+		t.Fatalf("disabled nearest boundary = %#v", loaded.Result)
+	}
+
+	nested := filepath.Join(child, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, projectConfig(otherParent), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`)
-	other := loadTest(t, otherChild, "")
-	if other.Result.Scope.ID == fourth.Result.Scope.ID {
-		t.Fatalf("distinct worktrees unexpectedly share scope ID %q", other.Result.Scope.ID)
+	writeTestFile(t, projectPath(child), "directory")
+	loaded = loadTest(t, nested, "", testDependencies(t, nil))
+	if loaded.Result.State != contextapi.ActivationInactive || !reasonSummaryContains(loaded.Result, "does not cover") {
+		t.Fatalf("directory boundary fell through: %#v", loaded.Result)
 	}
 }
 
-func TestHomeExclusionPolicyAndNearestOptOut(t *testing.T) {
+func TestDanglingNearestDeclarationBlocksAncestorFallback(t *testing.T) {
+	root := t.TempDir()
+	ancestor := filepath.Join(root, "ancestor")
+	child := filepath.Join(ancestor, "child")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, projectPath(ancestor), "enabled")
+	if err := os.Symlink(filepath.Join(child, "missing.pkl"), projectPath(child)); err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadTest(t, child, "", testDependencies(t, nil))
+	if loaded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(loaded.Result, "cannot be loaded") {
+		t.Fatalf("dangling nearest declaration fell through: %#v", loaded.Result)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.pkl")
+	writeTestFile(t, outside, "enabled")
+	if err := os.Remove(projectPath(child)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, projectPath(child)); err != nil {
+		t.Fatal(err)
+	}
+	loaded = loadTest(t, child, "", testDependencies(t, nil))
+	if loaded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(loaded.Result, "cannot be loaded") {
+		t.Fatalf("escaping nearest declaration was read: %#v", loaded.Result)
+	}
+}
+
+func TestInvalidHomeStopsProjectEvaluation(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, projectPath(root), "enabled")
+	home := filepath.Join(root, "home-workbench-context.pkl")
+	writeTestFile(t, home, "malformed")
+	calls := 0
+	loaded := loadTest(t, root, home, testDependencies(t, &calls))
+	if loaded.Result.State != contextapi.ActivationInvalid || calls != 1 || len(loaded.Captures) != 0 {
+		t.Fatalf("invalid home did not stop project work: result=%#v calls=%d captures=%d", loaded.Result, calls, len(loaded.Captures))
+	}
+	if loaded.CachePolicy != nil {
+		t.Fatal("invalid home returned a usable cache policy")
+	}
+}
+
+func TestInvalidBoundedAndOverflowDeclarationsFailClosed(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home-workbench-context.pkl")
+	writeTestFile(t, home, "overflow")
+	if loaded := loadTest(t, root, home, testDependencies(t, nil)); loaded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(loaded.Result, "hook deadline") {
+		t.Fatalf("overflow home was accepted: %#v", loaded.Result)
+	}
+	writeTestFile(t, home, "many-home")
+	if err := os.MkdirAll(filepath.Join(root, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(context.Background(), LoadOptions{WorkingDirectory: root, HomeConfigPath: home, Now: testNow, Limits: LoadLimits{MaxHomeScopes: 1}}, testDependencies(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(loaded.Result, "selection count") {
+		t.Fatalf("home lookup cap was not enforced: %#v", loaded.Result)
+	}
+	for _, testCase := range []struct {
+		marker string
+		reason string
+	}{
+		{marker: "runtime-count-overflow", reason: "runtime bound"},
+		{marker: "provider-overflow", reason: "provider count"},
+		{marker: "cache-overflow", reason: "cache count"},
+		{marker: "delivery-overflow", reason: "queue item count"},
+	} {
+		writeTestFile(t, home, testCase.marker)
+		loaded = loadTest(t, root, home, testDependencies(t, nil))
+		if loaded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(loaded.Result, testCase.reason) {
+			t.Fatalf("%s was accepted: %#v", testCase.marker, loaded.Result)
+		}
+	}
+
+	writeTestFile(t, projectPath(root), "enabled")
+	loaded, err = Load(context.Background(), LoadOptions{WorkingDirectory: root, Now: testNow, Limits: LoadLimits{MaxConfigBytes: 1}}, testDependencies(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(loaded.Result, "exceeds") {
+		t.Fatalf("bounded source was not rejected: %#v", loaded.Result)
+	}
+}
+
+func TestRetainedBytesClampAndStableScopeIdentity(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, projectPath(root), "enabled")
+	home := filepath.Join(root, "home-workbench-context.pkl")
+	writeTestFile(t, home, "retained")
+	first := loadTest(t, root, home, testDependencies(t, nil))
+	if first.Result.State != contextapi.ActivationEnabled || first.Input.Config.Home.Delivery.MaxRetainedBytes != 1_000_000 || first.Result.Effective.Delivery.MaxRetainedBytes != 1_000_000 {
+		t.Fatalf("retained-byte clamp = input=%d effective=%d result=%#v", first.Input.Config.Home.Delivery.MaxRetainedBytes, first.Result.Effective.Delivery.MaxRetainedBytes, first.Result)
+	}
+	firstID := first.Result.Scope.ID
+	writeTestFile(t, projectPath(root), "enabled-edited")
+	second := loadTest(t, root, home, testDependencies(t, nil))
+	if second.Result.Scope.ID != firstID || second.Result.Scope.ConfigDigest == first.Result.Scope.ConfigDigest {
+		t.Fatalf("scope identity/revision = first(%q,%q) second(%q,%q)", firstID, first.Result.Scope.ConfigDigest, second.Result.Scope.ID, second.Result.Scope.ConfigDigest)
+	}
+}
+
+func TestEntrySymlinkKeepsDeclaredOriginPath(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "declared-source.pkl")
+	writeTestFile(t, target, "enabled")
+	if err := os.Symlink(filepath.Base(target), projectPath(root)); err != nil {
+		t.Fatal(err)
+	}
+	var seen string
+	deps := testDependencies(t, nil)
+	baseEvaluate := deps.Evaluate
+	deps.Evaluate = func(ctx context.Context, input contextapi.EvaluationInput) (contextapi.EvaluatedDeclaration, error) {
+		seen = input.Origin.Path
+		return baseEvaluate(ctx, input)
+	}
+	loaded := loadTest(t, root, "", deps)
+	if loaded.Result.State != contextapi.ActivationEnabled || seen != projectPath(root) {
+		t.Fatalf("entry origin path = %q, want %q; result=%#v", seen, projectPath(root), loaded.Result)
+	}
+}
+
+func TestAbsentHomePolicyDetectsLaterAppearance(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home-workbench-context.pkl")
+	writeTestFile(t, projectPath(root), "enabled")
+	loaded := loadTest(t, root, home, testDependencies(t, nil))
+	if loaded.CachePolicy == nil {
+		t.Fatal("absent home did not return cache policy")
+	}
+	writeTestFile(t, home, "enabled")
+	if err := loaded.CachePolicy.Validate(context.Background()); err == nil {
+		t.Fatal("absent-home policy accepted a later home declaration")
+	}
+}
+
+func TestColdProjectValidatesAbsentHomePolicyWithoutCache(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home-workbench-context.pkl")
+	writeTestFile(t, projectPath(root), "enabled")
+	deps := testDependencies(t, nil)
+	baseEvaluate := deps.Evaluate
+	deps.Evaluate = func(ctx context.Context, input contextapi.EvaluationInput) (contextapi.EvaluatedDeclaration, error) {
+		if input.Origin.Authority == contextapi.ScopeAuthorityProject {
+			writeTestFile(t, home, "enabled")
+		}
+		return baseEvaluate(ctx, input)
+	}
+	loaded := loadTest(t, root, home, deps)
+	if loaded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(loaded.Result, "appeared after absence") {
+		t.Fatalf("cold project bypassed absent-home policy: %#v", loaded.Result)
+	}
+}
+
+func TestHomeExclusionDisabledScopeAndProfileDefaults(t *testing.T) {
 	root := t.TempDir()
 	excluded := filepath.Join(root, "excluded")
 	if err := os.MkdirAll(excluded, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	project := `{"schemaVersion":1,"optIn":true,"includeChildren":true}`
-	writeTestFile(t, projectConfig(root), project)
-	home := filepath.Join(t.TempDir(), "context.json")
-	writeTestFile(t, home, fmt.Sprintf(`{"schemaVersion":1,"scopes":[{"root":%q,"optIn":true,"includeChildren":true}],"exclusions":[{"root":%q,"includeChildren":true}]}`, root, excluded))
-
-	excludedResult := loadTest(t, excluded, home)
+	writeTestFile(t, projectPath(root), "enabled")
+	home := filepath.Join(root, "home-workbench-context.pkl")
+	writeTestFile(t, home, "exclude")
+	excludedResult := loadTest(t, excluded, home, testDependencies(t, nil))
 	if excludedResult.Result.State != contextapi.ActivationInactive || !reasonSummaryContains(excludedResult.Result, "exclusion") {
 		t.Fatalf("excluded result = %#v", excludedResult.Result)
 	}
-
-	allowed := loadTest(t, root, home)
-	if allowed.Result.State != contextapi.ActivationEnabled {
-		t.Fatalf("allowed result = %#v", allowed.Result)
+	allowedResult := loadTest(t, root, home, testDependencies(t, nil))
+	if allowedResult.Result.State != contextapi.ActivationEnabled || allowedResult.Result.Effective.Profile.Role != "home-role" {
+		t.Fatalf("home defaults/result = %#v", allowedResult.Result)
 	}
 
-	nested := filepath.Join(root, "nested")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeTestFile(t, projectConfig(nested), `{"schemaVersion":1,"optIn":false,"includeChildren":true}`)
-	nestedHome := filepath.Join(t.TempDir(), "context.json")
-	writeTestFile(t, nestedHome, fmt.Sprintf(`{"schemaVersion":1,"scopes":[{"root":%q,"optIn":true,"includeChildren":true},{"root":%q,"optIn":false,"includeChildren":true}]}`, root, nested))
-	nestedResult := loadTest(t, nested, nestedHome)
-	if nestedResult.Result.State != contextapi.ActivationInactive || !reasonSummaryContains(nestedResult.Result, "nearest home scope") {
-		t.Fatalf("nested home opt-out result = %#v", nestedResult.Result)
-	}
-
-	duplicateHome := filepath.Join(t.TempDir(), "context.json")
-	writeTestFile(t, duplicateHome, fmt.Sprintf(`{"schemaVersion":1,"scopes":[{"root":%q,"optIn":true,"includeChildren":true},{"root":%q,"optIn":false,"includeChildren":true}]}`, root, root))
-	conflict := loadTest(t, root, duplicateHome)
-	if conflict.Result.State != contextapi.ActivationConflict || !reasonSummaryContains(conflict.Result, "home declarations conflict") {
-		t.Fatalf("same-root home conflict = %#v", conflict.Result)
+	writeTestFile(t, home, "disabled")
+	disabled := loadTest(t, root, home, testDependencies(t, nil))
+	if disabled.Result.State != contextapi.ActivationInactive || !reasonSummaryContains(disabled.Result, "home scope") {
+		t.Fatalf("disabled home scope did not dominate: %#v", disabled.Result)
 	}
 }
 
-func TestHomeProviderPolicyAndRuntimeCacheDefaults(t *testing.T) {
+func TestNamedContributorsCapabilitiesPolicyAndRelativeExecutable(t *testing.T) {
 	root := t.TempDir()
-	provider := `{"id":"external","kind":"executable","executable":"/definitely-not-started","capabilities":["contribute"]}`
-	writeTestFile(t, projectConfig(root), fmt.Sprintf(`{"schemaVersion":1,"optIn":true,"includeChildren":true,"providers":[%s]}`, provider))
-	home := filepath.Join(t.TempDir(), "context.json")
-	writeTestFile(t, home, fmt.Sprintf(`{"schemaVersion":1,"scopes":[{"root":%q,"optIn":true,"includeChildren":true}],"providerPolicy":{"mode":"allowlist","allowed":["ai-context"]},"runtime":{"maxOutstandingOffers":2,"maxReceipts":3,"idleTTLMs":3600000,"providerDefaults":{"deadlineMs":77}},"delivery":{"queue":{"maxItemBytes":128},"maxLiveOffers":1,"maxReceipts":1,"maxOfferAgeMs":1000},"cache":{"diskCapBytes":123456}}`, root))
+	writeTestFile(t, projectPath(root), "external")
+	home := filepath.Join(root, "home-workbench-context.pkl")
+	writeTestFile(t, home, "allow-external")
+	loaded := loadTest(t, root, home, testDependencies(t, nil))
+	if loaded.Result.State != contextapi.ActivationEnabled || len(loaded.Result.Effective.Providers) != 1 {
+		t.Fatalf("named contributor result = %#v", loaded.Result)
+	}
+	provider := loaded.Result.Effective.Providers[0]
+	if provider.ID != "external" || provider.Executable != filepath.Join(root, "bin/provider") || len(provider.Capabilities) != 2 || provider.Limits.DeadlineMs != 77 {
+		t.Fatalf("provider projection = %#v", provider)
+	}
+	if loaded.Result.Effective.Profile.Role != "project-role" {
+		t.Fatalf("project profile did not override home default: %#v", loaded.Result.Effective.Profile)
+	}
 
-	blocked := loadTest(t, root, home)
+	writeTestFile(t, home, "deny-external")
+	blocked := loadTest(t, root, home, testDependencies(t, nil))
 	if blocked.Result.State != contextapi.ActivationConflict || !reasonSummaryContains(blocked.Result, "excludes") {
-		t.Fatalf("blocked result = %#v", blocked.Result)
-	}
-
-	writeTestFile(t, projectConfig(root), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`)
-	enabled := loadTest(t, root, home)
-	if enabled.Result.State != contextapi.ActivationEnabled {
-		t.Fatalf("default provider result = %#v", enabled.Result)
-	}
-	if enabled.Result.Effective.Runtime.MaxOutstandingOffers != 2 || enabled.Result.Effective.Runtime.MaxReceipts != 3 || enabled.Result.Effective.Runtime.IdleTTLMs != 3600000 {
-		t.Fatalf("runtime = %#v", enabled.Result.Effective.Runtime)
-	}
-	if enabled.Result.Effective.Cache.DiskCapBytes != 123456 {
-		t.Fatalf("cache = %#v", enabled.Result.Effective.Cache)
-	}
-	if enabled.Result.Effective.Providers[0].Limits.DeadlineMs != 77 {
-		t.Fatalf("home provider default = %#v", enabled.Result.Effective.Providers[0].Limits)
-	}
-	if enabled.Result.Effective.Delivery.MaxLiveOffers != 1 || enabled.Result.Effective.Delivery.MaxReceipts != 1 || enabled.Result.Effective.Delivery.Queue.MaxItemBytes != 128 {
-		t.Fatalf("delivery caps = %#v", enabled.Result.Effective.Delivery)
+		t.Fatalf("policy result = %#v", blocked.Result)
 	}
 }
 
-func TestDeliveryRetainedBytesDefaultAndGlobalMemoryClamp(t *testing.T) {
+func TestLoadRejectsMissingEvaluatorForPresentSource(t *testing.T) {
 	root := t.TempDir()
-	writeTestFile(t, projectConfig(root), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`)
-	home := filepath.Join(t.TempDir(), "context.json")
-	writeTestFile(t, home, fmt.Sprintf(`{"schemaVersion":1,"scopes":[{"root":%q,"optIn":true,"includeChildren":true}],"runtime":{"maxPendingMemoryBytes":1000000},"delivery":{"maxRetainedBytes":99000000}}`, root))
-
-	loaded := loadTest(t, root, home)
-	if loaded.Result.State != contextapi.ActivationEnabled {
-		t.Fatalf("state = %q, reasons = %#v", loaded.Result.State, loaded.Result.Reasons)
-	}
-	if loaded.Input.Config.Home.Delivery.MaxRetainedBytes != 1_000_000 {
-		t.Fatalf("snapshot MaxRetainedBytes = %d, want 1000000", loaded.Input.Config.Home.Delivery.MaxRetainedBytes)
-	}
-	if loaded.Result.Effective.Delivery.MaxRetainedBytes != 1_000_000 {
-		t.Fatalf("effective MaxRetainedBytes = %d, want 1000000", loaded.Result.Effective.Delivery.MaxRetainedBytes)
+	writeTestFile(t, projectPath(root), "enabled")
+	loaded := loadTest(t, root, "", LoadDependencies{})
+	if loaded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(loaded.Result, "evaluator dependency") {
+		t.Fatalf("missing evaluator result = %#v", loaded.Result)
 	}
 }
 
-func TestExecutableWithoutTuningNumbersAndInactiveDoesNotExecute(t *testing.T) {
+func TestColdEvaluationRequiresFreshnessBeforeActivation(t *testing.T) {
 	root := t.TempDir()
-	writeTestFile(t, projectConfig(root), `{"schemaVersion":1,"optIn":true,"includeChildren":true,"providers":[{"id":"external","kind":"executable","executable":"/path/that/is/not/executed","capabilities":["contribute"]}]}`)
-	loaded := loadTest(t, root, "")
-	if loaded.Result.State != contextapi.ActivationEnabled {
-		t.Fatalf("executable without limits state = %q, reasons = %#v", loaded.Result.State, loaded.Result.Reasons)
+	writeTestFile(t, projectPath(root), "enabled")
+	freshnessCalls := 0
+	deps := testDependencies(t, nil)
+	deps.Freshness = func(context.Context, contextapi.EvaluationInput, contextapi.EvaluatedDeclaration) error {
+		freshnessCalls++
+		return errors.New("captured source changed during evaluation")
 	}
-	if loaded.Result.Effective.Providers[0].Limits != defaultProviderLimits() {
-		t.Fatalf("resolved executable limits = %#v", loaded.Result.Effective.Providers[0].Limits)
-	}
-
-	writeTestFile(t, projectConfig(root), `{"schemaVersion":1,"optIn":false,"includeChildren":true,"providers":[{"id":"external","kind":"executable","executable":"/path/that/is/not/executed"}]}`)
-	inactive := loadTest(t, root, "")
-	if inactive.Result.State != contextapi.ActivationInactive {
-		t.Fatalf("inactive executable state = %q", inactive.Result.State)
+	loaded := loadTest(t, root, "", deps)
+	if loaded.Result.State != contextapi.ActivationInvalid || freshnessCalls != 1 || len(loaded.Captures) != 0 || !reasonSummaryContains(loaded.Result, "captured source changed") {
+		t.Fatalf("stale cold result was activated: calls=%d captures=%d result=%#v", freshnessCalls, len(loaded.Captures), loaded.Result)
 	}
 }
 
-func TestInvalidAndBoundedConfigurationFailsClosed(t *testing.T) {
+func TestCancellationPropagatesFromEvaluation(t *testing.T) {
 	root := t.TempDir()
-	writeTestFile(t, projectConfig(root), `{"schemaVersion":1,"optIn":true,"includeChildren":true`)
-	invalid := loadTest(t, root, "")
-	if invalid.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(invalid.Result, "invalid") {
-		t.Fatalf("malformed result = %#v", invalid.Result)
+	writeTestFile(t, projectPath(root), "enabled")
+	deps := testDependencies(t, nil)
+	deps.Evaluate = func(context.Context, contextapi.EvaluationInput) (contextapi.EvaluatedDeclaration, error) {
+		return contextapi.EvaluatedDeclaration{}, context.Canceled
 	}
+	_, err := Load(context.Background(), LoadOptions{WorkingDirectory: root, Now: testNow}, deps)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("evaluation cancellation = %v, want context.Canceled", err)
+	}
+}
 
-	writeTestFile(t, projectConfig(root), `{"schemaVersion":1,"optIn":true,"includeChildren":true,"profile":{"role":"bounded"}}`)
-	bounded, err := Load(LoadOptions{
-		WorkingDirectory: root,
-		Now:              testNow,
-		Limits:           LoadLimits{MaxConfigBytes: 16},
-	})
+func TestSnapshotRetainsEntryBytesAndUsesFreshness(t *testing.T) {
+	root := t.TempDir()
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	pool, err := contextcache.Open(cacheRoot, contextcache.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bounded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(bounded.Result, "exceeds") {
-		t.Fatalf("oversized result = %#v", bounded.Result)
+	writeTestFile(t, projectPath(root), "enabled")
+	calls := 0
+	deps := testDependencies(t, &calls)
+	deps.Cache = pool
+	first := loadTest(t, root, "", deps)
+	if first.Result.State != contextapi.ActivationEnabled || calls != 1 || len(first.Captures) != 1 || string(first.Captures[0].Input.SourceBytes) != "enabled" {
+		t.Fatalf("first cached load = result %#v calls=%d captures=%#v", first.Result, calls, first.Captures)
 	}
-
-	home := filepath.Join(t.TempDir(), "context.json")
-	writeTestFile(t, home, fmt.Sprintf(`{"schemaVersion":1,"scopes":[{"root":%q,"optIn":true,"includeChildren":true}],"runtime":{"hookDeadlineMs":2001,"wholeHookDeadlineMs":1000}}`, root))
-	homeInvalid := loadTest(t, root, home)
-	if homeInvalid.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(homeInvalid.Result, "cannot exceed") {
-		t.Fatalf("invalid runtime result = %#v", homeInvalid.Result)
+	second := loadTest(t, root, "", deps)
+	if second.Result.State != contextapi.ActivationEnabled || calls != 1 {
+		t.Fatalf("snapshot was not reused: result=%#v calls=%d", second.Result, calls)
+	}
+	writeTestFile(t, projectPath(root), "enabled-edited")
+	third := loadTest(t, root, "", deps)
+	if third.Result.State != contextapi.ActivationEnabled || calls != 2 {
+		t.Fatalf("entry edit reused stale snapshot: result=%#v calls=%d", third.Result, calls)
 	}
 }
 
-func TestHomeRuntimeBoundsConstrainProjectLookup(t *testing.T) {
+func TestCachePolicyOwnsHomeCaptureSeparatelyFromReturnedCaptures(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, projectPath(root), "enabled")
+	home := filepath.Join(root, "home-workbench-context.pkl")
+	writeTestFile(t, home, "enabled")
+	deps := testDependencies(t, nil)
+	deps.Freshness = func(_ context.Context, _ contextapi.EvaluationInput, value contextapi.EvaluatedDeclaration) error {
+		if value.Kind == contextapi.DeclarationKindHome && value.Home.Limits.Defaults.Selection.Role != "home-role" {
+			return errors.New("home capture was mutated")
+		}
+		return nil
+	}
+	loaded := loadTest(t, root, home, deps)
+	if loaded.CachePolicy == nil || len(loaded.Captures) < 2 {
+		t.Fatalf("present-home policy/captures = policy=%#v captures=%d", loaded.CachePolicy, len(loaded.Captures))
+	}
+	loaded.Captures[0].Declaration.Home.Limits.Defaults.Selection.Role = "caller-mutated"
+	if err := loaded.CachePolicy.Validate(context.Background()); err != nil {
+		t.Fatalf("cache policy retained caller-owned capture: %v", err)
+	}
+}
+
+func TestResolveClonesCanonicalValuesAndBlocksAncestorFallback(t *testing.T) {
 	root := t.TempDir()
 	child := filepath.Join(root, "child")
-	if err := os.MkdirAll(child, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	project := `{"schemaVersion":1,"optIn":true,"includeChildren":true}`
-	writeTestFile(t, projectConfig(root), project)
-	writeTestFile(t, projectConfig(child), project)
-	home := filepath.Join(t.TempDir(), "context.json")
-	writeTestFile(t, home, fmt.Sprintf(`{"schemaVersion":1,"scopes":[{"root":%q,"optIn":true,"includeChildren":true}],"runtime":{"maxActivationConfigFiles":1}}`, root))
-
-	loaded := loadTest(t, child, home)
-	if loaded.Result.State != contextapi.ActivationInvalid || !reasonSummaryContains(loaded.Result, "count exceeded") {
-		t.Fatalf("runtime project-file bound result = %#v", loaded.Result)
-	}
-}
-
-func TestResolveDoesNotAliasInputMutableProviderFields(t *testing.T) {
-	root := t.TempDir()
-	provider := contextapi.ProviderConfig{
-		ID:           "external",
-		Kind:         contextapi.ProviderKindExecutable,
-		Executable:   "/not-started",
-		Arguments:    []string{"--safe"},
-		Settings:     []byte(`{"mode":"safe"}`),
-		Capabilities: []contextapi.ProviderCapability{contextapi.ProviderCapabilityContribute},
-	}
-	input := contextapi.ActivationInput{
-		WorkingDirectory: root,
-		Now:              testNow,
-		Config: contextapi.ActivationSnapshot{
-			SchemaVersion: 1,
-			ConfigDigest:  "sha256:input",
-			Projects: []contextapi.ProjectSnapshot{{
-				SourcePath: projectConfig(root),
-				Scope: contextapi.ScopeIdentity{
-					ID:            "scope:input",
-					Authority:     contextapi.ScopeAuthorityProject,
-					CanonicalRoot: root,
-					ConfigDigest:  "sha256:project",
-				},
-				Config: contextapi.ProjectFile{SchemaVersion: 1, OptIn: true, IncludeChildren: true, Providers: []contextapi.ProviderConfig{provider}},
-			}},
-		},
-	}
+	working := filepath.Join(child, "nested")
+	project := contextapi.ProjectSnapshot{SourcePath: projectPath(child), Scope: makeScopeIdentity(contextapi.ScopeAuthorityProject, child, "sha256:child"), Config: contextapi.ProjectDeclaration{Enabled: true, Scope: contextapi.DeclarationScopeDirectory, Contributors: map[contextapi.ContributorName]contextapi.Contributor{"named": {Enabled: true, Kind: contextapi.ContributorKindAiContext}}}}
+	input := contextapi.ActivationInput{WorkingDirectory: working, Now: testNow, Config: contextapi.ActivationSnapshot{ConfigDigest: "sha256:effective", Projects: []contextapi.ProjectSnapshot{project}}}
 	result := Resolve(input)
-	if result.State != contextapi.ActivationEnabled {
-		t.Fatalf("state = %q, reasons = %#v", result.State, result.Reasons)
+	if result.State != contextapi.ActivationInactive || !reasonSummaryContains(result, "does not cover") {
+		t.Fatalf("directory boundary result = %#v", result)
 	}
-	result.Effective.Providers[0].Arguments[0] = "--changed"
-	result.Effective.Providers[0].Settings[0] = 'X'
+	project.Config.Scope = contextapi.DeclarationScopeSubtree
+	input.Config.Projects[0] = project
+	result = Resolve(input)
+	if result.State != contextapi.ActivationEnabled || result.Effective.Providers[0].ID != "named" {
+		t.Fatalf("canonical resolve result = %#v", result)
+	}
 	result.Effective.Providers[0].Capabilities[0] = contextapi.ProviderCapabilityProfile
-	if provider.Arguments[0] != "--safe" || provider.Settings[0] != '{' || provider.Capabilities[0] != contextapi.ProviderCapabilityContribute {
-		t.Fatal("result mutation changed local provider input")
-	}
-	input.Config.Projects[0].Config.Providers[0].Arguments[0] = "--input-changed"
-	if result.Effective.Providers[0].Arguments[0] != "--changed" {
-		t.Fatal("input mutation changed already-resolved result")
+	if project.Config.Contributors["named"].Kind != contextapi.ContributorKindAiContext {
+		t.Fatal("resolved provider mutation changed input")
 	}
 }
 
-func BenchmarkResolveInactive(b *testing.B) {
-	input := contextapi.ActivationInput{
-		WorkingDirectory: "/tmp/workbench-context-benchmark",
-		Now:              testNow,
-		Config:           contextapi.ActivationSnapshot{SchemaVersion: 1, ConfigDigest: "sha256:empty"},
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = Resolve(input)
+func TestResolveClampsDeliveryToRuntimeCeilings(t *testing.T) {
+	root := t.TempDir()
+	project := contextapi.ProjectSnapshot{SourcePath: projectPath(root), Scope: makeScopeIdentity(contextapi.ScopeAuthorityProject, root, "sha256:project"), Config: contextapi.ProjectDeclaration{Enabled: true, Scope: contextapi.DeclarationScopeSubtree, Contributors: map[contextapi.ContributorName]contextapi.Contributor{"named": {Enabled: true, Kind: contextapi.ContributorKindAiContext}}}}
+	input := contextapi.ActivationInput{WorkingDirectory: root, Now: testNow, Config: contextapi.ActivationSnapshot{ConfigDigest: "sha256:effective", Projects: []contextapi.ProjectSnapshot{project}, Home: contextapi.HomeSnapshot{Runtime: contextapi.RuntimeLimits{MaxOutstandingOffers: 2, MaxReceipts: 3}, Delivery: contextapi.EngineLimits{MaxLiveOffers: 10, MaxReceipts: 20}}}}
+	result := Resolve(input)
+	if result.State != contextapi.ActivationEnabled || result.Effective.Delivery.MaxLiveOffers != 2 || result.Effective.Delivery.MaxReceipts != 3 {
+		t.Fatalf("delivery did not honor runtime ceilings: %#v", result)
 	}
 }
 
-func BenchmarkLoadInactive(b *testing.B) {
-	root := b.TempDir()
-	options := LoadOptions{WorkingDirectory: root, Now: testNow}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := Load(options); err != nil {
-			b.Fatal(err)
+func TestResolveConflictingHomeRootsPrecedeDisabledState(t *testing.T) {
+	root := t.TempDir()
+	selection := func(enabled bool) contextapi.HomeDirectorySnapshot {
+		return contextapi.HomeDirectorySnapshot{
+			Scope: makeScopeIdentity(contextapi.ScopeAuthorityHome, root, "sha256:home"),
+			Config: contextapi.HomeDirectorySelection{
+				Root: root, Enabled: enabled, Scope: contextapi.DeclarationScopeSubtree,
+				Contributors: map[contextapi.ContributorName]contextapi.Contributor{"home": {Enabled: true, Kind: contextapi.ContributorKindAiContext}},
+			},
 		}
+	}
+	input := contextapi.ActivationInput{WorkingDirectory: root, Now: testNow, Config: contextapi.ActivationSnapshot{Home: contextapi.HomeSnapshot{Scopes: []contextapi.HomeDirectorySnapshot{selection(false), selection(true)}}}}
+	result := Resolve(input)
+	if result.State != contextapi.ActivationConflict || !reasonSummaryContains(result, "home declarations conflict") {
+		t.Fatalf("duplicate home roots were shadowed by disabled state: %#v", result)
 	}
 }

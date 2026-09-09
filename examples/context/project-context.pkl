@@ -1,0 +1,15 @@
+amends "workbench:context"
+
+contributors {
+  ["example-contributor"] = new Executable {
+    executable = "./provider.sh"
+    capabilities { "contribute" }
+    limits {
+      deadlineMs = 500
+      maxResponseBytes = 262144
+      maxFacts = 32
+      maxContributions = 64
+      maxBodyBytes = 262144
+    }
+  }
+}

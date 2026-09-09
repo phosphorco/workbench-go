@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -47,16 +46,12 @@ func newTransportTestRuntime(t *testing.T, idleTTLMs int) *Runtime {
 	t.Helper()
 	root := t.TempDir()
 	paths := DefaultPaths(filepath.Join(root, "runtime"))
-	if idleTTLMs > 0 {
-		paths.HomeConfigPath = filepath.Join(root, "home.json")
-		config := []byte(`{"schemaVersion":1,"runtime":{"idleTTLMs":` + strconv.Itoa(idleTTLMs) + `}}`)
-		if err := os.WriteFile(paths.HomeConfigPath, config, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	runtime, err := NewRuntime(RuntimeOptions{Paths: paths})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if idleTTLMs > 0 {
+		runtime.idleTTL = time.Duration(idleTTLMs) * time.Millisecond
 	}
 	t.Cleanup(func() { _ = runtime.Close() })
 	return runtime

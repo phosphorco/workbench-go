@@ -96,7 +96,7 @@ func TestContextSetupIsIdempotentAndPreservesUnrelatedSettings(t *testing.T) {
 		claudeSetting: claudeSettings,
 		codexHome:     codexHome,
 		codexConfig:   codexConfig,
-		homeConfig:    filepath.Join(directory, "workbench", "context.json"),
+		homeConfig:    filepath.Join(directory, "workbench", "workbench-context.pkl"),
 		runtimeDir:    filepath.Join(directory, "runtime"),
 		cacheDir:      filepath.Join(directory, "cache"),
 	}
@@ -165,7 +165,7 @@ func TestContextSetupJSONIncludesCodexTrustGuidance(t *testing.T) {
 		harness:    "codex",
 		executable: executable,
 		codexHome:  filepath.Join(directory, "codex"),
-		homeConfig: filepath.Join(directory, "home.json"),
+		homeConfig: filepath.Join(directory, "workbench-context.pkl"),
 		runtimeDir: filepath.Join(directory, "runtime"),
 		cacheDir:   filepath.Join(directory, "cache"),
 		json:       true,
@@ -192,7 +192,7 @@ func TestContextSetupRejectsMalformedSettingsBeforeMutation(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(`{"hooks":"not-an-object"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := runContextSetup(context.Background(), contextOptions{harness: "claude", executable: executable, claudeSetting: settings, homeConfig: filepath.Join(directory, "home.json"), runtimeDir: filepath.Join(directory, "run"), cacheDir: filepath.Join(directory, "cache")}, io.Discard, io.Discard)
+	err := runContextSetup(context.Background(), contextOptions{harness: "claude", executable: executable, claudeSetting: settings, homeConfig: filepath.Join(directory, "workbench-context.pkl"), runtimeDir: filepath.Join(directory, "run"), cacheDir: filepath.Join(directory, "cache")}, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "hooks object") {
 		t.Fatalf("malformed settings error = %v", err)
 	}
@@ -202,13 +202,19 @@ func TestContextSetupRejectsMalformedSettingsBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestContextInitPreservesProjectFieldsAndOptIns(t *testing.T) {
+func TestContextInitPreservesExistingPklDeclaration(t *testing.T) {
 	root := t.TempDir()
-	project := filepath.Join(root, ".workbench", "context.json")
-	if err := os.MkdirAll(filepath.Dir(project), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(project, []byte(`{"schemaVersion":1,"optIn":false,"includeChildren":false,"providers":[],"unknown":"keep"}`), 0o640); err != nil {
+	project := filepath.Join(root, "workbench-context.pkl")
+	source := []byte(`amends "workbench:context"
+
+enabled = false
+scope = "directory"
+
+contributors {
+  ["named-guidance"] = new AiContext {}
+}
+`)
+	if err := os.WriteFile(project, source, 0o640); err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
@@ -216,26 +222,26 @@ func TestContextInitPreservesProjectFieldsAndOptIns(t *testing.T) {
 		t.Fatal(err)
 	}
 	contents, _ := os.ReadFile(project)
-	if !strings.Contains(string(contents), `"optIn": true`) || !strings.Contains(string(contents), `"providers": []`) || !strings.Contains(string(contents), `"unknown": "keep"`) {
-		t.Fatalf("init lost fields: %s", contents)
+	if !bytes.Equal(contents, source) {
+		t.Fatalf("init rewrote authored Pkl: %s", contents)
 	}
 	mode, _ := os.Stat(project)
 	if mode.Mode().Perm() != 0o640 {
 		t.Fatalf("project mode = %o", mode.Mode().Perm())
 	}
-	if !strings.Contains(output.String(), "Opted in project scope") {
+	if !strings.Contains(output.String(), "Preserved project declaration") {
 		t.Fatalf("init report = %q", output.String())
 	}
 }
 
 func TestContextStatusInactiveIsLocalAndExplainable(t *testing.T) {
 	directory := t.TempDir()
-	options := contextOptions{homeConfig: filepath.Join(directory, "missing-home.json"), runtimeDir: filepath.Join(directory, "runtime"), cacheDir: filepath.Join(directory, "cache")}
+	options := contextOptions{homeConfig: filepath.Join(directory, "missing-home.pkl"), runtimeDir: filepath.Join(directory, "runtime"), cacheDir: filepath.Join(directory, "cache")}
 	var output bytes.Buffer
 	if err := runContextStatus(context.Background(), directory, options, &output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "Activation: inactive") || !strings.Contains(output.String(), "no applicable project or home opt-in") {
+	if !strings.Contains(output.String(), "Activation: inactive") || !strings.Contains(output.String(), "no applicable project or home declaration") {
 		t.Fatalf("inactive status = %q", output.String())
 	}
 	if _, err := os.Stat(options.runtimeDir); !errors.Is(err, os.ErrNotExist) {
@@ -245,11 +251,8 @@ func TestContextStatusInactiveIsLocalAndExplainable(t *testing.T) {
 
 func TestContextStatusShowsWinningOptInScopeLocally(t *testing.T) {
 	directory := t.TempDir()
-	if err := runContextInit(directory, contextOptions{}, io.Discard); err != nil {
-		t.Fatal(err)
-	}
 	var output bytes.Buffer
-	if err := runContextStatus(context.Background(), directory, contextOptions{homeConfig: filepath.Join(directory, "missing-home.json"), runtimeDir: filepath.Join(directory, "runtime"), cacheDir: filepath.Join(directory, "cache")}, &output); err != nil {
+	if err := writeContextStatus(&output, contextStatusReport{WorkingDirectory: directory, Activation: contextapi.ActivationResult{State: contextapi.ActivationEnabled, Scope: contextapi.ScopeIdentity{CanonicalRoot: directory, Authority: contextapi.ScopeAuthorityProject}}, Runtime: contextRuntimeStatusReport{State: "not-checked"}}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "Activation: enabled") || !strings.Contains(output.String(), "Scope: "+directory) {
@@ -262,9 +265,6 @@ func TestContextStatusShowsWinningOptInScopeLocally(t *testing.T) {
 
 func TestContextStatusEnabledReportsExistingRuntimeFactsWithoutStarting(t *testing.T) {
 	directory := t.TempDir()
-	if err := runContextInit(directory, contextOptions{}, io.Discard); err != nil {
-		t.Fatal(err)
-	}
 	paths := contextdaemon.DefaultPaths(filepath.Join(directory, "runtime"))
 	report := contextStatusReport{
 		WorkingDirectory: directory,
@@ -296,9 +296,6 @@ func TestContextStatusEnabledReportsExistingRuntimeFactsWithoutStarting(t *testi
 
 func TestContextStatusEnabledMissingRuntimeDoesNotCreateRuntimePaths(t *testing.T) {
 	directory := t.TempDir()
-	if err := runContextInit(directory, contextOptions{}, io.Discard); err != nil {
-		t.Fatal(err)
-	}
 	runtimeDir := filepath.Join(directory, "runtime")
 	report := readExistingRuntimeStatus(context.Background(), contextdaemon.DefaultPaths(runtimeDir), contextOptions{}, directory)
 	if report.State != "not-running" || report.Status != nil {
@@ -310,7 +307,7 @@ func TestContextStatusEnabledMissingRuntimeDoesNotCreateRuntimePaths(t *testing.
 }
 
 func TestContextHookCommandQuotesAllExplicitPaths(t *testing.T) {
-	paths := contextdaemon.Paths{HomeConfigPath: "/tmp/home with space/context.json", RuntimeDir: "/tmp/run with space", SocketPath: "/tmp/run with space/context.sock", LockPath: "/tmp/run with space/start.lock", ServerLockPath: "/tmp/run with space/server.lock", CacheDir: "/tmp/cache with space"}
+	paths := contextdaemon.Paths{HomeConfigPath: "/tmp/home with space/workbench-context.pkl", RuntimeDir: "/tmp/run with space", SocketPath: "/tmp/run with space/context.sock", LockPath: "/tmp/run with space/start.lock", ServerLockPath: "/tmp/run with space/server.lock", CacheDir: "/tmp/cache with space"}
 	command := contextHookCommand("/tmp/bin/workbench with space", "codex", paths)
 	for _, value := range []string{"/tmp/bin/workbench with space", paths.HomeConfigPath, paths.RuntimeDir, paths.SocketPath, paths.LockPath, paths.ServerLockPath, paths.CacheDir} {
 		if !strings.Contains(command, shellQuote(value)) {
@@ -352,6 +349,36 @@ func TestContextTraceQueryDefersByteBoundsToRuntime(t *testing.T) {
 	}
 }
 
+func TestContextPathsRejectExplicitLegacyJSONHome(t *testing.T) {
+	_, err := contextPaths(contextOptions{homeConfig: "/tmp/workbench/context.json"})
+	if err == nil || !strings.Contains(err.Error(), "obsolete JSON") || !strings.Contains(err.Error(), "workbench-context.pkl") {
+		t.Fatalf("legacy home path error = %v", err)
+	}
+}
+
+func TestContextInitPublicationDoesNotClobberExistingSource(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "workbench-context.pkl")
+	existing := []byte("authored-by-another-process\n")
+	if err := os.WriteFile(path, existing, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	published, err := writeAtomicIfAbsent(path, []byte("generated\n"), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published {
+		t.Fatal("publication reported a clobber")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, existing) {
+		t.Fatalf("existing declaration changed: %q", got)
+	}
+}
+
 func TestContextSetupDryRunDoesNotCreateFiles(t *testing.T) {
 	directory := t.TempDir()
 	executable := filepath.Join(directory, "workbench")
@@ -360,7 +387,7 @@ func TestContextSetupDryRunDoesNotCreateFiles(t *testing.T) {
 	}
 	claude := filepath.Join(directory, "claude", "settings.json")
 	codex := filepath.Join(directory, "codex")
-	if err := runContextSetup(context.Background(), contextOptions{harness: "both", executable: executable, claudeSetting: claude, codexHome: codex, homeConfig: filepath.Join(directory, "home.json"), runtimeDir: filepath.Join(directory, "run"), cacheDir: filepath.Join(directory, "cache"), dryRun: true}, io.Discard, io.Discard); err != nil {
+	if err := runContextSetup(context.Background(), contextOptions{harness: "both", executable: executable, claudeSetting: claude, codexHome: codex, homeConfig: filepath.Join(directory, "workbench-context.pkl"), runtimeDir: filepath.Join(directory, "run"), cacheDir: filepath.Join(directory, "cache"), dryRun: true}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{claude, codex, filepath.Join(directory, "run"), filepath.Join(directory, "cache")} {
@@ -373,7 +400,7 @@ func TestContextSetupDryRunDoesNotCreateFiles(t *testing.T) {
 func TestContextJSONStatusIsMachineReadable(t *testing.T) {
 	directory := t.TempDir()
 	var output bytes.Buffer
-	if err := runContextStatus(context.Background(), directory, contextOptions{json: true, homeConfig: filepath.Join(directory, "home.json"), runtimeDir: filepath.Join(directory, "run"), cacheDir: filepath.Join(directory, "cache")}, &output); err != nil {
+	if err := runContextStatus(context.Background(), directory, contextOptions{json: true, homeConfig: filepath.Join(directory, "missing-home.pkl"), runtimeDir: filepath.Join(directory, "run"), cacheDir: filepath.Join(directory, "cache")}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var report contextStatusReport

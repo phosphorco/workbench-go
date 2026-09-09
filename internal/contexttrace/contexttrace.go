@@ -5,6 +5,7 @@ package contexttrace
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -21,13 +22,11 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/phosphorco/workbench-go/internal/contextcache"
 )
 
 const (
-	// DefaultDiskCap is the default total byte budget for this cache. Decimal
-	// units are intentional: the ADR defines GB as 1,000,000,000 bytes.
-	DefaultDiskCap int64 = 5_000_000_000
-
 	// MaxContributionSampleBytes is a product bound, not an option. A caller
 	// cannot configure the trace to retain a complete large contribution.
 	MaxContributionSampleBytes = 10_000
@@ -48,10 +47,10 @@ const (
 
 	stateFileSize   = 32
 	blockHeaderSize = 64
-	minimumDiskCap  = stateFileSize + blockHeaderSize + 64
 	blockNamePrefix = "block-"
 	blockNameSuffix = ".gob"
 	stateName       = "state.bin"
+	traceDirName    = "trace"
 )
 
 var (
@@ -257,7 +256,6 @@ type Cursor struct {
 // documented defaults. A lower disk cap retains less history; it never raises
 // the sample or query bounds.
 type Options struct {
-	DiskCap             int64
 	MaxBlockBytes       int
 	MaxBlockRecords     int
 	MaxBlocks           int
@@ -274,9 +272,6 @@ type Options struct {
 }
 
 func defaultOptions(options Options) Options {
-	if options.DiskCap == 0 {
-		options.DiskCap = DefaultDiskCap
-	}
 	if options.MaxBlockBytes == 0 {
 		options.MaxBlockBytes = defaultBlockBytes
 	}
@@ -320,9 +315,6 @@ func defaultOptions(options Options) Options {
 }
 
 func (options Options) validate() error {
-	if options.DiskCap < minimumDiskCap {
-		return fmt.Errorf("%w: disk cap %d is below %d", ErrInvalidOptions, options.DiskCap, minimumDiskCap)
-	}
 	if options.MaxBlockBytes < blockHeaderSize+64 {
 		return fmt.Errorf("%w: block byte bound is too small", ErrInvalidOptions)
 	}
@@ -412,9 +404,10 @@ type Stats struct {
 type Store struct {
 	mu sync.Mutex
 
-	directory string
-	options   Options
-	closed    bool
+	options  Options
+	capacity *contextcache.Pool
+	policy   contextcache.Policy
+	closed   bool
 
 	generation     uint64
 	nextRecordID   uint64
@@ -457,37 +450,96 @@ type preparedRecord struct {
 	Sample         Sample
 }
 
-// Open creates or opens a private disposable trace directory. Existing
-// malformed blocks are retained for inspection as gaps instead of making the
-// runtime fail to start. Open does not acquire an OS-level writer lock: the
-// caller must arrange that at most one Store writer owns a directory at a
-// time; Store's mutex only coordinates callers in this process.
-func Open(directory string, options Options) (*Store, error) {
-	if strings.TrimSpace(directory) == "" {
-		return nil, fmt.Errorf("%w: cache directory is empty", ErrInvalidOptions)
+// Open creates or opens the private disposable trace namespace derived from
+// pool.Root()/trace. Existing malformed blocks are retained for inspection as
+// gaps instead of making the runtime fail to start. Pool is the sole
+// cross-process capacity and writer lease; all startup cleanup,
+// reconciliation, trimming, and state writes occur while the Store mutex is
+// logically held and that lease is active.
+func Open(ctx context.Context, options Options, pool *contextcache.Pool, policy contextcache.Policy) (*Store, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if pool == nil {
+		return nil, fmt.Errorf("%w: shared context capacity pool is required", ErrInvalidOptions)
+	}
+	if policy.Validate == nil || policy.CapBytes < 0 {
+		return nil, fmt.Errorf("%w: shared context capacity policy is invalid", ErrInvalidOptions)
 	}
 	options = defaultOptions(options)
 	if err := options.validate(); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return nil, fmt.Errorf("open context trace directory: %w", err)
-	}
-	if err := os.Chmod(directory, 0o700); err != nil {
-		return nil, fmt.Errorf("private context trace directory: %w", err)
-	}
 
 	store := &Store{
-		directory:         filepath.Clean(directory),
 		options:           options,
+		capacity:          pool,
+		policy:            policy,
 		nextRecordID:      1,
 		nextBlockSequence: 1,
 		generation:        newGeneration(0),
 	}
-	if err := store.load(); err != nil {
+	store.mu.Lock()
+	lease, err := store.beginMutationLocked(ctx)
+	if err != nil {
+		store.mu.Unlock()
+		return nil, err
+	}
+	loadErr := func() error {
+		info, statErr := lease.Root().Lstat(traceDirName)
+		if errors.Is(statErr, os.ErrNotExist) {
+			if err := lease.EnsureFits(contextcache.Admission{MetadataEntries: 1}); err != nil {
+				return store.mapCapacityError(err)
+			}
+			if err := lease.Root().Mkdir(traceDirName, 0o700); err != nil {
+				return fmt.Errorf("open context trace directory: %w", err)
+			}
+			info, statErr = lease.Root().Lstat(traceDirName)
+		}
+		if statErr != nil {
+			return fmt.Errorf("stat context trace directory: %w", statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("%w: trace directory is not a directory", contextcache.ErrSymlink)
+		}
+		if err := lease.Root().Chmod(traceDirName, 0o700); err != nil {
+			return fmt.Errorf("private context trace directory: %w", err)
+		}
+		return store.loadLocked(lease)
+	}()
+	finishErr := lease.Finish()
+	store.mu.Unlock()
+	if err := errors.Join(loadErr, finishErr); err != nil {
 		return nil, err
 	}
 	return store, nil
+}
+
+// UpdatePolicy validates a newly evaluated home policy while holding the
+// Store mutex and shared pool lease, then installs it for subsequent writes.
+// Validation is deliberately performed by contextcache.Policy.Validate; the
+// Store never reimplements declaration freshness. A reduced policy may report
+// ErrCapacity for already-retained bytes; that still is a valid policy update
+// and closes future admissions until trace evicts its own blocks.
+func (store *Store) UpdatePolicy(ctx context.Context, policy contextcache.Policy) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return ErrClosed
+	}
+	if policy.Validate == nil || policy.CapBytes < 0 {
+		return fmt.Errorf("%w: shared context capacity policy is invalid", ErrInvalidOptions)
+	}
+	lease, err := store.capacity.Begin(ctx, policy)
+	if err != nil {
+		return err
+	}
+	finishErr := lease.Finish()
+	if finishErr != nil && !errors.Is(finishErr, contextcache.ErrCapacity) {
+		return finishErr
+	}
+	store.policy = policy
+	return nil
 }
 
 // Generation returns the current disposable cache generation. It remains
@@ -505,7 +557,7 @@ func (store *Store) Stats() Stats {
 	defer store.mu.Unlock()
 	return Stats{
 		Generation:     store.generation,
-		DiskCap:        store.options.DiskCap,
+		DiskCap:        store.policy.CapBytes,
 		DiskBytes:      store.usage,
 		BlockCount:     len(store.blocks),
 		PendingRecords: len(store.pending),
@@ -595,7 +647,7 @@ func (store *Store) Flush() error {
 // Query returns one bounded page. It flushes the pending batch first so an
 // accepted record is inspectable immediately. Corruption and rotation are
 // represented in Gaps and do not become a successful empty answer.
-func (store *Store) Query(query Query) (QueryResult, error) {
+func (store *Store) Query(ctx context.Context, query Query) (result QueryResult, returnErr error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.closed {
@@ -605,8 +657,15 @@ func (store *Store) Query(query Query) (QueryResult, error) {
 		return QueryResult{}, err
 	}
 	query = normalizeQuery(query, store.options)
-	flushErr := store.flushLocked()
-	result := QueryResult{Generation: store.generation, NextAfter: query.After, NextCursor: query.Cursor}
+	lease, err := store.beginMutationLocked(ctx)
+	if err != nil {
+		return QueryResult{}, store.mapCapacityError(err)
+	}
+	defer func() {
+		returnErr = errors.Join(returnErr, store.mapCapacityError(lease.Finish()))
+	}()
+	flushErr := store.flushWithLeaseLocked(lease, nil)
+	result = QueryResult{Generation: store.generation, NextAfter: query.After, NextCursor: query.Cursor}
 	if query.Generation != 0 && query.Generation != store.generation {
 		result.Gaps = append(result.Gaps, Gap{Kind: GapUnreadable, Generation: query.Generation, Detail: "generation is no longer retained"})
 		return result, nil
@@ -663,7 +722,7 @@ func (store *Store) Query(query Query) (QueryResult, error) {
 		}
 		scannedBytes += charge
 
-		block, header, err := readBlock(file.path, store.options)
+		block, header, err := readBlock(lease.Root(), file.path, store.options)
 		if err != nil {
 			gap := Gap{Kind: GapCorrupt, Generation: store.generation, BlockSequence: file.sequence, Detail: boundedDetail(err)}
 			if header.Generation != 0 {
@@ -834,56 +893,70 @@ func (budget *resultBudget) addGap(result *QueryResult, gap Gap) {
 
 // InspectContribution is a named bounded inspection surface for all events
 // associated with one contribution.
-func (store *Store) InspectContribution(id uint64, query Query) (QueryResult, error) {
+func (store *Store) InspectContribution(ctx context.Context, id uint64, query Query) (QueryResult, error) {
 	query.ContributionID = id
-	return store.Query(query)
+	return store.Query(ctx, query)
 }
 
 // InspectTurn is a named bounded inspection surface for one observed turn.
-func (store *Store) InspectTurn(turn string, query Query) (QueryResult, error) {
+func (store *Store) InspectTurn(ctx context.Context, turn string, query Query) (QueryResult, error) {
 	query.Turn = turn
-	return store.Query(query)
+	return store.Query(ctx, query)
 }
 
 // InspectProfile is a named bounded inspection surface for one profile value.
-func (store *Store) InspectProfile(profile string, query Query) (QueryResult, error) {
+func (store *Store) InspectProfile(ctx context.Context, profile string, query Query) (QueryResult, error) {
 	query.Profile = profile
-	return store.Query(query)
+	return store.Query(ctx, query)
 }
 
 // Clear removes only trace files and starts a new numeric generation. The
 // cache directory itself remains available for future records.
-func (store *Store) Clear() (ClearResult, error) {
+func (store *Store) Clear(ctx context.Context) (ClearResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.closed {
 		return ClearResult{}, ErrClosed
 	}
-	removed := uint64(len(store.pending))
-	for _, file := range store.blocks {
-		if header, _, err := readHeader(file.path); err == nil && header.Generation == store.generation {
-			removed += uint64(header.RecordCount)
-		}
-		if err := os.Remove(file.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return ClearResult{}, fmt.Errorf("clear context trace block: %w", err)
-		}
-		store.usage -= file.size
+	lease, err := store.beginMutationLocked(ctx)
+	if err != nil {
+		return ClearResult{}, store.mapCapacityError(err)
 	}
+	removed := uint64(len(store.pending))
 	previous := store.generation
-	store.generation = newGeneration(previous)
-	store.nextRecordID = 1
-	store.nextBlockSequence = 1
-	store.rotatedThrough = 0
-	store.blocks = nil
-	store.pending = nil
-	store.pendingBytes = 0
-	store.openGaps = nil
-	store.dropGaps = nil
-	store.stateValid = false
-	if err := store.writeStateLocked(); err != nil {
+	operationErr := func() error {
+		for _, file := range store.blocks {
+			if header, _, err := readHeader(lease.Root(), file.path); err == nil && header.Generation == store.generation {
+				removed += uint64(header.RecordCount)
+			}
+			if err := lease.Root().Remove(file.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("clear context trace block: %w", err)
+			}
+			store.usage -= file.size
+		}
+		if _, err := lease.Refresh(); err != nil {
+			return err
+		}
+		store.generation = newGeneration(previous)
+		store.nextRecordID = 1
+		store.nextBlockSequence = 1
+		store.rotatedThrough = 0
+		store.blocks = nil
+		store.pending = nil
+		store.pendingBytes = 0
+		store.openGaps = nil
+		store.dropGaps = nil
+		store.stateValid = false
+		if err := store.writeStateLocked(lease); err != nil {
+			return err
+		}
+		store.stateValid = true
+		return nil
+	}()
+	finishErr := lease.Finish()
+	if err := errors.Join(operationErr, store.mapCapacityError(finishErr)); err != nil {
 		return ClearResult{PreviousGeneration: previous, Generation: store.generation, RemovedRecords: removed}, err
 	}
-	store.stateValid = true
 	return ClearResult{PreviousGeneration: previous, Generation: store.generation, RemovedRecords: removed}, nil
 }
 
@@ -896,6 +969,16 @@ func (store *Store) Close() error {
 		return nil
 	}
 	err := store.flushLocked()
+	if store.stateDirty {
+		lease, beginErr := store.beginMutationLocked(nil)
+		if beginErr != nil {
+			err = errors.Join(err, store.mapCapacityError(beginErr))
+		} else {
+			stateErr := store.writeStateLocked(lease)
+			finishErr := lease.Finish()
+			err = errors.Join(err, stateErr, store.mapCapacityError(finishErr))
+		}
+	}
 	store.closed = true
 	return err
 }
@@ -941,11 +1024,11 @@ func normalizeQuery(query Query, options Options) Query {
 	return query
 }
 
-func (store *Store) load() error {
-	if err := store.cleanupTemps(); err != nil {
+func (store *Store) loadLocked(lease *contextcache.Mutation) error {
+	if err := store.cleanupTemps(lease.Root()); err != nil {
 		return err
 	}
-	stateFound, stateValid, err := store.loadState()
+	stateFound, stateValid, err := store.loadState(lease.Root())
 	if err != nil {
 		return err
 	}
@@ -954,7 +1037,7 @@ func (store *Store) load() error {
 		store.openGaps = append(store.openGaps, Gap{Kind: GapCorrupt, Generation: store.generation, Detail: "state: cache state could not be decoded"})
 	}
 
-	directory, err := os.Open(store.directory)
+	directory, err := lease.Root().Open(traceDirName)
 	if err != nil {
 		return fmt.Errorf("scan context trace blocks: %w", err)
 	}
@@ -971,8 +1054,8 @@ func (store *Store) load() error {
 			if !ok {
 				continue
 			}
-			path := filepath.Join(store.directory, name)
-			info, infoErr := os.Lstat(path)
+			path := filepath.Join(traceDirName, name)
+			info, infoErr := lease.Root().Lstat(path)
 			if infoErr != nil {
 				store.openGaps = appendBoundedGap(store.openGaps, Gap{Kind: GapUnreadable, Generation: store.generation, BlockSequence: sequence, Detail: boundedDetail(infoErr)})
 				continue
@@ -984,7 +1067,7 @@ func (store *Store) load() error {
 			if sequence >= store.nextBlockSequence {
 				store.nextBlockSequence = sequence + 1
 			}
-			header, _, headerErr := readHeader(path)
+			header, _, headerErr := readHeader(lease.Root(), path)
 			if headerErr == nil && !generationKnown {
 				store.generation = header.Generation
 				generationKnown = true
@@ -992,7 +1075,7 @@ func (store *Store) load() error {
 			if headerErr == nil && header.Generation == store.generation && header.LastRecordID >= store.nextRecordID {
 				store.nextRecordID = header.LastRecordID + 1
 			}
-			if err := store.addLoadedBlock(blockFile{sequence: sequence, path: path, size: info.Size()}, header, headerErr); err != nil {
+			if err := store.addLoadedBlock(lease, blockFile{sequence: sequence, path: path, size: info.Size()}, header, headerErr); err != nil {
 				return err
 			}
 		}
@@ -1018,23 +1101,23 @@ func (store *Store) load() error {
 		}
 		return 0
 	})
-	if err := store.reconcileUsage(); err != nil {
+	if err := store.reconcileUsage(lease.Root()); err != nil {
 		return err
 	}
-	if err := store.trimLoadedCache(); err != nil {
+	if err := store.trimLoadedCache(lease); err != nil {
 		return err
 	}
 	if store.stateDirty {
-		if err := store.writeStateLocked(); err != nil {
+		if err := store.writeStateLocked(lease); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (store *Store) loadState() (found, valid bool, err error) {
-	path := filepath.Join(store.directory, stateName)
-	contents, readErr := readBounded(path, stateFileSize)
+func (store *Store) loadState(root *os.Root) (found, valid bool, err error) {
+	path := filepath.Join(traceDirName, stateName)
+	contents, readErr := readBounded(root, path, stateFileSize)
 	if errors.Is(readErr, os.ErrNotExist) {
 		return false, false, nil
 	}
@@ -1051,8 +1134,8 @@ func (store *Store) loadState() (found, valid bool, err error) {
 	return true, true, nil
 }
 
-func (store *Store) cleanupTemps() error {
-	directory, err := os.Open(store.directory)
+func (store *Store) cleanupTemps(root *os.Root) error {
+	directory, err := root.Open(traceDirName)
 	if err != nil {
 		return fmt.Errorf("scan context trace temporary files: %w", err)
 	}
@@ -1068,7 +1151,7 @@ func (store *Store) cleanupTemps() error {
 			if !isOwnedTemporary(name) {
 				continue
 			}
-			if err := os.Remove(filepath.Join(store.directory, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := root.Remove(filepath.Join(traceDirName, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("remove stale context trace temporary %q: %w", name, err)
 			}
 		}
@@ -1085,8 +1168,8 @@ func isOwnedTemporary(name string) bool {
 	return name == stateName+".tmp" || (strings.HasPrefix(name, blockNamePrefix) && strings.HasSuffix(name, blockNameSuffix+".tmp"))
 }
 
-func readBounded(path string, maximum int) ([]byte, error) {
-	file, err := os.Open(path)
+func readBounded(root *os.Root, path string, maximum int) ([]byte, error) {
+	file, err := root.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -1101,8 +1184,8 @@ func readBounded(path string, maximum int) ([]byte, error) {
 	return contents, nil
 }
 
-func (store *Store) reconcileUsage() error {
-	directory, err := os.Open(store.directory)
+func (store *Store) reconcileUsage(root *os.Root) error {
+	directory, err := root.Open(traceDirName)
 	if err != nil {
 		return fmt.Errorf("reconcile context trace disk usage: %w", err)
 	}
@@ -1116,7 +1199,7 @@ func (store *Store) reconcileUsage() error {
 			if entriesSeen > store.options.MaxDirectoryEntries {
 				return fmt.Errorf("context trace directory has more than %d bounded entries", store.options.MaxDirectoryEntries)
 			}
-			info, infoErr := os.Lstat(filepath.Join(store.directory, name))
+			info, infoErr := root.Lstat(filepath.Join(traceDirName, name))
 			if infoErr != nil {
 				return fmt.Errorf("stat context trace auxiliary %q: %w", name, infoErr)
 			}
@@ -1138,9 +1221,16 @@ func (store *Store) reconcileUsage() error {
 	}
 }
 
-func (store *Store) trimLoadedCache() error {
+func (store *Store) trimLoadedCache(lease *contextcache.Mutation) error {
 	trimmed := false
-	for store.usage > store.options.DiskCap && len(store.blocks) > 0 {
+	for {
+		usage, err := lease.Refresh()
+		if err != nil {
+			return err
+		}
+		if usage.Bytes <= store.policy.CapBytes || len(store.blocks) == 0 {
+			break
+		}
 		oldestIndex := 0
 		for index := 1; index < len(store.blocks); index++ {
 			if store.blocks[index].sequence < store.blocks[oldestIndex].sequence {
@@ -1148,15 +1238,19 @@ func (store *Store) trimLoadedCache() error {
 			}
 		}
 		oldest := store.blocks[oldestIndex]
-		store.noteRemovedBlock(oldest)
-		if err := os.Remove(oldest.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		store.noteRemovedBlock(lease.Root(), oldest)
+		if err := lease.Root().Remove(oldest.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("trim context trace cache: %w", err)
 		}
 		store.usage -= oldest.size
 		store.blocks = append(store.blocks[:oldestIndex], store.blocks[oldestIndex+1:]...)
 		trimmed = true
 	}
-	if store.usage > store.options.DiskCap {
+	usage, err := lease.Refresh()
+	if err != nil {
+		return err
+	}
+	if usage.Bytes > store.policy.CapBytes {
 		return ErrDiskCap
 	}
 	if trimmed {
@@ -1165,7 +1259,7 @@ func (store *Store) trimLoadedCache() error {
 	return nil
 }
 
-func (store *Store) addLoadedBlock(file blockFile, header blockHeader, headerErr error) error {
+func (store *Store) addLoadedBlock(lease *contextcache.Mutation, file blockFile, header blockHeader, headerErr error) error {
 	if len(store.blocks) < store.options.MaxBlocks {
 		store.blocks = append(store.blocks, file)
 		return nil
@@ -1179,21 +1273,27 @@ func (store *Store) addLoadedBlock(file blockFile, header blockHeader, headerErr
 	oldest := store.blocks[oldestIndex]
 	if file.sequence <= oldest.sequence {
 		store.noteRemovedBlockHeader(file.sequence, header, headerErr)
-		if err := os.Remove(file.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := lease.Root().Remove(file.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("trim old context trace block: %w", err)
+		}
+		if _, err := lease.Refresh(); err != nil {
+			return err
 		}
 		return nil
 	}
-	store.noteRemovedBlock(oldest)
-	if err := os.Remove(oldest.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	store.noteRemovedBlock(lease.Root(), oldest)
+	if err := lease.Root().Remove(oldest.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("trim old context trace block: %w", err)
+	}
+	if _, err := lease.Refresh(); err != nil {
+		return err
 	}
 	store.blocks[oldestIndex] = file
 	return nil
 }
 
-func (store *Store) noteRemovedBlock(file blockFile) {
-	header, _, err := readHeader(file.path)
+func (store *Store) noteRemovedBlock(root *os.Root, file blockFile) {
+	header, _, err := readHeader(root, file.path)
 	store.noteRemovedBlockHeader(file.sequence, header, err)
 }
 
@@ -1226,24 +1326,45 @@ func (store *Store) flushLocked() error {
 	if len(store.pending) == 0 {
 		return nil
 	}
+	lease, err := store.beginMutationLocked(nil)
+	if err != nil {
+		return store.mapCapacityError(err)
+	}
+	operationErr := store.flushWithLeaseLocked(lease, nil)
+	finishErr := lease.Finish()
+	return errors.Join(operationErr, store.mapCapacityError(finishErr))
+}
+
+func (store *Store) flushWithLeaseLocked(lease *contextcache.Mutation, encoded []byte) error {
+	if len(store.pending) == 0 {
+		return nil
+	}
 	if len(store.pending) > store.options.MaxBlockRecords {
 		return fmt.Errorf("%w: pending record count exceeds block bound", ErrRecordTooLarge)
 	}
-	encoded, err := encodeBlock(store.pending, store.generation, store.nextBlockSequence)
-	if err != nil {
-		return err
+	var err error
+	if len(encoded) == 0 {
+		encoded, err = encodeBlock(store.pending, store.generation, store.nextBlockSequence)
+		if err != nil {
+			return err
+		}
 	}
 	if len(encoded) > store.options.MaxBlockBytes {
 		return fmt.Errorf("%w: pending block is %d bytes, limit is %d", ErrRecordTooLarge, len(encoded), store.options.MaxBlockBytes)
 	}
 	sequence := store.nextBlockSequence
-	if err := store.makeRoomLocked(int64(len(encoded))); err != nil {
+	path := filepath.Join(traceDirName, blockFilename(sequence))
+	temporary := path + ".tmp"
+	if err := lease.Root().Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale context trace block temporary: %w", err)
+	}
+	if _, err := lease.Refresh(); err != nil {
 		return err
 	}
-	path := filepath.Join(store.directory, blockFilename(sequence))
-	temporary := path + ".tmp"
-	_ = os.Remove(temporary)
-	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err := store.makeRoomLocked(lease, int64(len(encoded))); err != nil {
+		return err
+	}
+	file, err := lease.Root().OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create context trace block: %w", err)
 	}
@@ -1255,15 +1376,18 @@ func (store *Store) flushLocked() error {
 		if written != len(encoded) {
 			return io.ErrShortWrite
 		}
+		if err := file.Sync(); err != nil {
+			return err
+		}
 		return file.Close()
 	}()
 	if writeErr != nil {
 		_ = file.Close()
-		_ = os.Remove(temporary)
+		_ = lease.Root().Remove(temporary)
 		return fmt.Errorf("write context trace block: %w", writeErr)
 	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
+	if err := lease.Root().Rename(temporary, path); err != nil {
+		_ = lease.Root().Remove(temporary)
 		return fmt.Errorf("install context trace block: %w", err)
 	}
 	store.blocks = append(store.blocks, blockFile{sequence: sequence, path: path, size: int64(len(encoded))})
@@ -1274,16 +1398,25 @@ func (store *Store) flushLocked() error {
 	return nil
 }
 
-func (store *Store) makeRoomLocked(additional int64) error {
+func (store *Store) makeRoomLocked(lease *contextcache.Mutation, additional int64) error {
 	if additional < 0 {
 		return ErrDiskCap
 	}
-	usage, err := store.diskUsageLocked()
-	if err != nil {
-		return err
-	}
 	rotated := false
-	for (usage > store.options.DiskCap-additional || len(store.blocks) >= store.options.MaxBlocks) && len(store.blocks) > 0 {
+	for {
+		admissionErr := lease.EnsureFits(contextcache.Admission{
+			TempBytes:   additional,
+			TempEntries: 1,
+		})
+		if len(store.blocks) < store.options.MaxBlocks && admissionErr == nil {
+			break
+		}
+		if len(store.blocks) == 0 {
+			if admissionErr != nil {
+				return store.mapCapacityError(admissionErr)
+			}
+			return ErrDiskCap
+		}
 		oldestIndex := 0
 		for index := 1; index < len(store.blocks); index++ {
 			if store.blocks[index].sequence < store.blocks[oldestIndex].sequence {
@@ -1291,67 +1424,40 @@ func (store *Store) makeRoomLocked(additional int64) error {
 			}
 		}
 		oldest := store.blocks[oldestIndex]
-		store.noteRemovedBlock(oldest)
+		store.noteRemovedBlock(lease.Root(), oldest)
 		rotated = true
-		if removeErr := os.Remove(oldest.path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		if removeErr := lease.Root().Remove(oldest.path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return fmt.Errorf("rotate context trace block: %w", removeErr)
 		}
-		usage -= oldest.size
 		store.usage -= oldest.size
 		store.blocks = append(store.blocks[:oldestIndex], store.blocks[oldestIndex+1:]...)
+		if _, err := lease.Refresh(); err != nil {
+			return err
+		}
 	}
 	if rotated {
-		oldStateSize, statErr := store.stateSizeLocked()
-		if statErr != nil {
-			return statErr
+		// Rotation changes the retained range, so the state replacement and the
+		// incoming block must fit together while both temporary files exist.
+		state := encodeState(stateDisk{Generation: store.generation, RotatedThrough: store.rotatedThrough})
+		if err := lease.EnsureFits(contextcache.Admission{
+			TempBytes:   int64(len(state)) + additional,
+			TempEntries: 2,
+		}); err != nil {
+			return store.mapCapacityError(err)
 		}
-		// writeStateLocked prepares a replacement alongside the current state;
-		// reserve that bounded auxiliary before the block itself is installed.
-		if store.usage > store.options.DiskCap-stateFileSize {
-			return ErrDiskCap
-		}
-		if store.usage > store.options.DiskCap-additional {
-			return ErrDiskCap
-		}
-		finalUsage := store.usage + additional
-		// The state file is part of the final total as well. When it did not
-		// exist, the incoming block must fit alongside the new 32-byte state;
-		// when replacing a malformed oversized state, only the size delta is
-		// charged.
-		if oldStateSize < stateFileSize {
-			stateDelta := stateFileSize - oldStateSize
-			if finalUsage > store.options.DiskCap-stateDelta {
-				return ErrDiskCap
-			}
-		} else if oldStateSize > stateFileSize {
-			stateDelta := oldStateSize - stateFileSize
-			if stateDelta < finalUsage {
-				finalUsage -= stateDelta
-			} else {
-				finalUsage = 0
-			}
-			if finalUsage > store.options.DiskCap {
-				return ErrDiskCap
-			}
-		}
-	} else if additional < 0 || store.usage > store.options.DiskCap-additional {
-		return ErrDiskCap
-	}
-	if rotated {
-		if err := store.writeStateLocked(); err != nil {
+		if err := store.writeStateLocked(lease); err != nil {
 			return err
 		}
 		store.stateValid = true
 	}
+	if err := lease.EnsureFits(contextcache.Admission{TempBytes: additional, TempEntries: 1}); err != nil {
+		return store.mapCapacityError(err)
+	}
 	return nil
 }
 
-func (store *Store) diskUsageLocked() (int64, error) {
-	return store.usage, nil
-}
-
-func (store *Store) stateSizeLocked() (int64, error) {
-	info, err := os.Lstat(filepath.Join(store.directory, stateName))
+func (store *Store) stateSizeLocked(root *os.Root) (int64, error) {
+	info, err := root.Lstat(filepath.Join(traceDirName, stateName))
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
@@ -1361,33 +1467,70 @@ func (store *Store) stateSizeLocked() (int64, error) {
 	return info.Size(), nil
 }
 
-func (store *Store) writeStateLocked() error {
+func (store *Store) writeStateLocked(lease *contextcache.Mutation) error {
 	state := encodeState(stateDisk{Generation: store.generation, RotatedThrough: store.rotatedThrough})
-	path := filepath.Join(store.directory, stateName)
-	oldSize, err := store.stateSizeLocked()
+	path := filepath.Join(traceDirName, stateName)
+	oldSize, err := store.stateSizeLocked(lease.Root())
 	if err != nil {
 		return err
 	}
-	// The old state remains in place while the replacement is prepared. The
-	// conservative check charges that temporary copy too, so even the
-	// crash-safe replacement cannot exceed the inclusive disk cap.
-	if store.usage > store.options.DiskCap-int64(len(state)) {
-		return ErrDiskCap
-	}
 	temporary := path + ".tmp"
-	_ = os.Remove(temporary)
-	if err := os.WriteFile(temporary, state, 0o600); err != nil {
-		_ = os.Remove(temporary)
-		return fmt.Errorf("write context trace state: %w", err)
+	if err := lease.Root().Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale context trace state temporary: %w", err)
 	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
+	if _, err := lease.Refresh(); err != nil {
+		return err
+	}
+	if err := lease.EnsureFits(contextcache.Admission{TempBytes: int64(len(state)), TempEntries: 1}); err != nil {
+		return store.mapCapacityError(err)
+	}
+	file, err := lease.Root().OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create context trace state: %w", err)
+	}
+	writeErr := func() error {
+		written, err := file.Write(state)
+		if err != nil {
+			return err
+		}
+		if written != len(state) {
+			return io.ErrShortWrite
+		}
+		if err := file.Sync(); err != nil {
+			return err
+		}
+		return file.Close()
+	}()
+	if writeErr != nil {
+		_ = file.Close()
+		_ = lease.Root().Remove(temporary)
+		return fmt.Errorf("write context trace state: %w", writeErr)
+	}
+	if err := lease.Root().Rename(temporary, path); err != nil {
+		_ = lease.Root().Remove(temporary)
 		return fmt.Errorf("install context trace state: %w", err)
 	}
 	store.usage += int64(len(state)) - oldSize
 	store.stateValid = true
 	store.stateDirty = false
 	return nil
+}
+
+func (store *Store) beginMutationLocked(ctx context.Context) (*contextcache.Mutation, error) {
+	if ctx == nil {
+		return store.capacity.BeginDefault(store.policy)
+	}
+	return store.capacity.Begin(ctx, store.policy)
+}
+
+func (store *Store) mapCapacityError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, contextcache.ErrCapacity) {
+		return fmt.Errorf("%w: %v", ErrDiskCap, err)
+	}
+	return err
 }
 
 type stateDisk struct {
@@ -1461,8 +1604,8 @@ func decodeHeader(contents []byte) (blockHeader, error) {
 	return header, nil
 }
 
-func readHeader(path string) (blockHeader, []byte, error) {
-	file, err := os.Open(path)
+func readHeader(root *os.Root, path string) (blockHeader, []byte, error) {
+	file, err := root.Open(path)
 	if err != nil {
 		return blockHeader{}, nil, err
 	}
@@ -1583,8 +1726,8 @@ func encodeBlock(records []preparedRecord, generation, sequence uint64) ([]byte,
 	return contents, nil
 }
 
-func readBlock(path string, options Options) (diskBlock, blockHeader, error) {
-	file, err := os.Open(path)
+func readBlock(root *os.Root, path string, options Options) (diskBlock, blockHeader, error) {
+	file, err := root.Open(path)
 	if err != nil {
 		return diskBlock{}, blockHeader{}, err
 	}

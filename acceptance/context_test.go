@@ -101,7 +101,7 @@ func TestContextAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := buildContextAcceptanceBinary(t, moduleRoot)
+	binary := buildContextWorkbench(t, moduleRoot)
 
 	t.Run("inactive is silent and creates no context artifacts", func(t *testing.T) {
 		root := t.TempDir()
@@ -126,10 +126,38 @@ func TestContextAcceptance(t *testing.T) {
 		if elapsed[94] > 500*time.Millisecond {
 			t.Fatalf("inactive p95 = %s, want bounded fast path", elapsed[94])
 		}
-		for _, path := range []string{paths.homeConfig, paths.runtimeDir, paths.socket, paths.startLock, paths.serverLock, paths.cacheDir, filepath.Join(root, ".workbench", "context.json")} {
+		for _, path := range []string{paths.homeConfig, paths.runtimeDir, paths.socket, paths.startLock, paths.serverLock, paths.cacheDir, filepath.Join(root, "workbench-context.pkl")} {
 			if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 				t.Fatalf("inactive hook created context artifact %q: %v", path, statErr)
 			}
+		}
+	})
+
+	t.Run("cold evaluator lease wait stays inside the whole-hook deadline", func(t *testing.T) {
+		root := t.TempDir()
+		paths := newAcceptanceContextPaths(root)
+		environment := contextAcceptanceEnvironment(root)
+		writeAcceptanceFile(t, filepath.Join(root, "workbench-context.pkl"), builtinProjectDeclaration(), 0o600)
+		leasePath := filepath.Join(root, "home", ".cache", "workbench", "context-evaluator.lock")
+		if err := os.MkdirAll(filepath.Dir(leasePath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		lease, err := os.OpenFile(leasePath, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lease.Close()
+		if err := syscall.Flock(int(lease.Fd()), syscall.LOCK_EX); err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		arguments := append(contextHookArguments(paths, "codex"), "--whole-hook-deadline", "50ms")
+		stdout, stderr, runErr := runContextProcess(t, binary, root, environment, codexContextHookPayload(root, "lease-session", "lease-turn", ""), arguments)
+		if runErr != nil || len(stdout) != 0 || !strings.Contains(string(stderr), "load activation") {
+			t.Fatalf("bounded evaluator wait = err %v stdout %q stderr %q", runErr, stdout, stderr)
+		}
+		if elapsed := time.Since(started); elapsed > time.Second {
+			t.Fatalf("cold evaluator wait exceeded whole-hook bound: %s", elapsed)
 		}
 	})
 
@@ -180,8 +208,8 @@ func TestContextAcceptance(t *testing.T) {
 		if err := os.MkdirAll(project, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		projectConfig := filepath.Join(project, ".workbench", "context.json")
-		writeAcceptanceFile(t, projectConfig, `{"schemaVersion":1,"optIn":false,"includeChildren":false,"preserved":{"answer":42}}`, 0o640)
+		projectConfig := filepath.Join(project, "workbench-context.pkl")
+		writeAcceptanceFile(t, filepath.Join(project, ".workbench", "context.json"), `{"schemaVersion":1,"optIn":false,"includeChildren":false,"preserved":{"answer":42}}`, 0o640)
 		beforeClaude := readAcceptanceFile(t, claudeSettings)
 		beforeCodex := readAcceptanceFile(t, codexConfig)
 		initStdout, initStderr, err := runContextProcess(t, binary, root, environment, nil, contextInitArguments(paths, project))
@@ -190,15 +218,15 @@ func TestContextAcceptance(t *testing.T) {
 		}
 		var initialized map[string]any
 		decodeAcceptanceJSON(t, initStdout, &initialized)
-		if initialized["changed"] != true || initialized["optIn"] != true {
+		if initialized["created"] != true || initialized["activation"].(map[string]any)["state"] != "enabled" {
 			t.Fatalf("init report = %s", initStdout)
 		}
 		config := readAcceptanceFile(t, projectConfig)
-		var decodedConfig map[string]any
-		decodeAcceptanceJSON(t, []byte(config), &decodedConfig)
-		preserved, preservedOK := decodedConfig["preserved"].(map[string]any)
-		if decodedConfig["optIn"] != true || !preservedOK || preserved["answer"] != float64(42) {
-			t.Fatalf("init did not preserve project-authored fields: %s", config)
+		if !strings.Contains(config, `contributors`) || !strings.Contains(config, `project-guidance`) {
+			t.Fatalf("init did not create the explicit Pkl declaration: %s", config)
+		}
+		if legacy := readAcceptanceFile(t, filepath.Join(project, ".workbench", "context.json")); !strings.Contains(legacy, `"preserved":{"answer":42}`) {
+			t.Fatalf("init did not preserve inert legacy JSON: %s", legacy)
 		}
 		if beforeClaude != readAcceptanceFile(t, claudeSettings) || beforeCodex != readAcceptanceFile(t, codexConfig) || len(initStderr) != 0 {
 			t.Fatalf("project init rewrote global settings or emitted diagnostics")
@@ -214,9 +242,8 @@ func TestContextAcceptance(t *testing.T) {
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
 		profileProvider := filepath.Join(moduleRoot, "examples", "context", "profile-provider.py")
-		profileConfig := strings.Replace(readAcceptanceFile(t, filepath.Join(moduleRoot, "examples", "context", "profile-context.json")), "/absolute/path/to/profile-provider.py", profileProvider, 1)
-		writeAcceptanceFile(t, filepath.Join(root, ".workbench", "context.json"), profileConfig, 0o600)
-		writeAcceptanceFile(t, paths.homeConfig, `{"schemaVersion":1,"runtime":{"idleTTLMs":5000}}`, 0o600)
+		writeAcceptanceFile(t, filepath.Join(root, "workbench-context.pkl"), profileProjectDeclaration(profileProvider), 0o600)
+		writeAcceptanceFile(t, paths.homeConfig, homeRuntimeDeclaration(5000), 0o600)
 		stdout, stderr, err := runContextProcess(t, binary, root, environment, codexContextHookPayload(root, "profile-session", "profile-turn", ""), contextHookArguments(paths, "codex"))
 		if err != nil || len(stdout) != 0 || len(stderr) != 0 {
 			t.Fatalf("profile-only hook failed or delivered unexpected output: err=%v stdout=%q stderr=%q", err, stdout, stderr)
@@ -270,8 +297,8 @@ func TestContextAcceptance(t *testing.T) {
 		environment := contextAcceptanceEnvironment(root)
 		writeAcceptanceFile(t, filepath.Join(root, "README.md"), "fixture README\n", 0o600)
 		writeAcceptanceFile(t, filepath.Join(root, "ai-context.md"), "---\nroot: true\ndocs:\n  - files: [\"README.md\"]\n    message: "+contextOfferText+"\n---\nignored markdown body\n", 0o600)
-		writeAcceptanceFile(t, filepath.Join(root, ".workbench", "context.json"), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`, 0o600)
-		writeAcceptanceFile(t, paths.homeConfig, `{"schemaVersion":1,"runtime":{"idleTTLMs":5000}}`, 0o600)
+		writeAcceptanceFile(t, filepath.Join(root, "workbench-context.pkl"), builtinProjectDeclaration(), 0o600)
+		writeAcceptanceFile(t, paths.homeConfig, homeRuntimeDeclaration(5000), 0o600)
 
 		claude := claudeContextHookPayload(root, "claude-session", "claude-turn", "")
 		stdout, stderr, err := runContextProcess(t, binary, root, environment, claude, contextHookArguments(paths, "claude"))
@@ -297,6 +324,10 @@ func TestContextAcceptance(t *testing.T) {
 		}
 		if contributionID == 0 || !offered || !confirmed || !suppressed {
 			t.Fatalf("history lacks offer/confirmation/suppression evidence: %+v", history.Records)
+		}
+		cacheStatus, cacheStatusStderr, cacheStatusErr := runContextProcess(t, binary, root, environment, nil, contextCacheStatusArguments(paths))
+		if cacheStatusErr != nil || len(cacheStatusStderr) != 0 || len(cacheStatus) == 0 {
+			t.Fatalf("explicit cache status failed: err=%v stderr=%q stdout=%q", cacheStatusErr, cacheStatusStderr, cacheStatus)
 		}
 		inspectStdout, inspectStderr, err := runContextProcess(t, binary, root, environment, nil, contextInspectContributionArguments(paths, contributionID))
 		if err != nil || len(inspectStderr) != 0 || !strings.Contains(string(inspectStdout), contextOfferText) {
@@ -353,8 +384,8 @@ func TestContextAcceptance(t *testing.T) {
 		providerLog := filepath.Join(root, "provider.log")
 		provider := filepath.Join(root, "provider.sh")
 		writeAcceptanceFile(t, provider, providerFixtureScript(), 0o700)
-		writeAcceptanceFile(t, filepath.Join(root, ".workbench", "context.json"), fmt.Sprintf(`{"schemaVersion":1,"optIn":true,"includeChildren":true,"providers":[{"id":"fixture-provider","kind":"executable","executable":%q,"arguments":[%q],"capabilities":["contribute"],"limits":{"deadlineMs":1000,"maxResponseBytes":65536,"maxContributions":4,"maxBodyBytes":4096}}]}`, provider, providerLog), 0o600)
-		writeAcceptanceFile(t, paths.homeConfig, `{"schemaVersion":1,"runtime":{"idleTTLMs":5000}}`, 0o600)
+		writeAcceptanceFile(t, filepath.Join(root, "workbench-context.pkl"), executableProjectDeclaration(provider, providerLog, "contribute"), 0o600)
+		writeAcceptanceFile(t, paths.homeConfig, homeRuntimeDeclaration(5000), 0o600)
 		stdout, stderr, err := runContextProcess(t, binary, root, environment, codexContextHookPayload(root, "provider-session", "provider-turn", ""), contextHookArguments(paths, "codex"))
 		if err != nil || len(stderr) != 0 {
 			t.Fatalf("executable provider hook failed: %v stderr=%q", err, stderr)
@@ -394,8 +425,8 @@ func TestContextAcceptance(t *testing.T) {
 		environment := contextAcceptanceEnvironment(root)
 		writeAcceptanceFile(t, filepath.Join(root, "README.md"), "fixture README\n", 0o600)
 		writeAcceptanceFile(t, filepath.Join(root, "ai-context.md"), "---\nroot: true\ndocs:\n  - files: [\"README.md\"]\n    message: "+contextOfferText+"\n---\n", 0o600)
-		writeAcceptanceFile(t, filepath.Join(root, ".workbench", "context.json"), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`, 0o600)
-		writeAcceptanceFile(t, paths.homeConfig, `{"schemaVersion":1,"runtime":{"idleTTLMs":1000}}`, 0o600)
+		writeAcceptanceFile(t, filepath.Join(root, "workbench-context.pkl"), builtinProjectDeclaration(), 0o600)
+		writeAcceptanceFile(t, paths.homeConfig, homeRuntimeDeclaration(1000), 0o600)
 
 		const callers = 12
 		var wait sync.WaitGroup
@@ -435,8 +466,8 @@ func TestContextAcceptance(t *testing.T) {
 		environment := contextAcceptanceEnvironment(root)
 		writeAcceptanceFile(t, filepath.Join(root, "README.md"), "fixture README\n", 0o600)
 		writeAcceptanceFile(t, filepath.Join(root, "ai-context.md"), "---\nroot: true\ndocs:\n  - files: [\"README.md\"]\n    message: "+contextOfferText+"\n---\n", 0o600)
-		writeAcceptanceFile(t, filepath.Join(root, ".workbench", "context.json"), `{"schemaVersion":1,"optIn":true,"includeChildren":true}`, 0o600)
-		writeAcceptanceFile(t, paths.homeConfig, `{"schemaVersion":1,"runtime":{"idleTTLMs":50}}`, 0o600)
+		writeAcceptanceFile(t, filepath.Join(root, "workbench-context.pkl"), builtinProjectDeclaration(), 0o600)
+		writeAcceptanceFile(t, paths.homeConfig, homeRuntimeDeclaration(50), 0o600)
 		stdout, stderr, err := runContextProcess(t, binary, root, environment, codexContextHookPayload(root, "idle-session", "idle-turn", ""), contextHookArguments(paths, "codex"))
 		if err != nil || len(stderr) != 0 {
 			t.Fatalf("short-TTL hook failed: %v stderr=%q", err, stderr)
@@ -449,13 +480,50 @@ func TestContextAcceptance(t *testing.T) {
 	})
 }
 
-func buildContextAcceptanceBinary(t *testing.T, moduleRoot string) string {
+// buildContextWorkbench builds the CLI and stages the exact private Pkl and
+// runtime-lock layout expected by context-only production composition. Tests
+// must provide PKL_EXECUTABLE explicitly; no PATH or ambient tool lookup is a
+// valid acceptance fixture.
+func buildContextWorkbench(t *testing.T, moduleRoot string) string {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "workbench")
+	installation := t.TempDir()
+	binary := filepath.Join(installation, "bin", "workbench")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	command := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/workbench")
 	command.Dir = moduleRoot
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build context acceptance CLI: %v\n%s", err, output)
+	}
+	pkl := os.Getenv("PKL_EXECUTABLE")
+	if pkl == "" {
+		t.Fatal("PKL_EXECUTABLE must designate the pinned Pkl fixture")
+	}
+	if !filepath.IsAbs(pkl) {
+		t.Fatalf("PKL_EXECUTABLE must be absolute: %q", pkl)
+	}
+	pklBytes, err := os.ReadFile(pkl)
+	if err != nil {
+		t.Fatalf("read pinned Pkl fixture %q: %v", pkl, err)
+	}
+	privatePkl := filepath.Join(installation, "libexec", "workbench", "pkl")
+	if err := os.MkdirAll(filepath.Dir(privatePkl), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(privatePkl, pklBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.ReadFile(filepath.Join(moduleRoot, "release", "runtime-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateLock := filepath.Join(installation, "share", "workbench", "runtime-lock.json")
+	if err := os.MkdirAll(filepath.Dir(privateLock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(privateLock, lock, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	return binary
 }
@@ -463,13 +531,73 @@ func buildContextAcceptanceBinary(t *testing.T, moduleRoot string) string {
 func newAcceptanceContextPaths(root string) acceptanceContextPaths {
 	runtimeDir := filepath.Join(root, "runtime")
 	return acceptanceContextPaths{
-		homeConfig: filepath.Join(root, "home", "context.json"),
+		homeConfig: filepath.Join(root, "home", "workbench-context.pkl"),
 		runtimeDir: runtimeDir,
 		socket:     filepath.Join(runtimeDir, "context.sock"),
 		startLock:  filepath.Join(runtimeDir, "context.start.lock"),
 		serverLock: filepath.Join(runtimeDir, "context.server.lock"),
 		cacheDir:   filepath.Join(root, "cache"),
 	}
+}
+
+func builtinProjectDeclaration() string {
+	return `amends "workbench:context"
+
+scope = "subtree"
+
+contributors {
+  ["project-guidance"] = new AiContext {}
+}
+`
+}
+
+func profileProjectDeclaration(executable string) string {
+	return fmt.Sprintf(`amends "workbench:context"
+
+contributors {
+  ["example-profile"] = new Executable {
+    executable = %q
+    capabilities { "profile" }
+    limits {
+      deadlineMs = 500
+      maxResponseBytes = 262144
+      maxFacts = 32
+      maxContributions = 64
+      maxBodyBytes = 262144
+    }
+  }
+}
+`, executable)
+}
+
+func executableProjectDeclaration(executable, argument, capability string) string {
+	return fmt.Sprintf(`amends "workbench:context"
+
+contributors {
+  ["fixture-provider"] = new Executable {
+    executable = %q
+    arguments { %q }
+    capabilities { %q }
+    limits {
+      deadlineMs = 1000
+      maxResponseBytes = 65536
+      maxContributions = 4
+      maxBodyBytes = 4096
+    }
+  }
+}
+`, executable, argument, capability)
+}
+
+func homeRuntimeDeclaration(idleTTLMs uint64) string {
+	return fmt.Sprintf(`amends "workbench:context-home"
+
+limits {
+  runtime {
+    idleTTLMs = %d
+  }
+}
+`, idleTTLMs)
 }
 
 func contextAcceptanceEnvironment(root string) []string {
@@ -505,6 +633,10 @@ func contextInspectContributionArguments(paths acceptanceContextPaths, contribut
 
 func contextCacheClearArguments(paths acceptanceContextPaths) []string {
 	return append([]string{"context", "cache", "clear"}, contextPathArguments(paths)...)
+}
+
+func contextCacheStatusArguments(paths acceptanceContextPaths) []string {
+	return append([]string{"context", "cache", "status", "--json"}, contextPathArguments(paths)...)
 }
 
 func contextHistoryArguments(paths acceptanceContextPaths) []string {

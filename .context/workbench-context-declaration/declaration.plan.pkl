@@ -8,9 +8,9 @@ meta {
 local design = new Action {
   id = "declaration-design"
   owner = "root"
-  outcome = "Specify project/home authority, selection, composition, evaluator lifetime, freshness, migration and deletion of the JSON activation path."
+  outcome = "Specify project/home authority, selection, composition, evaluator lifetime, freshness, hard cut and deletion of the JSON activation path."
   grant { "docs/context-declarations.md" }
-  oracle = module.adjudicated("The proposal names defaults, scope boundaries, one resolver, exact evaluated-input capture, shared capacity protocol, effective-selection and descendant-preserving migration, explicit init outcomes, and separate product decisions versus feasibility questions; it does not claim unimplemented Pkl behavior is shipped.", "root")
+  oracle = module.adjudicated("The proposal names defaults, scope boundaries, one resolver, exact evaluated-input capture, shared capacity protocol, TDD hard cut without compatibility mechanisms, explicit init outcomes, and separate product decisions versus feasibility questions; it does not claim unimplemented Pkl behavior is shipped.", "root")
 }
 
 local coldPolicy = new Selector {
@@ -25,6 +25,13 @@ local scopePolicy = new Selector {
   owner = "Cole"
   question = "Does the nearest project declaration completely own selection and block ancestor fallback, including directory-only descendants, or preserve ancestor refinement and coverage fallback?"
   options { "nearest-complete-boundary"; "ancestor-refinement" }
+}
+
+local platformPolicy = new Selector {
+  id = "evaluator-platform-memory-policy"
+  owner = "Cole"
+  question = "Keep macOS Pkl activation available with strict time/I/O controls and a disclosed unproven native-heap ceiling, or fail closed on macOS until memory containment is proven?"
+  options { "macos-available-disclosed-memory-limit"; "macos-fail-closed" }
 }
 
 local baseline = new Guard {
@@ -50,16 +57,16 @@ local feasibility = new Guard {
   outcome = "Resolve the cold evaluation versus inactive-hook resource contract with measured evidence before committing consumers to an evaluator design."
   observes { "docs/context-declarations.md"; ".context/workbench-context-declaration/probe/**"; ".context/workbench-context/performance-evidence.md" }
   needs { module.produced(design); module.produced(probe); module.verified(probe); module.ruled(coldPolicy) }
-  oracle = module.adjudicated("First verify the instrument matches Cole's recorded cold-inactive policy; timing cannot settle permission for evaluator startup or writes. Measure executable/version discovery through joined cleanup, explicit process/RAM/input/output/diagnostic limits, depth-12 inactive p95 <=30ms, warm p95 <=100ms and eight cold hooks <=2s. Test concurrent misses with trace publication and nearly full/reduced caps, bootstrap limits, reservations, cancellation and crash recovery. Capture exact evaluator-read bytes/import designations/targets and reject ABA or symlink retarget staleness. No hidden registry, stale fallback or unjoined handshake; conflicts require revised design and evidence.", "root")
+  oracle = module.adjudicated("First verify the instrument matches Cole's recorded cold-inactive policy; timing cannot settle permission for evaluator startup or writes. Measure executable/version discovery through joined cleanup, explicit process/RAM/input/output/diagnostic limits and eight cold evaluations <=2s. Capture exact evaluator-read bytes/import designations/targets and reject ABA or symlink retarget staleness. No hidden registry, stale fallback or unjoined handshake; conflicts require revised design and evidence. Prototype evidence does not establish final hook latency or shared trace capacity; those are explicitly required by integrated-resource-proof on the real consumers.", "root")
 }
 
 local designReview = new Guard {
   id = "declaration-design-review"
   owner = "declaration-reviewer"
-  outcome = "Review the concrete declaration proposal for understandable authority, compatible migration and faithful ADR value."
+  outcome = "Review the concrete declaration proposal for understandable authority, greenfield cutover and faithful ADR value."
   observes { "docs/context-declarations.md"; "docs/adr/2026-09-wokbench-context.md" }
   needs { module.produced(design); module.verified(design); module.ruled(coldPolicy); module.ruled(scopePolicy) }
-  oracle = module.adjudicated("Proposal and downstream graph match Cole's recorded scope and cold-inactive choices; alternative rulings require explicit revision, not automatic branch selection. Review home rules, no implicit builtin/profile-provider list, exact import input capture, shared capacity protocol, no JSON fallback, effective legacy selection and descendant-preserving conversion, and init outcomes that distinguish creation from effective activation.", "root")
+  oracle = module.adjudicated("Proposal and downstream graph match Cole's recorded scope and cold-inactive choices; alternative rulings require explicit revision, not automatic branch selection. Review home rules, no implicit builtin/profile-provider list, exact import input capture, shared capacity protocol, no JSON fallback, no converter or legacy activation scans, and init outcomes that distinguish creation from effective activation.", "root")
 }
 
 local adoption = new Action {
@@ -75,36 +82,45 @@ local contract = new Action {
   id = "declaration-contract"
   owner = "declaration-contract-worker"
   outcome = "Publish executable project/home Pkl schemas sharing typed selection plus canonical Go declaration/evaluation/load data contracts; settle exact URI and release embedding."
-  grant { "pkl/WorkbenchContext*.pkl"; "pkl/context.go"; "WorkbenchContext*.pkl"; "internal/contextapi/config.go"; "internal/contextapi/declaration*_test.go"; ".context/workbench-context-declaration/contracts.md" }
-  needs { module.verified(baseline); module.produced(adoption); module.verified(adoption); module.verified(feasibility) }
-  oracle = module.adjudicated("Representative valid/invalid modules evaluate against bundled contracts. API agreement covers cancellation, exact reader-captured inputs/designations/targets, origin/digests, bootstrap limits, one cross-process capacity/reservation/publication/eviction/crash-recovery contract spanning snapshots and history, and a single replacement Load/Resolve seam. No placeholder implementation or JSON-presence domain semantics.", "root")
+  grant { "pkl/WorkbenchContext*.pkl"; "pkl/context.go"; "WorkbenchContext*.pkl"; "internal/contextapi/config.go"; "internal/contextapi/declaration.go"; "internal/contextapi/declaration*_test.go"; "internal/contextapi/contracts_test.go"; ".context/workbench-context-declaration/contracts-red/**"; ".context/workbench-context-declaration/contracts.md" }
+  needs { module.verified(baseline); module.produced(adoption); module.verified(adoption) }
+  oracle = module.adjudicated("Representative valid/invalid modules evaluate against bundled contracts. API agreement covers cancellation, exact reader-captured inputs/designations/targets, origin/digests, bootstrap limits and a single replacement Load/Resolve seam. Shared storage is separately owned by shared-context-capacity; source values and pure selection do not depend on its implementation. No placeholder implementation or JSON-presence domain semantics.", "root")
 }
 
 local evaluation = new Action {
   id = "bounded-evaluation"
   owner = "declaration-evaluation-worker"
-  outcome = "Implement bounded local-import evaluation and disposable dependency-validated snapshots through the existing evaluator capability."
+  outcome = "Implement bounded local-import evaluation and exact dependency validation through the existing evaluator capability; opaque snapshot storage is supplied by shared-context-capacity."
   grant { "internal/evaluate/context*.go"; "internal/evaluate/testdata/context/**" }
-  needs { module.produced(contract); module.verified(contract) }
+  needs { module.produced(contract); module.verified(contract); module.verified(feasibility) }
   oracle = module.mechanical("go test -race ./internal/evaluate")
+}
+
+local capacity = new Action {
+  id = "shared-context-capacity"
+  owner = "declaration-cache-worker"
+  outcome = "Implement one bounded cross-process capacity owner and opaque disposable snapshot storage, with actual filesystem usage and current-policy validation authoritative."
+  grant { "internal/contextcache/**" }
+  needs { module.produced(design); module.verified(design) }
+  oracle = module.mechanical("go test -race ./internal/contextcache")
 }
 
 local activation = new Action {
   id = "single-activation-resolver"
   owner = "declaration-activation-worker"
-  outcome = "Replace JSON activation discovery/loading with Pkl canonical values and nearest complete selection; retain exactly one activation resolver and remove inherited contributor defaults."
+  outcome = "Replace JSON activation with one Pkl Load/Resolve and nearest complete selection; validate captured closure freshness before cold return, propagate cancellation, classify duplicate home roots before disabled selection, and remove inherited contributor defaults."
   grant { "internal/contextconfig/**" }
   needs { module.produced(contract); module.verified(contract) }
   oracle = module.mechanical("go test -race ./internal/contextconfig")
 }
 
-local migration = new Action {
-  id = "explicit-json-conversion"
-  owner = "declaration-migration-worker"
-  outcome = "Provide an explicit previewable JSON-to-Pkl converter preserving effective selection or refusing ambiguous inheritance, with no runtime fallback and no overwrite."
-  grant { "internal/contextmigration/**" }
-  needs { module.produced(contract); module.verified(contract) }
-  oracle = module.mechanical("go test -race ./internal/contextmigration")
+local traceCapacity = new Action {
+  id = "trace-shared-capacity"
+  owner = "declaration-cache-worker"
+  outcome = "Make every trace disk mutation participate in the same current-policy pool as declaration snapshots; request-owned open/query/clear honor caller cancellation while background publication has a finite owned lifetime, preserving trace-owned rotation and history semantics."
+  grant { "internal/contexttrace/**"; "internal/contextcache/cache.go" }
+  needs { module.produced(capacity); module.verified(capacity) }
+  oracle = module.mechanical("go test -race ./internal/contexttrace ./internal/contextcache")
 }
 
 local acceptanceInstrument = new Action {
@@ -112,35 +128,62 @@ local acceptanceInstrument = new Action {
   owner = "declaration-acceptance-worker"
   outcome = "Author actual-binary acceptance cases and bounded measurement/native probe fixtures for the Pkl replacement before claiming delivery."
   grant { "acceptance/context_declaration_test.go"; "acceptance/testdata/context-declaration/**"; ".context/workbench-context-declaration/acceptance/**" }
-  needs { module.produced(contract); module.verified(contract) }
-  oracle = module.adjudicated("Instrument proves declaration origin, scope decisions, import edits/deletion/ABA/retargeting, same-length edits, old/new coexistence, generated/custom home paths, snapshot loss/shared capacity, effective legacy and descendant coverage, all init outcomes, provider/profile behavior and historical revisions through real CLI. Missing tests/build failures/timeouts cannot count as intended red behavior. Existing baseline fails Pkl activation witnesses for the intended reason.", "root")
+  needs { module.produced(design); module.verified(design) }
+  oracle = module.adjudicated("Instrument proves declaration origin, scope decisions, import edits/deletion/ABA/retargeting, same-length edits, old/new coexistence, generated/custom home paths, snapshot loss/shared capacity, JSON-only inactivity and descendant boundaries, all init outcomes, provider/profile behavior and historical revisions through real CLI. Missing tests/build failures/timeouts cannot count as intended red behavior. Existing baseline fails Pkl activation witnesses for the intended reason.", "root")
 }
 
-local consumers = new Action {
+local cliConsumers = new Action {
+  id = "declaration-cli-cutover"
+  owner = "declaration-cli-worker"
+  outcome = "Compose one lazy private evaluator and pool, pass the same loader dependencies to hooks/status/daemon, implement Pkl init/setup and hidden bounded worker dispatch, and port existing public acceptance fixtures without losing behavioral coverage."
+  grant { "cmd/workbench/context*.go"; "internal/runtime/context*.go"; "acceptance/context_test.go" }
+  needs { module.produced(evaluation); module.produced(capacity); module.produced(activation); module.produced(acceptanceInstrument) }
+  oracle = module.adjudicated("Exact private Pkl paths require no Bun or PATH fallback; no-source does not acquire tools or cache. CLI/daemon composition uses the same LoadDependencies. Setup and every init outcome preserve authored intent. Existing hook/IO/setup/status/acceptance coverage is ported to Pkl and passes after peer integration; missing peer symbols are blockers, never compatibility excuses.", "root")
+}
+
+local daemonConsumers = new Action {
+  id = "declaration-daemon-cutover"
+  owner = "declaration-runtime-worker"
+  outcome = "Inject the one Pkl loader into runtime requests and trace policy refresh, preserve named builtin contributors and capability dispatch, and port peer tests while retaining ownership, delivery and lifecycle invariants."
+  grant { "internal/contextdaemon/**"; "internal/contextprovider/**"; "internal/contextengine/*_test.go"; "internal/contextapi/contracts_test.go" }
+  needs { module.produced(capacity); module.produced(traceCapacity); module.produced(activation) }
+  oracle = module.adjudicated("Runtime receives concrete LoadDependencies; no duplicated activation or freshness authority. Current loader-owned CachePolicy reaches every trace mutation through its mailbox, before first publication and after home changes. Named builtin identities survive contribution/revalidation and profile-only providers never receive contribute. Existing delivery/resource/epoch/trace/provider regressions pass with canonical Pkl fixtures.", "root")
+}
+
+local consumers = new Guard {
   id = "activation-consumers-cutover"
-  owner = "declaration-integration-worker"
-  outcome = "Wire one loader into hooks/status/daemon; update init/conversion, reconcile generated versus custom home paths, enforce shared snapshot/trace capacity, and migrate existing JSON-oriented acceptance and peer tests without discarding their behavioral coverage."
-  grant { "cmd/workbench/context*.go"; "internal/contextdaemon/**"; "internal/contexttrace/**"; "acceptance/context_test.go"; "internal/contextprovider/*_test.go"; "internal/contextengine/*_test.go"; "internal/contextapi/*_test.go" }
-  needs { module.produced(evaluation); module.verified(evaluation); module.produced(activation); module.verified(activation); module.produced(migration); module.verified(migration); module.produced(acceptanceInstrument); module.verified(acceptanceInstrument) }
-  oracle = module.mechanical("go test -race ./cmd/workbench ./internal/contextdaemon ./internal/contexttrace")
+  owner = "root"
+  outcome = "Verify the two disjoint consumer lanes together against the accepted evaluator, resolver and shared trace capacity."
+  observes { "cmd/workbench/context*.go"; "internal/runtime/context*.go"; "internal/contextdaemon/**"; "internal/contextprovider/**"; "acceptance/context_test.go" }
+  needs { module.produced(cliConsumers); module.verified(cliConsumers); module.produced(daemonConsumers); module.verified(daemonConsumers); module.verified(evaluation); module.verified(capacity); module.verified(traceCapacity); module.verified(activation); module.verified(acceptanceInstrument) }
+  oracle = module.mechanical("go test -race ./cmd/workbench ./internal/contextdaemon ./internal/contexttrace ./internal/contextprovider")
 }
 
 local documentation = new Action {
   id = "declaration-user-surface"
   owner = "declaration-docs-worker"
-  outcome = "Replace JSON activation instructions/examples, reconcile ADR refinement language, and show explicit builtin/profile contributors, nested boundaries and migration in Pkl."
+  outcome = "Replace JSON activation instructions/examples, reconcile ADR refinement language, and show explicit builtin/profile contributors, nested boundaries and the hard cut in Pkl."
   grant { "docs/context.md"; "docs/context-declarations.md"; "docs/adr/2026-09-wokbench-context.md"; "examples/context/**" }
-  needs { module.produced(contract); module.verified(contract); module.produced(consumers) }
+  needs { module.produced(contract); module.verified(contract); module.produced(cliConsumers); module.produced(daemonConsumers) }
   oracle = module.adjudicated("Examples evaluate using the published schema; init preserves existing Pkl expressions; status explains origin/coverage/capabilities and exclusions; no instructions keep JSON activation alive; contributor RPC JSON remains correctly documented. Schema and CLI errors help an ordinary agent diagnose missing guidance.", "root")
 }
 
 local integrated = new Guard {
   id = "declaration-public-proof"
   owner = "declaration-verifier"
-  outcome = "Prove the Pkl path through real binary hook/setup/init/status/conversion/daemon behavior and dependency-change withdrawal."
+  outcome = "Prove the Pkl path through real binary hook/setup/init/status/daemon behavior and dependency-change withdrawal."
   observes { "acceptance/context_declaration_test.go"; "acceptance/testdata/context-declaration/**"; "cmd/workbench/context*.go"; "internal/context*/**"; "internal/evaluate/context*.go" }
-  needs { module.produced(consumers); module.verified(consumers); module.produced(documentation); module.verified(documentation); module.verified(acceptanceInstrument) }
+  needs { module.verified(consumers); module.produced(documentation); module.verified(documentation); module.verified(acceptanceInstrument) }
   oracle = module.mechanical("go test ./acceptance -run Context -count=1 -timeout 180s")
+}
+
+local resourceProof = new Guard {
+  id = "integrated-resource-proof"
+  owner = "root"
+  outcome = "Verify actual Pkl hooks and trace/snapshot writers obey combined capacity, current authority and whole-hook resource bounds."
+  observes { "internal/evaluate/context*.go"; "internal/contextconfig/**"; "internal/contextdaemon/**"; "internal/contexttrace/**"; "cmd/workbench/context*.go"; ".context/workbench-context-declaration/acceptance/**" }
+  needs { module.verified(consumers); module.verified(integrated) }
+  oracle = module.adjudicated("Real assembled no-source and configured-home inactive/cold/warm hooks, eight concurrent misses, total process tree and joined cleanup meet the declared workload budgets. Concurrent snapshots plus actual trace rotation respect one shared cap including metadata/temp/abandoned reservations; tiny/reduced home caps prevent old-budget admission. Exact captured inputs and designation retargeting are validated. Bootstrap publishes no snapshot under guessed home limits. Synthetic cache/evaluator timings alone cannot satisfy this guard.", "root")
 }
 
 local finalProof = new Guard {
@@ -148,12 +191,12 @@ local finalProof = new Guard {
   owner = "root"
   outcome = "Accept one authoritative Pkl declaration path with no remaining duplicate activation mechanism or hidden incomplete obligations."
   observes { "docs/context-declarations.md"; "docs/context.md"; "internal/context*/**"; "internal/evaluate/context*.go"; "cmd/workbench/context*.go"; ".context/workbench-context-declaration/**" }
-  needs { module.verified(integrated); module.verified(feasibility); module.verified(documentation) }
-  oracle = module.adjudicated("Independently inspect deletion of JSON runtime readers, nil/absent defaults and old path handling across all consumers. Full Go tests/vet/context race and platform builds pass on final revision. Measure accepted cold/warm/no-source and home-inactive budgets, exact cleanup and combined disk cap. Native Claude/Codex admission plus outcome-only declaration discovery/diagnosis use Pkl. Final proof accounts for migration, historical explainability and any open feasibility/user decisions; old JSON evidence is insufficient.", "root")
+  needs { module.verified(integrated); module.verified(feasibility); module.verified(documentation); module.verified(resourceProof); module.ruled(platformPolicy) }
+  oracle = module.adjudicated("Independently inspect deletion of JSON runtime readers, nil/absent defaults and old path handling across all consumers. Full Go tests/vet/context race and platform builds pass on final revision. Measure accepted cold/warm/no-source and home-inactive budgets, exact cleanup and combined disk cap. Native Claude/Codex admission plus outcome-only declaration discovery/diagnosis use Pkl. Final proof accounts for JSON removal, historical explainability and any open feasibility/user decisions; old JSON evidence is insufficient.", "root")
 }
 
 nodes {
-  design; coldPolicy; scopePolicy; baseline; probe; feasibility; designReview; adoption; contract
-  evaluation; activation; migration; acceptanceInstrument; consumers; documentation
-  integrated; finalProof
+  design; coldPolicy; scopePolicy; platformPolicy; baseline; probe; feasibility; designReview; adoption; contract
+  evaluation; capacity; activation; traceCapacity; acceptanceInstrument; cliConsumers; daemonConsumers; consumers; documentation
+  integrated; resourceProof; finalProof
 }

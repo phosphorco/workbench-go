@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/phosphorco/workbench-go/internal/contextapi"
-	"github.com/phosphorco/workbench-go/internal/contextconfig"
 )
 
 // TestContextProviderHelper is also the executable used by the subprocess
@@ -36,9 +35,16 @@ func TestContextProviderHelper(t *testing.T) {
 		}
 		switch request.Method {
 		case contextapi.RPCMethodInitialize:
+			capabilities := []contextapi.ProviderCapability{contextapi.ProviderCapabilityProfile, contextapi.ProviderCapabilityContribute}
+			if mode == "profile-only" {
+				capabilities = []contextapi.ProviderCapability{contextapi.ProviderCapabilityProfile}
+			}
+			if mode == "contribute-only" {
+				capabilities = []contextapi.ProviderCapability{contextapi.ProviderCapabilityContribute}
+			}
 			writeHelperResponse(encoder, request.ID, contextapi.ProviderInitializeResponse{
 				Accepted:     true,
-				Capabilities: []contextapi.ProviderCapability{contextapi.ProviderCapabilityProfile, contextapi.ProviderCapabilityContribute},
+				Capabilities: capabilities,
 			})
 			if mode == "grandchild" {
 				marker := ""
@@ -235,7 +241,29 @@ func TestClientHydratesProviderOwnedContributionAndProfileAuthority(t *testing.T
 	}
 }
 
-func TestLoadedActivationPassesIndependentDigestsToProviderAndBuiltin(t *testing.T) {
+func TestClientRejectsCallsMissingNegotiatedCapability(t *testing.T) {
+	config, resource := testClientConfig(t, "profile-only")
+	client, err := Start(context.Background(), config, resource, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(context.Background())
+	if _, err := client.Contribute(context.Background(), testContributionRequest()); !errors.Is(err, ErrUnsupportedCapability) {
+		t.Fatalf("profile-only provider received contribute: %v", err)
+	}
+
+	config, resource = testClientConfig(t, "contribute-only")
+	client, err = Start(context.Background(), config, resource, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(context.Background())
+	if _, err := client.Profile(context.Background(), contextapi.ProfileRequest{Audience: contextapi.Audience{ID: "audience", Epoch: 1}, Limits: contextapi.ProfileLimits{MaxFacts: 1}}); !errors.Is(err, ErrUnsupportedCapability) {
+		t.Fatalf("contribute-only provider received profile: %v", err)
+	}
+}
+
+func TestProviderPreservesIndependentDigestsToProviderAndBuiltin(t *testing.T) {
 	root := t.TempDir()
 	loadedProvider := contextapi.ProviderConfig{
 		ID:           "loaded-provider",
@@ -249,45 +277,26 @@ func TestLoadedActivationPassesIndependentDigestsToProviderAndBuiltin(t *testing
 			MaxBodyBytes:     64 << 10,
 		},
 	}
-	project := contextapi.ProjectFile{
-		SchemaVersion:   1,
-		OptIn:           true,
-		IncludeChildren: true,
-		Providers:       []contextapi.ProviderConfig{loadedProvider},
-	}
-	raw, err := json.Marshal(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeBuiltinFile(t, root, ".workbench/context.json", string(raw))
-	loaded, err := contextconfig.Load(contextconfig.LoadOptions{WorkingDirectory: root, Now: time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Result.State != contextapi.ActivationEnabled || len(loaded.Result.Effective.Providers) != 1 {
-		t.Fatalf("real activation did not load fixture provider: state=%q result=%#v", loaded.Result.State, loaded.Result)
-	}
-	if loaded.Result.Scope.ConfigDigest == "" || loaded.Result.Effective.ConfigDigest == "" || loaded.Result.Scope.ConfigDigest == loaded.Result.Effective.ConfigDigest {
-		t.Fatalf("real loader did not produce independent declaration/effective digests: scope=%q effective=%q", loaded.Result.Scope.ConfigDigest, loaded.Result.Effective.ConfigDigest)
-	}
+	scope := contextapi.ScopeIdentity{ID: "loaded-scope", CanonicalRoot: root, ConfigDigest: "sha256:scope-declaration"}
+	effectiveDigest := contextapi.ConfigDigest("sha256:effective-activation")
 	resource := contextapi.ProviderResource{
-		Provider: loaded.Result.Effective.Providers[0].ID,
-		Scope:    loaded.Result.Effective.Scope,
+		Provider: loadedProvider.ID,
+		Scope:    scope,
 		// Effective activation identity is deliberately distinct from Scope.ConfigDigest.
-		ConfigDigest: loaded.Result.Effective.ConfigDigest,
+		ConfigDigest: effectiveDigest,
 	}
-	client, err := Start(context.Background(), loaded.Result.Effective.Providers[0], resource, Options{})
+	client, err := Start(context.Background(), loadedProvider, resource, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := testContributionRequest()
-	request.Scope = loaded.Result.Effective.Scope
-	request.ConfigDigest = loaded.Result.Effective.ConfigDigest
+	request.Scope = scope
+	request.ConfigDigest = effectiveDigest
 	output, err := client.Contribute(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(output.Contributions) != 1 || output.Contributions[0].ConfigDigest != loaded.Result.Effective.ConfigDigest {
+	if len(output.Contributions) != 1 || output.Contributions[0].ConfigDigest != effectiveDigest {
 		t.Fatalf("provider did not preserve effective digest independently: %#v", output)
 	}
 	if err := client.Close(context.Background()); err != nil {
@@ -296,10 +305,10 @@ func TestLoadedActivationPassesIndependentDigestsToProviderAndBuiltin(t *testing
 
 	writeBuiltinFile(t, root, "ai-context.md", "---\ndocs:\n  - message: loaded builtin\n---\n")
 	builtinRequest := builtinRequest([]contextapi.ObservedResource{observedFile("source.go", contextapi.ResourceOutcomeUnknown, contextapi.ConfidenceInferred)}, nil)
-	builtinRequest.Scope = loaded.Result.Effective.Scope
-	builtinRequest.ConfigDigest = loaded.Result.Effective.ConfigDigest
-	builtinResponse := ContributeBuiltin(context.Background(), builtinRequest, root, builtinTestLimits())
-	if len(builtinResponse.Contributions) != 1 || builtinResponse.Contributions[0].ConfigDigest != loaded.Result.Effective.ConfigDigest {
+	builtinRequest.Scope = scope
+	builtinRequest.ConfigDigest = effectiveDigest
+	builtinResponse := ContributeBuiltin(context.Background(), builtinRequest, "ai-context", root, builtinTestLimits())
+	if len(builtinResponse.Contributions) != 1 || builtinResponse.Contributions[0].ConfigDigest != effectiveDigest {
 		t.Fatalf("builtin did not preserve effective digest independently: %#v", builtinResponse)
 	}
 }
