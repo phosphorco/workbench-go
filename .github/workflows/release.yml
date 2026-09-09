@@ -673,10 +673,20 @@ jobs:
         with:
           version: 2026.8.12
           cache: false
+      - name: Acquire the runtime-lock Pkl executable
+        run: |
+          release/acquire-pkl.sh \
+            --lock release/runtime-lock.json \
+            --platform linux-x64 \
+            --output "$RUNNER_TEMP/pkl"
       - run: |
           test "$(sed -n 's/^  version = "\([^"]*\)"$/\1/p' PklProject)" = "$WORKBENCH_CONTRACT_VERSION"
+          set -euo pipefail
+          test -n "$PKL_EXECUTABLE"
+          case "$PKL_EXECUTABLE" in /*) ;; *) echo "PKL_EXECUTABLE is not absolute: $PKL_EXECUTABLE" >&2; exit 1 ;; esac
+          test -x "$PKL_EXECUTABLE"
           mkdir contracts
-          mise exec -- pkl project package --skip-publish-check --output-path contracts .
+          "$PKL_EXECUTABLE" project package --skip-publish-check --output-path contracts .
           for artifact in contracts/workbench@0.8.0 contracts/workbench@0.8.0.zip; do
             shasum -a 256 "$artifact" | awk '{print $1}' > "$artifact.sha256"
           done

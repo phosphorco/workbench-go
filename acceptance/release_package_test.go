@@ -53,7 +53,7 @@ func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
 	for _, marker := range []string{
 		"WORKBENCH_VERSION: 0.8.0",
 		"WORKBENCH_CONTRACT_VERSION: 0.8.0",
-		"mise exec -- pkl project package --skip-publish-check --output-path contracts .",
+		"\"$PKL_EXECUTABLE\" project package --skip-publish-check --output-path contracts .",
 		"contracts/workbench@0.8.0.zip",
 		"gh release create \"${{ github.ref_name }}\" release-assets/*",
 	} {
@@ -70,6 +70,37 @@ func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
 	}
 	if strings.Contains(acceptance, "releases/download/0.6.1/workbench@0.6.1") {
 		t.Fatal("release acceptance points at nonexistent release coordinate 0.6.1 for contract package 0.6.1")
+	}
+}
+
+func TestContractsJobUsesHashVerifiedPklProducer(t *testing.T) {
+	workflowBytes, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(workflowBytes)
+	start := strings.Index(workflow, "\n  contracts:\n")
+	end := strings.Index(workflow, "\n  candidate-checks:\n")
+	if start < 0 || end <= start {
+		t.Fatal("release workflow lacks a bounded contracts job")
+	}
+	contractsJob := workflow[start:end]
+	for _, marker := range []string{
+		"release/acquire-pkl.sh",
+		"--lock release/runtime-lock.json",
+		"--platform linux-x64",
+		"--output \"$RUNNER_TEMP/pkl\"",
+		"test -n \"$PKL_EXECUTABLE\"",
+		"case \"$PKL_EXECUTABLE\" in /*) ;; *)",
+		"test -x \"$PKL_EXECUTABLE\"",
+		"\"$PKL_EXECUTABLE\" project package --skip-publish-check --output-path contracts .",
+	} {
+		if !strings.Contains(contractsJob, marker) {
+			t.Fatalf("contracts job lacks locked Pkl producer marker %q", marker)
+		}
+	}
+	if strings.Contains(contractsJob, "mise exec -- pkl project package") {
+		t.Fatal("contracts job still invokes ambient mise Pkl for package production")
 	}
 }
 
@@ -166,8 +197,12 @@ func TestReleasePackageCandidate(t *testing.T) {
 
 func packageReleaseCandidate(t *testing.T, projectRoot, outputRoot string) {
 	t.Helper()
+	pklExecutable := os.Getenv("PKL_EXECUTABLE")
+	if pklExecutable == "" {
+		pklExecutable = "pkl"
+	}
 	command := exec.Command(
-		"pkl", "project", "package",
+		pklExecutable, "project", "package",
 		"--skip-publish-check",
 		"--output-path", outputRoot,
 		projectRoot,
