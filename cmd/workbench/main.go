@@ -22,7 +22,7 @@ import (
 const (
 	defaultCommitPlan = "commit-plan.pkl"
 	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
-	usage             = "usage: workbench plan <verb> <file.plan.pkl> | setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable resolve|check|build|seal|verify|check-fresh|promote|materialize ... | skills check | self skills list|export | version"
+	usage             = "usage: workbench plan <verb> <file.plan.pkl> | setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable resolve|check|build|seal|verify|check-fresh|promote|materialize ... | skills check | context ... | self skills list|export | version"
 )
 
 const rootHelp = `workbench <command>
@@ -38,6 +38,7 @@ Environment operations:
   buildable <operation>          Resolve, check, build, seal, verify, check-fresh,
                                 promote, or materialize a declared buildable.
   skills check                  Validate the project's local skill catalog.
+  context                       Install, run, and inspect bounded context enrichment.
 
 Bundled agent skills:
   self skills list              List the skills bundled with this binary (JSON).
@@ -152,6 +153,9 @@ func run(ctx context.Context, arguments []string, workingDirectory func() (strin
 	}
 	if len(arguments) > 0 && arguments[0] == "self" {
 		return runSelfCommand(arguments[1:], workingDirectory, output)
+	}
+	if len(arguments) > 0 && arguments[0] == "context" {
+		return runContextCommand(ctx, arguments[1:], workingDirectory, output, diagnostics)
 	}
 	application := chooseApplications(version.IsDevelopment(), developmentApplications, releasedApplications)
 	return runWith(ctx, arguments, workingDirectory, output, diagnostics, application)
