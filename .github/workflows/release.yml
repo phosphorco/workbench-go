@@ -195,6 +195,7 @@ jobs:
           mkdir -p "$no_source" "$activation" "$home"
           export HOME="$smoke/home"
           common=(--home-config "$home_config" --runtime-dir "$runtime_dir" --socket "$socket" --start-lock "$start_lock" --server-lock "$server_lock" --cache-dir "$cache_dir")
+          expected_daemon_args="context serve --home-config $home_config --runtime-dir $runtime_dir --socket $socket --start-lock $start_lock --server-lock $server_lock --cache-dir $cache_dir"
           diagnostic_dir="$RUNNER_TEMP/workbench-context-smoke-diagnostics"
           failure_report="$diagnostic_dir/failure.log"
           mkdir -p "$diagnostic_dir"
@@ -482,6 +483,7 @@ jobs:
             head -c 262144 "$failure_report" >&2
           }
           daemon_pid=""
+          daemon_validated=false
           daemon_children=()
           collect_descendants() {
             local parent="$1"
@@ -492,8 +494,68 @@ jobs:
               collect_descendants "$child"
             done < <(pgrep -P "$parent" || true)
           }
+          validate_owned_daemon() {
+            local pid="$1"
+            daemon_validated=false
+            daemon_command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+            case "$daemon_command" in
+              *" $expected_daemon_args") daemon_validated=true; return 0 ;;
+              *)
+                echo "refusing to clean unexpected installed context socket owner: pid=$pid command=$daemon_command" >&2
+                return 1
+                ;;
+            esac
+          }
+          discover_owned_daemon() {
+            if test -n "$daemon_pid" && test "$daemon_validated" = true; then return 0; fi
+            if ! test -e "$socket"; then
+              daemon_pid=""
+              daemon_validated=false
+              return 0
+            fi
+            if ! command -v lsof >/dev/null; then
+              echo "cannot discover installed context daemon: lsof unavailable" >&2
+              return 1
+            fi
+            local daemon_pids
+            local lsof_status=0
+            daemon_pids=$(lsof -t "$socket" 2>/dev/null) || lsof_status=$?
+            if test "$lsof_status" -ne 0 && test "$lsof_status" -ne 1; then
+              echo "cannot discover installed context daemon: lsof status=$lsof_status" >&2
+              return 1
+            fi
+            local daemon_pid_count
+            daemon_pid_count=$(printf '%s\n' "$daemon_pids" | sort -u | awk 'NF { count++ } END { print count + 0 }')
+            if test "$daemon_pid_count" -eq 0; then
+              rm -f "$socket"
+              test ! -e "$socket"
+              return 0
+            fi
+            if test "$daemon_pid_count" -ne 1; then
+              echo "refusing to clean ambiguous installed context socket owners: socket=$socket pids=$(printf '%s' "$daemon_pids" | tr '\n' ' ')" >&2
+              return 1
+            fi
+            local candidate_pid
+            local validation_status=0
+            candidate_pid=$(printf '%s\n' "$daemon_pids" | sort -u)
+            validate_owned_daemon "$candidate_pid" || validation_status=$?
+            if test "$validation_status" -ne 0; then
+              daemon_pid=""
+              return "$validation_status"
+            fi
+            daemon_pid="$candidate_pid"
+            daemon_children=()
+            collect_descendants "$daemon_pid"
+          }
           cleanup_runtime() {
+            discover_owned_daemon || return $?
             if test -z "$daemon_pid"; then return 0; fi
+            local validation_status=0
+            validate_owned_daemon "$daemon_pid" || validation_status=$?
+            if test "$validation_status" -ne 0; then
+              daemon_pid=""
+              return "$validation_status"
+            fi
             kill -TERM "$daemon_pid" 2>/dev/null || true
             for _ in $(seq 1 50); do
               if ! kill -0 "$daemon_pid" 2>/dev/null; then break; fi
@@ -515,6 +577,7 @@ jobs:
             done
             test ! -e "$socket"
             daemon_pid=""
+            daemon_validated=false
           }
           cleanup() {
             status=$?
@@ -573,13 +636,9 @@ jobs:
           daemon_pids=$(lsof -t "$socket" | sort -u)
           check "daemon PID count" "one PID from lsof $socket" test "$(printf '%s\n' "$daemon_pids" | awk 'NF { count++ } END { print count + 0 }')" -eq 1
           daemon_pid="$daemon_pids"
-          daemon_command=$(ps -p "$daemon_pid" -o command=)
           current_stage="daemon identity"
-          current_command="context daemon argv contains the selected home config"
-          case "$daemon_command" in
-            *"context serve --home-config $home_config"*) ;;
-            *) echo "unexpected installed context daemon argv: $daemon_command" >&2; exit 1 ;;
-          esac
+          current_command="context daemon argv contains the selected runtime paths"
+          validate_owned_daemon "$daemon_pid" || exit $?
           collect_descendants "$daemon_pid"
           current_stage="daemon cleanup"
           current_command="cleanup_runtime joins the selected daemon and removes its socket"

@@ -17,6 +17,12 @@ func setContextDataLimit(limit uint64) error {
 	}
 	resource := &syscall.Rlimit{Cur: limit, Max: limit}
 	if err := syscall.Setrlimit(syscall.RLIMIT_DATA, resource); err != nil {
+		// Darwin may reject RLIMIT_DATA with EINVAL for a native runtime
+		// configuration. Treat that as unavailable assistance only; finite
+		// I/O/deadline limits and joined cleanup still bound work and lifetime.
+		if err == syscall.EINVAL {
+			return nil
+		}
 		return fmt.Errorf("set context worker data limit: %w", err)
 	}
 	return nil

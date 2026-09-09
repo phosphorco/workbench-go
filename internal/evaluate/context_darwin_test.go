@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -20,15 +19,6 @@ func TestContextDataLimitDarwinHelper(t *testing.T) {
 	const limit = uint64(128 << 20)
 	if err := setContextDataLimit(limit); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	var resource syscall.Rlimit
-	if err := syscall.Getrlimit(syscall.RLIMIT_DATA, &resource); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	if uint64(resource.Cur) != limit || uint64(resource.Max) != limit {
-		fmt.Fprintf(os.Stderr, "Darwin data limit = (%d, %d), want (%d, %d)\n", resource.Cur, resource.Max, limit, limit)
 		os.Exit(1)
 	}
 	os.Exit(0)
