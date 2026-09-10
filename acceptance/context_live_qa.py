@@ -1714,6 +1714,16 @@ def provider_status(result: dict[str, object]) -> str:
     return "passed"
 
 
+def claude_event_has_session_start(value: object) -> bool:
+    if isinstance(value, str):
+        return value == "SessionStart"
+    if isinstance(value, dict):
+        return any(claude_event_has_session_start(item) for item in value.values())
+    if isinstance(value, list):
+        return any(claude_event_has_session_start(item) for item in value)
+    return False
+
+
 def claude_interactive(claude_argv: list[str], prompts: list[str], *, env: dict[str, str], cwd: Path, timeout: float, max_output: int) -> dict[str, object]:
     started = time.monotonic()
     process = subprocess.Popen(claude_argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
@@ -1784,25 +1794,19 @@ def claude_interactive(claude_argv: list[str], prompts: list[str], *, env: dict[
             return {}
         return value if isinstance(value, dict) else {}
 
-    def has_session_start(value: object) -> bool:
-        if isinstance(value, str):
-            return value == "SessionStart"
-        if isinstance(value, dict):
-            return any(has_session_start(item) for item in value.values())
-        if isinstance(value, list):
-            return any(has_session_start(item) for item in value)
-        return False
+    clear_terminal_results = 0
+    reset_boundary_observed = False
 
-    def wait_for(predicate: Any) -> None:
-        nonlocal session_starts, successful_results
+    def wait_for(predicate: Any, *, count_result: bool = True) -> None:
+        nonlocal session_starts, successful_results, clear_terminal_results
         while True:
             value = receive()
-            if has_session_start(value):
+            if claude_event_has_session_start(value):
                 session_starts += 1
             if value.get("type") == "result" and value.get("is_error") is True:
                 raise RunnerError("Claude provider returned an unsuccessful result boundary")
             if predicate(value):
-                if value.get("type") == "result":
+                if value.get("type") == "result" and count_result:
                     successful_results += 1
                 return
 
@@ -1815,6 +1819,9 @@ def claude_interactive(claude_argv: list[str], prompts: list[str], *, env: dict[
         prior_session_starts = session_starts
         write_line(prompts[2])
         wait_for(lambda _value: session_starts > prior_session_starts)
+        reset_boundary_observed = session_starts > prior_session_starts
+        wait_for(lambda value: value.get("type") == "result" and value.get("is_error") is not True and value.get("result", "") in ("", None), count_result=False)
+        clear_terminal_results += 1
         write_line(prompts[3])
         wait_for(lambda value: value.get("type") == "result" and value.get("is_error") is not True)
     except (OSError, RunnerError, TimeoutError, ValueError) as caught:
@@ -1851,8 +1858,8 @@ def claude_interactive(claude_argv: list[str], prompts: list[str], *, env: dict[
                 if len(stdout_buffer) < max_output:
                     stdout_buffer.extend(stdout_line_buffer[: max_output - len(stdout_buffer)])
         stderr_thread.join(timeout=3)
-    completed_steps = successful_results == 3 and session_starts >= 1 and not error
-    return {"argv": claude_argv, "pid": process.pid, "exit": process.returncode if process.returncode is not None else 124, "timed_out": "deadline" in error.lower(), "process_group_gone": group_gone, "duration_ms": round((time.monotonic() - started) * 1000, 1), "stdout": bytes(stdout_buffer), "stderr": stderr_result.get("bytes", b""), "stdout_complete": stdout_total <= max_output, "stderr_complete": stderr_result.get("complete", True), "stdout_total_bytes": stdout_total, "stderr_total_bytes": stderr_result.get("total", 0), "drain_joined": (not stderr_thread.is_alive()) and stdout_drain_joined, "writer_error": [], "native_boundary_error": error, "completed_steps": completed_steps, "successfulTerminalResults": successful_results, "nativeResetObserved": session_starts >= 1, "intentional_shutdown": bool(completed_steps and process.returncode not in (None, 0))}
+    completed_steps = successful_results == 3 and reset_boundary_observed and clear_terminal_results == 1 and not error
+    return {"argv": claude_argv, "pid": process.pid, "exit": process.returncode if process.returncode is not None else 124, "timed_out": "deadline" in error.lower(), "process_group_gone": group_gone, "duration_ms": round((time.monotonic() - started) * 1000, 1), "stdout": bytes(stdout_buffer), "stderr": stderr_result.get("bytes", b""), "stdout_complete": stdout_total <= max_output, "stderr_complete": stderr_result.get("complete", True), "stdout_total_bytes": stdout_total, "stderr_total_bytes": stderr_result.get("total", 0), "drain_joined": (not stderr_thread.is_alive()) and stdout_drain_joined, "writer_error": [], "native_boundary_error": error, "completed_steps": completed_steps, "successfulTerminalResults": successful_results, "clearTerminalResults": clear_terminal_results, "nativeResetObserved": reset_boundary_observed, "intentional_shutdown": bool(completed_steps and process.returncode not in (None, 0))}
 
 
 def run_live_claude(workbench: Path, claude: Path, auth: Path, output: Path, deadline: float, max_output: int, temp_root: Path, identity: dict[str, object], case_name: str = "enabled") -> dict[str, object]:
@@ -2280,6 +2287,19 @@ def self_test_protocol() -> int:
     with tempfile.TemporaryDirectory(prefix="cqa-protocol-") as root_name:
         root = Path(root_name)
         evidence = root / "evidence"
+        claude_fake = (
+            "import json,sys\n"
+            "for line in sys.stdin:\n"
+            "    value=json.loads(line)\n"
+            "    content=value.get('message',{}).get('content','')\n"
+            "    events=([{'type':'system','subtype':'conversation_reset'},{'type':'hook','event':'SessionStart'},"
+            "{'type':'system','subtype':'init'},{'type':'result','is_error':False,'result':''}] if content == '/clear' "
+            "else [{'type':'result','is_error':False,'result':'task'}])\n"
+            "    for event in events:\n"
+            "        print(json.dumps(event), flush=True)\n"
+        )
+        claude_result = claude_interactive([sys.executable, "-c", claude_fake], ["first", "second", "/clear", "after"], env=os.environ.copy(), cwd=root, timeout=5, max_output=MAX_CODEX_EVIDENCE)
+        claude_reset_runtime = claude_result.get("completed_steps") is True and claude_result.get("successfulTerminalResults") == 3 and claude_result.get("clearTerminalResults") == 1 and claude_result.get("nativeResetObserved") is True and not claude_result.get("native_boundary_error")
         fake = "import json,sys;\nfor line in sys.stdin:\n m=json.loads(line); print(json.dumps({'jsonrpc':'2.0','id':m.get('id'),'result':{'method':m.get('method')}}),flush=True)"
         client = CodexClient([sys.executable, "-c", fake], cwd=root, env=os.environ.copy(), evidence=evidence, approvals=root / "approvals", deadline=5, max_evidence=MAX_CODEX_EVIDENCE)
         try:
@@ -2307,7 +2327,7 @@ def self_test_protocol() -> int:
         finally:
             nonzero_cleaned = nonzero_client.close()
         valid_response_then_nonzero_rejected = valid_response and nonzero_cleaned and bool(nonzero_client.shutdown_info.get("unexpectedExit")) and nonzero_client.shutdown_info.get("exit") == 7
-        witness = {"requestResponseRoundTrip": passed, "ownedProcessGroupGone": cleaned, "evidenceBounded": all(path.stat().st_size <= MAX_CODEX_EVIDENCE for path in evidence.glob("*.jsonl")), "validResponseThenNonzeroRejected": valid_response_then_nonzero_rejected, "cappedStderrMarkedIncomplete": stderr_capture_bound}
+        witness = {"requestResponseRoundTrip": passed, "ownedProcessGroupGone": cleaned, "evidenceBounded": all(path.stat().st_size <= MAX_CODEX_EVIDENCE for path in evidence.glob("*.jsonl")), "validResponseThenNonzeroRejected": valid_response_then_nonzero_rejected, "cappedStderrMarkedIncomplete": stderr_capture_bound, "claudeResetBoundary": bool(claude_reset_runtime)}
         print(json.dumps(witness, indent=2, sort_keys=True))
         return 0 if all(witness.values()) else 1
 

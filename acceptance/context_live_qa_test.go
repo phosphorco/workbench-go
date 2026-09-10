@@ -254,6 +254,22 @@ func TestContextLiveQAOfflineCounterexamples(t *testing.T) {
 	}
 }
 
+func TestContextLiveQAClaudeResetBoundary(t *testing.T) {
+	command := exec.Command("python3", "context_live_qa.py", "--self-test-protocol")
+	command.Dir = filepath.Join("..", "acceptance")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("Claude reset-boundary witness failed: %v", err)
+	}
+	var witness map[string]bool
+	if err := json.Unmarshal(output, &witness); err != nil {
+		t.Fatalf("Claude reset-boundary witness was not JSON: %v", err)
+	}
+	if !witness["claudeResetBoundary"] {
+		t.Fatalf("Claude reset-boundary witness = %v, want true", witness["claudeResetBoundary"])
+	}
+}
+
 func sameStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
