@@ -5,12 +5,12 @@ const reference = Path.resolve(process.argv[2] ?? "tools/verify")
 const Manifest = await import(Path.join(reference, "src/Manifest.mts"))
 const destination = Path.join(import.meta.dir, "demo")
 await Fs.mkdir(destination, { recursive: true })
-const paths = ["verify.pkl", ...["bun-install", "bun-test", "workspace-sync"].map(id => `verifiers/${id}/VERIFIER.pkl`)]
+const paths = ["workbench.pkl", ...["bun-install", "bun-test", "workspace-sync"].map(id => `verifiers/${id}/VERIFIER.pkl`)]
 for (const file of paths) {
   await Fs.mkdir(Path.dirname(Path.join(destination, file)), { recursive: true })
   await Fs.copyFile(Path.join(reference, "demo/repo", file), Path.join(destination, file))
 }
-const child = Bun.spawn(["pkl", "eval", "-f", "json", "--module-path", Path.join(reference, "schema"), Path.join(destination, "verify.pkl")], { stdout: "pipe", stderr: "pipe" })
+const child = Bun.spawn(["pkl", "eval", "-f", "json", "--module-path", Path.join(reference, "schema"), Path.join(destination, "workbench.pkl")], { stdout: "pipe", stderr: "pipe" })
 const output = await new Response(child.stdout).text()
 if (await child.exited !== 0) throw new Error(await new Response(child.stderr).text())
 const repository = JSON.parse(output)

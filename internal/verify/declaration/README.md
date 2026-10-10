@@ -1,7 +1,7 @@
 # Repository declaration
 
 `Evaluate(ctx, trackedBytes, verifyHome)` accepts plain Tree data. The map must
-include root `verify.pkl`; only `.pkl` entries are materialized, plus the supplied
+include root `workbench.pkl`; only `.pkl` entries are materialized, plus the supplied
 root `PklProject.deps.json` is consumed as a lock. No checkout path is accepted.
 The private materialization contains regular files, not checkout symlinks.
 The module path is populated from the binary's embedded Workbench schemas.

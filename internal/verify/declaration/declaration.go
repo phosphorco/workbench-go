@@ -18,7 +18,7 @@ import (
 	contracts "github.com/phosphorco/workbench-go/pkl"
 )
 
-const Document = "verify.pkl"
+const Document = "workbench.pkl"
 
 // Declaration retains evaluated manifest JSON in authored property order for version parity.
 type Declaration struct {

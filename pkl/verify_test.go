@@ -76,8 +76,8 @@ func TestDemoVerifierJSONMatchesReferenceBytes(t *testing.T) {
 			}
 		})
 	}
-	reference := evaluated(t, "../examples/verify/reference", "../examples/verify/demo/verify.pkl")
-	actual := evaluated(t, ".", "../examples/verify/demo/verify.pkl")
+	reference := evaluated(t, "../examples/verify/reference", "../examples/verify/demo/workbench.pkl")
+	actual := evaluated(t, ".", "../examples/verify/demo/workbench.pkl")
 	var expected, got map[string]json.RawMessage
 	if err := json.Unmarshal(reference, &expected); err != nil {
 		t.Fatal(err)
@@ -247,5 +247,5 @@ func TestEmbeddedVerificationSchemasEvaluate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	evaluated(t, root, "../examples/verify/demo/verify.pkl")
+	evaluated(t, root, "../examples/verify/demo/workbench.pkl")
 }

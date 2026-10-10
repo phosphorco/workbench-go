@@ -17,7 +17,7 @@
     "verifiers/bun-test/run.ts",
     "verifiers/workspace-sync/VERIFIER.pkl",
     "verifiers/workspace-sync/run.ts",
-    "verify.pkl",
+    "workbench.pkl",
     "workspace.pkl"
   ],
   "units": [

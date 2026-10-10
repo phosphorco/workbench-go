@@ -2,7 +2,7 @@
 The verifier programs and image builds belong to the verifier catalogue; this
 example contains declarations only.
 
-`demo/` contains unchanged `verify.pkl` and `VERIFIER.pkl` fixtures from
+`demo/` contains unchanged `workbench.pkl` and `VERIFIER.pkl` fixtures from
 `tools/verify/demo/repo/`; `reference/` snapshots `tools/verify/schema/` from the
 verify rewrite reference. The Pkl package tests evaluate these fixtures against
 both schema directories and require byte-identical Verifier JSON, including

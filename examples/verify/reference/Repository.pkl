@@ -1,4 +1,4 @@
-/// A repository's `verify.pkl` amends this module.
+/// A repository's `workbench.pkl` amends this module.
 module Repository
 
 import "Verifier.pkl"

@@ -120,7 +120,7 @@ func ResolveFocus(o Options, declared map[string]Focus) (Focus, error) {
 	for _, name := range o.FocusNames {
 		named, ok := declared[name]
 		if !ok {
-			return f, &UsageError{fmt.Sprintf("no focus %s in verify.pkl", quote(name))}
+			return f, &UsageError{fmt.Sprintf("no focus %s in workbench.pkl", quote(name))}
 		}
 		f = Merge(f, named)
 	}

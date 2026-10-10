@@ -28,7 +28,7 @@ func TestEnvRefused(t *testing.T) {
 	t.Setenv("DECLARATION_SECRET", "leaked")
 	for _, name := range []string{"HOME", "PATH", "DECLARATION_SECRET"} {
 		t.Run(name, func(t *testing.T) {
-			_, err := evaluate(t, map[string][]byte{"verify.pkl": source(`focuses { ["secret"] = new Focus { codes { read("env:` + name + `") } } }`)}, "")
+			_, err := evaluate(t, map[string][]byte{"workbench.pkl": source(`focuses { ["secret"] = new Focus { codes { read("env:` + name + `") } } }`)}, "")
 			if err == nil || !strings.Contains(err.Error(), "env:"+name) {
 				t.Fatalf("environment read accepted or wrong refusal: %v", err)
 			}
@@ -43,7 +43,7 @@ func TestUntrackedImportRefused(t *testing.T) {
 	}
 	for _, name := range []string{"extra.pkl", untracked, "https://example.invalid/extra.pkl"} {
 		t.Run(name, func(t *testing.T) {
-			_, err := evaluate(t, map[string][]byte{"verify.pkl": source(`focuses { ["extra"] = new Focus { codes { import("` + name + `").value } } }`)}, "")
+			_, err := evaluate(t, map[string][]byte{"workbench.pkl": source(`focuses { ["extra"] = new Focus { codes { import("` + name + `").value } } }`)}, "")
 			if err == nil || !strings.Contains(err.Error(), "extra.pkl") {
 				t.Fatalf("untracked import accepted or wrong refusal: %v", err)
 			}
@@ -54,8 +54,8 @@ func TestUntrackedImportRefused(t *testing.T) {
 func TestLateEditInvisible(t *testing.T) {
 	root := t.TempDir()
 	original := source(`focuses { ["original"] = new Focus {} }`)
-	tracked := map[string][]byte{"verify.pkl": bytes.Clone(original)}
-	if err := os.WriteFile(filepath.Join(root, "verify.pkl"), source(`focuses { ["late"] = new Focus {} }`), 0600); err != nil {
+	tracked := map[string][]byte{"workbench.pkl": bytes.Clone(original)}
+	if err := os.WriteFile(filepath.Join(root, "workbench.pkl"), source(`focuses { ["late"] = new Focus {} }`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	value, err := evaluate(t, tracked, "")
@@ -222,7 +222,7 @@ func offlineFixture(t *testing.T) (map[string][]byte, string, string, string) {
 	if err := os.WriteFile(archivePath, archive.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
-	files := map[string][]byte{"verify.pkl": source(`focuses { ["package"] = new Focus { codes { import("` + uri + `#/value.pkl").value } } }`), "PklProject.deps.json": lock}
+	files := map[string][]byte{"workbench.pkl": source(`focuses { ["package"] = new Focus { codes { import("` + uri + `#/value.pkl").value } } }`), "PklProject.deps.json": lock}
 	return files, home, metadataPath, archivePath
 }
 
@@ -260,7 +260,7 @@ func TestOfflinePackages(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "unlocked package":
-				files["verify.pkl"] = bytes.ReplaceAll(files["verify.pkl"], []byte("tool@1.0.0"), []byte("tool@2.0.0"))
+				files["workbench.pkl"] = bytes.ReplaceAll(files["workbench.pkl"], []byte("tool@1.0.0"), []byte("tool@2.0.0"))
 			}
 			if _, err := evaluate(t, files, home); err == nil {
 				t.Fatal("accepted unavailable or unpinned package")
@@ -271,7 +271,7 @@ func TestOfflinePackages(t *testing.T) {
 
 func TestInvalidTrackedPathRefused(t *testing.T) {
 	for _, name := range []string{"../escape.pkl", "/escape.pkl", "nested/../../escape.pkl", "nested\\escape.pkl"} {
-		_, err := evaluate(t, map[string][]byte{"verify.pkl": source(""), name: []byte("value = 1")}, "")
+		_, err := evaluate(t, map[string][]byte{"workbench.pkl": source(""), name: []byte("value = 1")}, "")
 		if err == nil || !strings.Contains(err.Error(), "invalid tracked Pkl path") {
 			t.Fatalf("path %q: %v", name, err)
 		}
@@ -280,7 +280,7 @@ func TestInvalidTrackedPathRefused(t *testing.T) {
 
 func TestResourcesRefused(t *testing.T) {
 	for _, uri := range []string{"file:/etc/passwd", "https://example.invalid/file", "modulepath:/Verifier.pkl", "prop:other"} {
-		_, err := evaluate(t, map[string][]byte{"verify.pkl": source(`focuses { ["resource"] = new Focus { codes { read("` + uri + `").text } } }`)}, "")
+		_, err := evaluate(t, map[string][]byte{"workbench.pkl": source(`focuses { ["resource"] = new Focus { codes { read("` + uri + `").text } } }`)}, "")
 		if err == nil || !strings.Contains(err.Error(), uri) {
 			t.Fatalf("resource %s: %v", uri, err)
 		}
@@ -288,7 +288,7 @@ func TestResourcesRefused(t *testing.T) {
 }
 
 func TestMissingRootRefused(t *testing.T) {
-	if _, err := evaluate(t, map[string][]byte{"nested/verify.pkl": source("")}, ""); err == nil {
+	if _, err := evaluate(t, map[string][]byte{"nested/workbench.pkl": source("")}, ""); err == nil {
 		t.Fatal("accepted missing root declaration")
 	}
 }
@@ -342,7 +342,7 @@ func TestOfflinePackagesTransitiveLock(t *testing.T) {
 		}
 		return data
 	}
-	files := map[string][]byte{"verify.pkl": source(`focuses { ["package"] = new Focus { codes { import("` + tool + `#/value.pkl").value } } }`), "PklProject.deps.json": lock()}
+	files := map[string][]byte{"workbench.pkl": source(`focuses { ["package"] = new Focus { codes { import("` + tool + `#/value.pkl").value } } }`), "PklProject.deps.json": lock()}
 	value, err := evaluate(t, files, home)
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +388,7 @@ func TestOfflinePackagesCacheUnchanged(t *testing.T) {
 	if len(entries) != 1 || entries[0].Name() != "cache" {
 		t.Fatalf("evaluation retained package staging: %v", entries)
 	}
-	files["verify.pkl"] = source(`focuses { ["env"] = new Focus { codes { read("env:PATH") } } }`)
+	files["workbench.pkl"] = source(`focuses { ["env"] = new Focus { codes { read("env:PATH") } } }`)
 	if _, err := evaluate(t, files, home); err == nil {
 		t.Fatal("expected failed evaluation")
 	}
@@ -403,7 +403,7 @@ func TestOfflinePackagesCacheUnchanged(t *testing.T) {
 
 func TestProjectSettingsInvisible(t *testing.T) {
 	files := map[string][]byte{
-		"verify.pkl": source(`focuses { ["env"] = new Focus { codes { read("env:PATH") } } }`),
+		"workbench.pkl": source(`focuses { ["env"] = new Focus { codes { read("env:PATH") } } }`),
 		"PklProject": []byte(`amends "pkl:Project"
 evaluatorSettings { allowedResources { "env:" } }
 `),
