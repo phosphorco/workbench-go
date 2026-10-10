@@ -57,18 +57,14 @@ func sortedPaths(paths []string) []string {
 
 // Own runs the select role against a caller-staged whole Tree. The caller owns
 // the fresh output directory and the staging lifetime. Scratch is never granted.
-// Process evidence is returned even on refusal; only a regular select.json is decoded.
+// Process evidence is returned even on refusal; selection JSON comes from stdout.
 func Own(ctx context.Context, tracked []string, invocation sandbox.Invocation) ([]Unit, sandbox.Outcome, error) {
 	invocation.Role, invocation.UnitID, invocation.ScratchDir = "select", "*", ""
 	outcome, err := sandbox.Execute(ctx, invocation)
 	if err != nil {
 		return nil, outcome, err
 	}
-	output, err := sandbox.ReadRegularOutput(invocation.OutputDir, "select.json")
-	if err != nil {
-		return nil, outcome, fmt.Errorf("select.json refused: %w", err)
-	}
-	units, err := Decode(output.Bytes, tracked)
+	units, err := Decode(outcome.Stdout, tracked)
 	return units, outcome, err
 }
 
@@ -77,24 +73,24 @@ func Own(ctx context.Context, tracked []string, invocation sandbox.Invocation) (
 // Input duplicates are removed and each closure is sorted; Unit order is retained.
 func Decode(data []byte, tracked []string) ([]Unit, error) {
 	if !utf8.Valid(data) {
-		return nil, fmt.Errorf("select.json is not UTF-8")
+		return nil, fmt.Errorf("select stdout is not UTF-8")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	value, err := jsonValue(decoder)
 	if err != nil {
-		return nil, fmt.Errorf("malformed select.json: %w", err)
+		return nil, fmt.Errorf("malformed select stdout: %w", err)
 	}
 	if _, err := decoder.Token(); err != io.EOF {
-		return nil, fmt.Errorf("select.json has trailing data")
+		return nil, fmt.Errorf("select stdout has trailing data")
 	}
 	object, ok := value.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("select.json must be an object")
+		return nil, fmt.Errorf("select stdout must be an object")
 	}
 	rawUnits, ok := object["units"].([]any)
 	if !ok {
-		return nil, fmt.Errorf("select.json lacks units[]")
+		return nil, fmt.Errorf("select stdout lacks units[]")
 	}
 	allowed := make(map[string]bool, len(tracked))
 	for _, p := range tracked {
@@ -115,9 +111,8 @@ func Decode(data []byte, tracked []string) ([]Unit, error) {
 			return nil, fmt.Errorf("duplicate unitId %q", id)
 		}
 		seen[id] = true
-		display := id
 		if rawDisplay, present := object["display"]; present {
-			display, ok = rawDisplay.(string)
+			_, ok = rawDisplay.(string)
 			if !ok {
 				return nil, fmt.Errorf("unit %q display must be a string", id)
 			}
@@ -140,7 +135,7 @@ func Decode(data []byte, tracked []string) ([]Unit, error) {
 			}
 			inputs = append(inputs, p)
 		}
-		units = append(units, Unit{UnitID: id, Display: display, Inputs: sortedPaths(inputs)})
+		units = append(units, Unit{UnitID: id, Display: id, Inputs: sortedPaths(inputs)})
 	}
 	return units, nil
 }

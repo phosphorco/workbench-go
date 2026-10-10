@@ -11,15 +11,18 @@ possible Bun glob syntax.
 `Own(ctx, tracked, sandbox.Invocation)` uses a caller-staged whole Tree, program,
 upstream mounts and fresh output directory. It forces role `select`, unit `*`
 (stdin `{"unitId":"*"}`), and no Scratch. The sandbox mounts /work read-only.
-Only a regular `/out/select.json` is accepted via `sandbox.ReadRegularOutput`;
-artifact symlinks collected as mode `120000` remain refused for selection. The returned Outcome retains process
-and output evidence for the engine. No cache is owned here.
+Selection JSON is decoded from stdout. The returned Outcome retains the exact
+stdout bytes and process evidence for the engine, which stores those bytes as
+the cached select Action output named `select.json`. Files under /out never
+supply the selection. No cache is owned here.
 
 `Decode(bytes, tracked)` also lets the engine validate cached select artifacts.
 Malformed JSON, duplicate object keys and Unit IDs, non-string fields, escaping
 paths, and untracked inputs are refused as errors without partial Units. Inputs
-are deduplicated and sorted; Unit order is retained. An optional string `display`
-is preserved, otherwise the Unit ID is used. Unknown extension fields are allowed.
+are deduplicated and sorted; Unit order is retained. Display is always the Unit ID,
+matching `Engine.mts` (`const display = unit.unitId`).
+An optional `display` extension is still checked for string type but cannot override
+the engine-derived display. Unknown extension fields are allowed.
 
 `SelectAction(RunSpec, whole []Input)` exposes content-key ingredients: verifier
 ID/version, select role, wildcard Unit ID, all whole-Tree path/digest/mode entries,
@@ -30,15 +33,10 @@ host staging path or Scratch enters this value.
 
 ## Reference differences
 
-The TypeScript reference and current demo write selection JSON to stdout and the
-engine stores that stdout as `select.json`. This package follows the commissioned
-file protocol: the Verifier must write `/out/select.json`. The demo parity test
-uses the unchanged demo program and pinned Bun image, with its command wrapped as
-`sh -c 'bun /verifier/run.ts > /out/select.json'`. Engine integration must adapt
-stdout-producing commands or update those Verifiers; there is no stdout fallback.
-Duplicate Unit IDs, duplicate JSON keys, empty Unit IDs, invalid UTF-8 and escaping
-paths are rejected more strictly than the reference decoder. `display` is an
-additional requested result field.
+The stdout protocol and exact demo command `bun /verifier/run.ts` match the
+reference. Duplicate Unit IDs, duplicate JSON keys, empty Unit IDs, invalid UTF-8,
+escaping paths and non-string display extensions are rejected more strictly than
+the reference decoder. The result's additional Display field equals the Unit ID.
 
 Regenerate fixtures with:
 

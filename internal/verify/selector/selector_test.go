@@ -115,9 +115,9 @@ func TestEscapingPathsRefusedEvenIfTracked(t *testing.T) {
 	}
 }
 
-func TestDecodeSortsDeduplicatesAndPreservesUnitOrder(t *testing.T) {
+func TestDecodeSortsDeduplicatesPreservesOrderAndUsesReferenceDisplay(t *testing.T) {
 	units, err := selector.Decode([]byte(`{"units":[{"unitId":"z","display":"project z","inputs":["b","a","b"]},{"unitId":"a","inputs":[]}]}`), []string{"a", "b"})
-	want := []selector.Unit{{UnitID: "z", Display: "project z", Inputs: []string{"a", "b"}}, {UnitID: "a", Display: "a", Inputs: []string{}}}
+	want := []selector.Unit{{UnitID: "z", Display: "z", Inputs: []string{"a", "b"}}, {UnitID: "a", Display: "a", Inputs: []string{}}}
 	if err != nil || !reflect.DeepEqual(units, want) {
 		t.Fatalf("%+v %v", units, err)
 	}
@@ -129,25 +129,26 @@ func invocation(t *testing.T, script string) sandbox.Invocation {
 }
 
 func TestOwnProtocolAndReadOnlyWholeTree(t *testing.T) {
-	in := invocation(t, `set -eu; test "$VERIFY_ROLE" = select; test "$VERIFY_UNIT" = '*'; test "$(cat)" = '{"unitId":"*"}'; test ! -e /scratch; test "$(cat /work/a)" = tracked; if touch /work/changed; then exit 9; fi; printf '{"units":[{"unitId":"u","inputs":["a"]}]}' > /out/select.json`)
+	in := invocation(t, `set -eu; test "$VERIFY_ROLE" = select; test "$VERIFY_UNIT" = '*'; test "$(cat)" = '{"unitId":"*"}'; test ! -e /scratch; test "$(cat /work/a)" = tracked; if touch /work/changed; then exit 9; fi; printf '{"units":[{"unitId":"u","inputs":["a"]}]}'`)
 	in.Role, in.UnitID, in.ScratchDir = "run", "original", t.TempDir()
 	if err := os.WriteFile(filepath.Join(in.WorkDir, "a"), []byte("tracked"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	units, outcome, err := selector.Own(context.Background(), []string{"a"}, in)
-	if err != nil || len(units) != 1 || units[0].Inputs[0] != "a" || outcome.ExitCode != 0 {
+	if err != nil || len(units) != 1 || units[0].Inputs[0] != "a" || outcome.ExitCode != 0 || string(outcome.Stdout) != `{"units":[{"unitId":"u","inputs":["a"]}]}` {
 		t.Fatalf("%+v %+v %v", units, outcome, err)
 	}
 }
 
-func TestOwnRefusesMissingMalformedUntrackedSymlinkAndFailedSelection(t *testing.T) {
+func TestOwnRefusesMissingMalformedUntrackedAndFailedSelection(t *testing.T) {
 	scripts := []string{
-		`printf '{"units":[]}'`,
-		`printf malformed > /out/select.json`,
-		`printf '{"units":[{"unitId":"u","inputs":["untracked"]}]}' > /out/select.json`,
+		`true`,
+		`printf malformed`,
+		`printf '{"units":[{"unitId":"u","inputs":["untracked"]}]}'`,
+		`printf '{"units":[]}' > /out/select.json`,
 		`printf '{"units":[]}' > /out/real; ln -s real /out/select.json`,
 		`mkdir /out/select.json`,
-		`printf '{"units":[]}' > /out/select.json; exit 23`,
+		`printf '{"units":[]}'; exit 23`,
 	}
 	for _, script := range scripts {
 		t.Run(script, func(t *testing.T) {
@@ -169,7 +170,8 @@ func TestOwnDemoBunTestReferenceUnits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := invocation(t, `bun /verifier/run.ts > /out/select.json`)
+	in := invocation(t, "")
+	in.Command = []string{"bun", "/verifier/run.ts"}
 	in.Image = bunImage
 	in.WorkDir = filepath.Join(absolute, "work")
 	in.VerifierDir = filepath.Join(in.WorkDir, "verifiers/bun-test")
@@ -196,10 +198,10 @@ func TestSelectActionExposesCompleteKeyInputsWithoutAliasing(t *testing.T) {
 	}
 }
 
-func TestOwnAllowsOtherOutputSymlinks(t *testing.T) {
-	in := invocation(t, `printf '{"units":[]}' > /out/select.json; ln -s /host/not-granted /out/artifact-link`)
+func TestOwnDecodesStdoutRegardlessOfSelectJSONSymlink(t *testing.T) {
+	in := invocation(t, `printf '{"units":[]}'; ln -s /host/not-granted /out/select.json`)
 	units, outcome, err := selector.Own(context.Background(), nil, in)
-	if err != nil || len(units) != 0 || len(outcome.Outputs) != 2 || outcome.Outputs[0].Mode != "120000" || string(outcome.Outputs[0].Bytes) != "/host/not-granted" {
+	if err != nil || len(units) != 0 || len(outcome.Outputs) != 1 || outcome.Outputs[0].Mode != "120000" || string(outcome.Outputs[0].Bytes) != "/host/not-granted" {
 		t.Fatalf("%+v %+v %v", units, outcome, err)
 	}
 }
