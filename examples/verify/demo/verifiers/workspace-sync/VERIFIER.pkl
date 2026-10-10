@@ -1,0 +1,13 @@
+amends "modulepath:/Verifier.pkl"
+
+id = "workspace-sync"
+image = "verify-demo/pkl@sha256:d4dfb48b4cdb0a7114036a735b35160e5fb192fed8d845d5cffcb0f706d881e0"
+program { "verifiers/workspace-sync/run.ts" }
+command = new Listing { "bun" "/verifier/run.ts" }
+selector = new Paths { patterns { "workspace.pkl" } }
+displayNoun = "workspace policy"
+produces = "artifact"
+outputs { "package.json" "tsconfig.json" "tsconfig.base.json" "packages" }
+deterministic = true
+network = "none"
+timeout = 2.min

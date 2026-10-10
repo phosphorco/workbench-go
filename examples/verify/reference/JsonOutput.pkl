@@ -1,0 +1,8 @@
+/// The JSON rendering shared by every verify document: a Duration renders as seconds.
+module JsonOutput
+
+renderer: JsonRenderer = new JsonRenderer {
+  converters {
+    [Duration] = (duration) -> duration.toUnit("s").value
+  }
+}

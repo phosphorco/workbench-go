@@ -1,0 +1,18 @@
+amends "modulepath:/Verifier.pkl"
+
+id = "bun-install"
+image = "oven/bun@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895"
+program { "verifiers/bun-install/run.ts" }
+command = new Listing { "bun" "/verifier/run.ts" }
+selector = new Paths { patterns { "bun.lock" } }
+displayNoun = "lockfile"
+produces = "artifact"
+outputs { "node_modules" }
+requires { ["workspace-sync"] = "workspace-sync" }
+toolchain = new Weak {
+  retained { ".bun-cache/**" }
+  auditRate = 0.25
+}
+deterministic = true
+network = "unrestricted"
+timeout = 5.min
