@@ -1,0 +1,20 @@
+[
+  {
+    "id": "workspace-sync",
+    "imageDigest": "sha256:d4dfb48b4cdb0a7114036a735b35160e5fb192fed8d845d5cffcb0f706d881e0",
+    "manifestDigest": "af48d7fe0dc146a1352e787245650cc8f159c991694cbf9e7667ddf1044f6c0f",
+    "version": "dead7f357866eb45f2a6bb8209cd8fe1f7ba2027aadfa6f391e1fd4deb79a5d3"
+  },
+  {
+    "id": "bun-install",
+    "imageDigest": "sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+    "manifestDigest": "ea533e38540c04ce80944de8901872f7936350e899ce6ec5b959a5cad7dde5c9",
+    "version": "72540d20210525cbdf471b2a2ea610b43ca37a00750bee7b9a63da5b48d7ce67"
+  },
+  {
+    "id": "bun-test",
+    "imageDigest": "sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+    "manifestDigest": "bf2bca850f3f9b854427b6a4d4bff07e08c230b4ecd8adf5e2ec310cf33f3a4f",
+    "version": "391f44bca8682f7d985682c3db45d00416721e2c350da067526ce8f642c6ee7f"
+  }
+]
