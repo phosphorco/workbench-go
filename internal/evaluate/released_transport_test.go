@@ -143,7 +143,7 @@ func matchesAny(patterns []string, resource string) bool {
 }
 
 func TestReleasedRepositoryGrantsOnlyItsVerificationDependencies(t *testing.T) {
-	const prefix = "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#"
+	const prefix = "package://github.com/phosphorco/workbench-go/releases/download/0.9.0/workbench@0.9.0#"
 	for _, root := range []string{"/Repository.pkl", "/pkl/Repository.pkl"} {
 		schema, err := ReleasedContract(prefix + root)
 		if err != nil {
@@ -160,7 +160,7 @@ func TestReleasedRepositoryGrantsOnlyItsVerificationDependencies(t *testing.T) {
 				t.Fatalf("unregistered module allowed: %s", name)
 			}
 		}
-		if matchesAny(patterns, strings.Replace(prefix, "0.8.0", "0.8.1", -1)+"/pkl/Verifier.pkl") {
+		if matchesAny(patterns, strings.Replace(prefix, "0.9.0", "0.9.1", -1)+"/pkl/Verifier.pkl") {
 			t.Fatal("another release allowed")
 		}
 	}
