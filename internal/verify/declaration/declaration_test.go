@@ -402,13 +402,82 @@ func TestOfflinePackagesCacheUnchanged(t *testing.T) {
 }
 
 func TestProjectSettingsInvisible(t *testing.T) {
-	files := map[string][]byte{
-		"workbench.pkl": source(`focuses { ["env"] = new Focus { codes { read("env:PATH") } } }`),
-		"PklProject": []byte(`amends "pkl:Project"
-evaluatorSettings { allowedResources { "env:" } }
-`),
+	project := []byte(`amends "pkl:Project"
+evaluatorSettings {
+ allowedModules { ".*" }
+ allowedResources { ".*" }
+ env { ["SECRET"] = "injected" }
+}
+`)
+	for _, body := range []string{
+		`focuses { ["env"] = new Focus { codes { read("env:SECRET") } } }`,
+		`focuses { ["module"] = new Focus { codes { import("https://example.invalid/secret.pkl").value } } }`,
+	} {
+		_, err := evaluate(t, map[string][]byte{"workbench.pkl": source(body), "PklProject": project}, "")
+		if err == nil || !strings.Contains(err.Error(), "allowlist") {
+			t.Fatalf("project widened evaluator settings: %v", err)
+		}
 	}
-	if _, err := evaluate(t, files, ""); err == nil || !strings.Contains(err.Error(), "env:PATH") {
-		t.Fatalf("project widened evaluator settings: %v", err)
+	files := map[string][]byte{"workbench.pkl": source(`focuses { ["project"] = new Focus {} }`), "PklProject": project}
+	if _, err := evaluate(t, files, ""); err != nil {
+		t.Fatalf("ignored settings prevented valid evaluation: %v", err)
+	}
+}
+
+func TestProjectDependencyNotation(t *testing.T) {
+	files, home, metadataPath, archivePath := offlineFixture(t)
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	file, err := writer.Create("Base.pkl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte(`verifiers = new Mapping {}
+gates = new Mapping {}
+focuses = new Mapping { ["project"] = new Dynamic { files = new Listing {}; codes = new Listing {}; verifiers = new Listing {}; units = new Listing {}; members = new Listing {}; severities = new Listing {} } }`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(metadata, &value); err != nil {
+		t.Fatal(err)
+	}
+	value["packageZipChecksums"] = map[string]string{"sha256": hash(archive.Bytes())}
+	metadata, err = json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, metadata, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(archivePath, archive.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	files["PklProject.deps.json"], err = json.Marshal(map[string]any{"schemaVersion": 1, "resolvedDependencies": map[string]any{"package://offline.invalid/tool@1": map[string]any{"type": "remote", "uri": "projectpackage://offline.invalid/tool@1.0.0", "checksums": map[string]string{"sha256": hash(metadata)}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["PklProject"] = []byte(`amends "pkl:Project"
+dependencies { ["dep"] { uri = "package://offline.invalid/tool@1.0.0" } }
+`)
+	files["workbench.pkl"] = []byte(`amends "@dep/Base.pkl"`)
+	declaration, err := evaluate(t, files, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := declaration.Repository.Focuses["project"]; !ok {
+		t.Fatal("project dependency not resolved")
+	}
+	files["PklProject"] = []byte(`amends "pkl:Project"
+dependencies { ["dep"] { uri = "package://offline.invalid/missing@1.0.0" } }
+`)
+	if _, err := evaluate(t, files, home); err == nil || !strings.Contains(err.Error(), "not pinned") {
+		t.Fatalf("unpinned project dependency: %v", err)
 	}
 }

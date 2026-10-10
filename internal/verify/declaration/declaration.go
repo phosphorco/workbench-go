@@ -59,7 +59,7 @@ func Evaluate(ctx context.Context, files map[string][]byte, verifyHome string) (
 		}
 	}
 	for name, source := range files {
-		if !strings.HasSuffix(name, ".pkl") {
+		if !strings.HasSuffix(name, ".pkl") && name != "PklProject" && name != "PklProject.deps.json" {
 			continue
 		}
 		if !validPath(name) {
@@ -88,7 +88,7 @@ func Evaluate(ctx context.Context, files map[string][]byte, verifyHome string) (
 	defer removeCache()
 	manager := evaluator.NewEvaluatorManagerWithCommand([]string{"/usr/bin/env", "-i", "PATH=" + os.Getenv("PATH"), "pkl"})
 	defer manager.Close()
-	ev, err := manager.NewEvaluator(ctx, func(options *evaluator.EvaluatorOptions) {
+	configure := func(options *evaluator.EvaluatorOptions) {
 		options.AllowedModules = modules
 		options.AllowedResources = []string{`^prop:pkl\.outputFormat$`}
 		options.ModulePaths = []string{schema}
@@ -97,7 +97,8 @@ func Evaluate(ctx context.Context, files map[string][]byte, verifyHome string) (
 		options.Env = map[string]string{"PATH": os.Getenv("PATH")}
 		options.CacheDir = cacheDir
 		options.Logger = evaluator.NoopLogger
-	})
+	}
+	ev, err := manager.NewEvaluator(ctx, configure)
 	if err != nil {
 		return Declaration{}, fmt.Errorf("create declaration evaluator: %w", err)
 	}
@@ -105,6 +106,54 @@ func Evaluate(ctx context.Context, files map[string][]byte, verifyHome string) (
 		return Declaration{}, ctx.Err()
 	}
 	defer ev.Close()
+	if _, present := files["PklProject"]; present {
+		loader, err := manager.NewEvaluator(ctx, configure, func(options *evaluator.EvaluatorOptions) {
+			options.AllowedModules = append(append([]string{}, options.AllowedModules...), `^pkl:(Project|EvaluatorSettings)$`)
+		})
+		if err != nil {
+			return Declaration{}, err
+		}
+		if loader == nil {
+			return Declaration{}, ctx.Err()
+		}
+		defer loader.Close()
+		project, err := evaluator.LoadProjectFromEvaluator(ctx, loader, evaluator.FileSource(filepath.Join(frozen, "PklProject")))
+		if err != nil {
+			return Declaration{}, fmt.Errorf("load tracked PklProject: %w", err)
+		}
+		deps := project.Dependencies()
+		if len(deps.LocalDependencies) != 0 {
+			return Declaration{}, fmt.Errorf("project dependencies must be remote pinned packages")
+		}
+		for name, dep := range deps.RemoteDependencies {
+			metadata, _, err := PackageCachePaths(verifyHome, dep.PackageUri)
+			if err != nil {
+				return Declaration{}, err
+			}
+			content, ok := packages.files[metadata]
+			if !ok {
+				return Declaration{}, fmt.Errorf("PklProject dependency %s (%s) is not pinned in PklProject.deps.json", name, dep.PackageUri)
+			}
+			if dep.Checksums != nil && dep.Checksums.Sha256 != sha(content) {
+				return Declaration{}, fmt.Errorf("PklProject dependency %s checksum differs from lock", name)
+			}
+		}
+		projectEv, err := manager.NewEvaluator(ctx, configure, func(options *evaluator.EvaluatorOptions) {
+			options.ProjectBaseURI = (&url.URL{Scheme: "file", Path: frozen}).String()
+			options.DeclaredProjectDependencies = deps
+			for _, uri := range packages.uris {
+				options.AllowedModules = append(options.AllowedModules, "^"+regexp.QuoteMeta(strings.Replace(uri, "package:", "projectpackage:", 1))+"#/.+$")
+			}
+		})
+		if err != nil {
+			return Declaration{}, fmt.Errorf("create project evaluator: %w", err)
+		}
+		if projectEv == nil {
+			return Declaration{}, ctx.Err()
+		}
+		defer projectEv.Close()
+		ev = projectEv
+	}
 	output, err := ev.EvaluateOutputText(ctx, evaluator.FileSource(filepath.Join(frozen, Document)))
 	if err != nil {
 		return Declaration{}, fmt.Errorf("evaluate declaration: %w", err)

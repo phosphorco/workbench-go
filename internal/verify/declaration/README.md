@@ -1,14 +1,15 @@
 # Repository declaration
 
 `Evaluate(ctx, trackedBytes, verifyHome)` accepts plain Tree data. The map must
-include root `workbench.pkl`; only `.pkl` entries are materialized, plus the supplied
-root `PklProject.deps.json` is consumed as a lock. No checkout path is accepted.
+include root `workbench.pkl`; all tracked `.pkl` entries and, when present, the exact root `PklProject`
+and `PklProject.deps.json` entries are materialized. The lock is also consumed
+for offline checksum verification. No checkout path is accepted.
 The private materialization contains regular files, not checkout symlinks.
 The module path is populated from the binary's embedded Workbench schemas.
 
 Evaluation uses the existing pkl-go binding, backed by `pkl` on PATH. Options
 express the file root, module and resource allowlists, environment, and cache
-policy; no project or user settings are loaded. The server is started through
+policy; user settings are not loaded and project evaluator settings are never applied. The server is started through
 `/usr/bin/env -i PATH=... pkl`, and the Pkl environment contains PATH only. A
 fresh server/evaluator is closed after every evaluation. pkl-go adds `repl:text`
 for its internal evaluation expression; it supplies no ambient module data.
@@ -55,3 +56,21 @@ bun run internal/verify/declaration/testdata/generate.mts /path/to/tools/verify
 The generator copies the demo's four Pkl documents, records all three verifier
 versions, and adds a registration fixture with non-sorted requires keys,
 HTML characters, Unicode line separators, literal escapes, and a small number.
+
+When root `PklProject` is supplied, it is loaded using a separate constrained
+evaluator that additionally permits exactly `pkl:Project` and
+`pkl:EvaluatorSettings` (the intrinsic schema modules needed to decode it).
+Only its declared dependencies are passed to the root document evaluator;
+`evaluatorSettings`, including modules, resources, env, HTTP, root, cache, and
+external readers, are ignored. Every declared remote dependency must have
+verified cached contents pinned by the supplied lock; local dependencies refuse.
+Standard lock `projectpackage:` URIs are normalized for cache verification and
+allowed explicitly for native project resolution. No project means the previous
+evaluation behavior is unchanged.
+
+Engine callers must pass a Tree-derived map containing root `workbench.pkl`,
+every tracked `.pkl` path and its bytes, and root `PklProject` and
+`PklProject.deps.json` when tracked. Omitting `PklProject` disables dependency
+notation; omitting a required lock refuses. These files must come from the same
+Tree, never from live checkout reads. `verifyHome` supplies only the previously
+provisioned offline package cache.

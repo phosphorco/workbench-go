@@ -70,6 +70,7 @@ func loadPackages(data []byte, home string) (offlinePackages, error) {
 	}
 	byURI := map[string]lockedPackage{}
 	for _, dep := range lock.ResolvedDependencies {
+		dep.URI = strings.Replace(dep.URI, "projectpackage:", "package:", 1)
 		if dep.Type != "remote" {
 			return result, fmt.Errorf("offline lock requires remote pinned packages, got %q", dep.Type)
 		}
