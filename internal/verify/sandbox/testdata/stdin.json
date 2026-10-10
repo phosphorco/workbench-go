@@ -1,0 +1,17 @@
+[
+  {
+    "unitId": "unit<&>",
+    "role": "run",
+    "stdout": "{\"unitId\":\"unit<&>\"}"
+  },
+  {
+    "unitId": "ユニット\n\"\\",
+    "role": "run",
+    "stdout": "{\"unitId\":\"ユニット\\n\\\"\\\\\"}"
+  },
+  {
+    "unitId": "*",
+    "role": "select",
+    "stdout": "{\"unitId\":\"*\"}"
+  }
+]
