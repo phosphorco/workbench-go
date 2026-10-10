@@ -3,6 +3,7 @@ package sandbox_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,10 +81,13 @@ func TestSymlinkReportRefused(t *testing.T) {
 			// The command embeds a fixed fixture, never an ambient environment grant.
 			in.Command = []string{"sh", "-c", `printf ordinary > /out/real.json; ln -s "$1" /out/report.json`, "sh", target}
 			write(t, filepath.Join(in.WorkDir, "host-report"), "host bytes must not be collected")
-			out, err := sandbox.Execute(context.Background(), in)
-			var failure *sandbox.ToolFailure
-			if !errors.As(err, &failure) || !strings.Contains(err.Error(), "output refused") || out.ExitCode != 0 || out.Outputs != nil {
-				t.Fatalf("symlink accepted: %+v, %v", out, err)
+			out := run(t, in)
+			if len(out.Outputs) != 2 || out.Outputs[1].Mode != "120000" || string(out.Outputs[1].Bytes) != target {
+				t.Fatalf("artifact link was not recorded: %+v", out.Outputs)
+			}
+			report, err := sandbox.ReadRegularOutput(in.OutputDir, "report.json")
+			if err == nil || report.Bytes != nil {
+				t.Fatalf("symlink Report accepted: %+v, %v", report, err)
 			}
 		})
 	}
@@ -222,21 +226,13 @@ func TestNonzeroIsToolFailure(t *testing.T) {
 }
 
 func TestCollectRefusesSpecialFiles(t *testing.T) {
-	for _, kind := range []string{"fifo", "symlink-file", "symlink-dir", "socket"} {
+	for _, kind := range []string{"fifo", "socket"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "report.json")
 			switch kind {
 			case "fifo":
 				if err := syscall.Mkfifo(path, 0600); err != nil {
-					t.Fatal(err)
-				}
-			case "symlink-file":
-				if err := os.Symlink("/etc/passwd", path); err != nil {
-					t.Fatal(err)
-				}
-			case "symlink-dir":
-				if err := os.Symlink(t.TempDir(), path); err != nil {
 					t.Fatal(err)
 				}
 			case "socket":
@@ -384,5 +380,109 @@ func TestCommaInMountPath(t *testing.T) {
 	out := run(t, in)
 	if len(out.Outputs) != 1 || string(out.Outputs[0].Bytes) != "comma mount" {
 		t.Fatalf("mount: %+v", out)
+	}
+}
+
+func TestArtifactSymlinksRecorded(t *testing.T) {
+	hostFile := filepath.Join(t.TempDir(), "host-secret")
+	write(t, hostFile, "must not be read")
+	in := invocation(t, "")
+	in.Command = []string{"sh", "-c", `set -eu
+ mkdir -p /out/node_modules/.bin /out/node_modules/package
+ printf executable > /out/node_modules/tool
+ chmod +x /out/node_modules/tool
+ printf workspace > /out/node_modules/package/source
+ ln -s ../tool /out/node_modules/.bin/tool
+ ln -s package /out/node_modules/workspace
+ ln -s "$1" /out/node_modules/host
+ ln -s "$2" /out/node_modules/dangling`, "sh", hostFile, strings.Repeat("target", 100)}
+	out := run(t, in)
+	want := map[string]struct{ mode, bytes string }{
+		"node_modules/.bin/tool":      {"120000", "../tool"},
+		"node_modules/workspace":      {"120000", "package"},
+		"node_modules/host":           {"120000", hostFile},
+		"node_modules/dangling":       {"120000", strings.Repeat("target", 100)},
+		"node_modules/tool":           {"100755", "executable"},
+		"node_modules/package/source": {"100644", "workspace"},
+	}
+	if len(out.Outputs) != len(want) {
+		t.Fatalf("traversed symlink or missing output: %+v", out.Outputs)
+	}
+	for _, output := range out.Outputs {
+		expected, ok := want[output.Path]
+		if !ok || output.Mode != expected.mode || string(output.Bytes) != expected.bytes {
+			t.Fatalf("output: %+v", output)
+		}
+	}
+}
+
+func TestReadRegularOutput(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "nested", "custom-report.json"), "report bytes")
+	out, err := sandbox.ReadRegularOutput(dir, "nested/custom-report.json")
+	if err != nil || out.Path != "nested/custom-report.json" || out.Mode != "100644" || string(out.Bytes) != "report bytes" {
+		t.Fatalf("regular report: %+v %v", out, err)
+	}
+	if err := os.Symlink("nested", filepath.Join(dir, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "fifo"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"alias/custom-report.json", "fifo", "nested", "../escape", "/absolute", "nested/../nested/custom-report.json"} {
+		if out, err := sandbox.ReadRegularOutput(dir, path); err == nil || out.Bytes != nil {
+			t.Fatalf("nonregular or invalid report %q accepted: %+v %v", path, out, err)
+		}
+	}
+	if _, err := sandbox.ReadRegularOutput("/dev", "null"); err == nil {
+		t.Fatal("device Report accepted")
+	}
+}
+
+func TestReferenceArtifactParity(t *testing.T) {
+	data, err := os.ReadFile("testdata/artifact.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected []struct {
+		Path   string
+		Mode   string
+		Bytes  string
+		Digest string
+	}
+	if err := json.Unmarshal(data, &expected); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"node_modules/.bin", "node_modules/package"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tool := filepath.Join(dir, "node_modules/package/tool")
+	write(t, tool, "executable")
+	if err := os.Chmod(tool, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for path, target := range map[string]string{"node_modules/.bin/tool": "../package/tool", "node_modules/workspace": "package", "node_modules/absolute": "/private/host-only-input"} {
+		if err := os.Symlink(target, filepath.Join(dir, path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outputs, err := sandbox.CollectOutputs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outputs) != len(expected) {
+		t.Fatalf("entries: %+v", outputs)
+	}
+	for i, output := range outputs {
+		want := expected[i]
+		if output.Path != want.Path || output.Mode != want.Mode || string(output.Bytes) != want.Bytes || fmt.Sprintf("%x", sha256.Sum256(output.Bytes)) != want.Digest {
+			t.Fatalf("reference mismatch: %+v != %+v", output, want)
+		}
 	}
 }
