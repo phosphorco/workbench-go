@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,11 +22,12 @@ import (
 
 var amendsPattern = regexp.MustCompile(`^\s*amends\s+"([^"\r\n]+)"`)
 
-// Contract designates the sole schema that source may amend.
+// Contract designates the schema that source may amend and its explicit dependencies.
 type Contract struct {
 	uri              *url.URL
 	contents         string
 	local            bool
+	modules          map[string]string
 	packageResources []string
 }
 
@@ -47,8 +50,8 @@ func ambientEvaluatorForDevelopment() Evaluator {
 	return Evaluator{pklExecutable: "pkl"}
 }
 
-// LocalContract grants evaluation access to exactly one in-memory schema module.
-func LocalContract(uri, contents string) (Contract, error) {
+// LocalContract grants access only to the named in-memory module and dependencies.
+func LocalContract(uri, contents string, dependencies ...Contract) (Contract, error) {
 	parsed, err := parseContractURI(uri)
 	if err != nil {
 		return Contract{}, err
@@ -59,7 +62,19 @@ func LocalContract(uri, contents string) (Contract, error) {
 	if contents == "" {
 		return Contract{}, fmt.Errorf("local contract %q is empty", uri)
 	}
-	return Contract{uri: parsed, contents: contents, local: true}, nil
+	modules := map[string]string{parsed.String(): contents}
+	for _, dependency := range dependencies {
+		if !dependency.local || dependency.uri == nil || dependency.uri.Scheme != parsed.Scheme {
+			return Contract{}, fmt.Errorf("local contract dependency must use the same in-memory scheme as %q", uri)
+		}
+		for name, source := range dependency.modules {
+			if _, exists := modules[name]; exists {
+				return Contract{}, fmt.Errorf("duplicate contract module %q", name)
+			}
+			modules[name] = source
+		}
+	}
+	return Contract{uri: parsed, contents: contents, local: true, modules: modules}, nil
 }
 
 // ReleasedContract designates one immutable package module.
@@ -176,7 +191,17 @@ func (runtime Evaluator) evaluateJSON(ctx context.Context, source []byte, schema
 	}
 	var readers []pkl.ModuleReader
 	if schema.local {
-		readers = append(readers, exactModuleReader{uri: *schema.uri, contents: schema.contents})
+		names := make([]string, 0, len(schema.modules))
+		for name := range schema.modules {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if name != schema.uri.String() {
+				allowedModules = append(allowedModules, "^"+regexp.QuoteMeta(name)+"$")
+			}
+		}
+		readers = append(readers, exactModuleReader{uri: *schema.uri, contents: schema.contents, modules: schema.modules})
 	}
 	manager := pkl.NewEvaluatorManagerWithCommand([]string{runtime.pklExecutable})
 	defer func() {
@@ -252,13 +277,24 @@ func exactResourcePatterns(resources ...string) []string {
 
 func contractModulePatterns(module *url.URL) []string {
 	patterns := []string{"^" + regexp.QuoteMeta(module.String()) + "$"}
-	if module.Scheme != "package" || module.Fragment == "" || strings.Contains(strings.TrimPrefix(module.Fragment, "/"), "/") {
+	if module.Scheme != "package" || module.Fragment == "" {
 		return patterns
 	}
 	backing := *module
-	backing.Fragment = "/pkl/" + strings.TrimPrefix(module.Fragment, "/")
-	backing.RawFragment = ""
-	return append(patterns, "^"+regexp.QuoteMeta(backing.String())+"$")
+	if !strings.Contains(strings.TrimPrefix(module.Fragment, "/"), "/") {
+		backing.Fragment = "/pkl/" + strings.TrimPrefix(module.Fragment, "/")
+		backing.RawFragment = ""
+		patterns = append(patterns, "^"+regexp.QuoteMeta(backing.String())+"$")
+	}
+	if path.Base(backing.Fragment) == "Repository.pkl" {
+		for _, name := range []string{"Verifier.pkl", "Focus.pkl"} {
+			dependency := backing
+			dependency.Fragment = path.Join(path.Dir(backing.Fragment), name)
+			dependency.RawFragment = ""
+			patterns = append(patterns, "^"+regexp.QuoteMeta(dependency.String())+"$")
+		}
+	}
+	return patterns
 }
 
 func releasedResourcePatterns(ctx context.Context, resources []string) ([]string, error) {
@@ -398,6 +434,7 @@ func requireAmends(source []byte, contractURI string) error {
 type exactModuleReader struct {
 	uri      url.URL
 	contents string
+	modules  map[string]string
 }
 
 func (reader exactModuleReader) Scheme() string     { return reader.uri.Scheme }
@@ -409,6 +446,13 @@ func (exactModuleReader) ListElements(url.URL) ([]pkl.PathElement, error) {
 }
 
 func (reader exactModuleReader) Read(request url.URL) (string, error) {
+	if reader.modules != nil {
+		contents, exists := reader.modules[request.String()]
+		if !exists {
+			return "", fmt.Errorf("module %q is outside the designated contract", request.String())
+		}
+		return contents, nil
+	}
 	if request.String() != reader.uri.String() {
 		return "", fmt.Errorf("module %q is outside the designated contract", request.String())
 	}

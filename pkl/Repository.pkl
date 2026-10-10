@@ -1,5 +1,10 @@
 module phosphor.workbench.Repository
 
+import "Verifier.pkl"
+import "Focus.pkl" as FocusModule
+
+typealias Focus = FocusModule.Focus
+
 typealias NonEmptyString = String(length > 0)
 typealias PackageName =
   String(
@@ -116,3 +121,33 @@ class Buildable {
 includes: Mapping<GitHubRepository, Include> = new {}
 packages: Mapping<PackageName, PackagePolicy> = new {}
 buildables: Mapping<BuildableName, Buildable> = new {}
+
+/// A policy naming which Verifiers must be attested for a Tree at a boundary.
+class Gate {
+  requires: Listing<String(!isEmpty)>(!isEmpty, isDistinct)
+  /// Severities that block; empty means only attestation is required.
+  blocking: Listing<FocusModule.Severity>(isDistinct)
+}
+
+/// Keyed by Verifier id; every `requires` names a registered artifact Verifier.
+verifiers: Mapping<String, Verifier>(
+  toMap().every((key, verifier) -> verifier.id == key),
+  toMap().values.every((verifier) ->
+    verifier.requires.toMap().values.every((upstream) ->
+      containsKey(upstream) && this[upstream].produces == "artifact"))
+) = new {}
+
+/// Every Gate requires registered Verifiers.
+gates: Mapping<String, Gate>(
+  toMap().values.every((gate) -> gate.requires.toList().every((id) -> verifiers.containsKey(id)))
+) = new {}
+
+focuses: Mapping<String, Focus> = new {}
+
+output {
+  renderer = new JsonRenderer {
+    converters {
+      [Duration] = (duration) -> duration.toUnit("s").value
+    }
+  }
+}

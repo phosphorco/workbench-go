@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -726,7 +727,7 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 		value, err := evaluate.LocalContract(uri, localRepositoryContract)
 		return value, "0.6.0", err
 	case localV060RepositoryURI:
-		value, err := evaluate.LocalContract(uri, localRepositoryDeclarationContract)
+		value, err := localRepositoryDeclarationSchema(uri)
 		return value, "0.6.0", err
 	case localV060AgentInstructionsURI:
 		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
@@ -738,7 +739,7 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 		value, err := evaluate.LocalContract(uri, localRepositoryContract)
 		return value, "0.6.1", err
 	case localV061RepositoryURI:
-		value, err := evaluate.LocalContract(uri, localRepositoryDeclarationContract)
+		value, err := localRepositoryDeclarationSchema(uri)
 		return value, "0.6.1", err
 	case localV061AgentInstructionsURI:
 		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
@@ -1389,4 +1390,22 @@ func appendUnique(values []string, additions ...string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func localRepositoryDeclarationSchema(uri string) (evaluate.Contract, error) {
+	root, err := url.Parse(uri)
+	if err != nil {
+		return evaluate.Contract{}, err
+	}
+	var dependencies []evaluate.Contract
+	for _, source := range []struct{ name, contents string }{{"Verifier.pkl", localVerifierContract}, {"Focus.pkl", localFocusContract}} {
+		dependencyURI := root.ResolveReference(&url.URL{Path: source.name})
+		dependencyURI.OmitHost = root.OmitHost
+		dependency, err := evaluate.LocalContract(dependencyURI.String(), source.contents)
+		if err != nil {
+			return evaluate.Contract{}, err
+		}
+		dependencies = append(dependencies, dependency)
+	}
+	return evaluate.LocalContract(uri, localRepositoryDeclarationContract, dependencies...)
 }

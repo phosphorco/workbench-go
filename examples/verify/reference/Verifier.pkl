@@ -1,0 +1,95 @@
+/// One registered diagnostics or artifact source.
+///
+/// A repository's `verifiers/<id>/VERIFIER.pkl` amends this module.
+module Verifier
+
+import "JsonOutput.pkl"
+
+/// Repository-relative: forward slashes, no leading slash, no `..` segment.
+typealias RepoPath = String(!isEmpty, !startsWith("/"), !contains("\\"), !split("/").contains(".."))
+
+typealias Name = String(matches(Regex(#"[a-z0-9][a-z0-9-]*"#)))
+
+typealias Produces = "report" | "artifact"
+
+abstract class Selector {
+  fixed kind: String
+  hidden defaultNoun: String
+}
+
+/// One Unit; inputs are every tracked path.
+class WholeTree extends Selector {
+  fixed kind = "WholeTree"
+  hidden defaultNoun = "tree"
+}
+
+/// One Unit; inputs are the tracked paths matching `patterns`.
+class Paths extends Selector {
+  fixed kind = "Paths"
+  hidden defaultNoun = "selection"
+  patterns: Listing<RepoPath>(!isEmpty, isDistinct)
+}
+
+/// The Verifier's `command`, run with `VERIFY_ROLE=select`, enumerates its own Units.
+class Own extends Selector {
+  fixed kind = "Own"
+  hidden defaultNoun = "unit"
+}
+
+abstract class Toolchain {
+  fixed kind: String
+}
+
+/// Incremental through Units and the action cache alone.
+class StrongToolchain extends Toolchain {
+  fixed kind = "strong"
+}
+
+/// Transitional: files matching `retained` under /scratch survive between Runs of one Unit.
+class Weak extends Toolchain {
+  fixed kind = "weak"
+  retained: Listing<RepoPath>(!isEmpty, isDistinct)
+  auditRate: Number(isBetween(0, 1)) = 0.1
+}
+
+hidden Strong: Toolchain = new StrongToolchain {}
+
+id: Name
+
+/// Pinned by digest.
+image: String(matches(Regex(#"[^@\s]+@sha256:[0-9a-f]{64}"#)))
+
+/// Repository paths copied into /verifier, relative to their longest common directory.
+program: Listing<RepoPath>(isDistinct)
+
+command: Listing<String>(!isEmpty)
+
+selector: Selector
+
+displayNoun: String(!isEmpty) = selector.defaultNoun
+
+produces: Produces
+
+/// Artifact only: paths under /out that form the Artifact.
+outputs: Listing<RepoPath>(isDistinct, (produces == "artifact") == !isEmpty)
+
+/// Report only: the Report enumerates sub-Unit members.
+members: Boolean(!this || produces == "report") = false
+
+/// Mount name to Verifier id; mounted read-only at /upstream/<name>/.
+requires: Mapping<Name, Name>
+
+toolchain: Toolchain = Strong
+
+deterministic: Boolean = true
+
+/// `none` runs the container without a network; `unrestricted` gives it the default network.
+typealias Network = "none" | "unrestricted"
+
+network: Network = "none"
+
+timeout: Duration(isPositive) = 5.min
+
+output {
+  renderer = JsonOutput.renderer
+}

@@ -2,6 +2,7 @@ package evaluate_test
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -219,7 +220,19 @@ func localContract(t *testing.T, uri, filename string) evaluate.Contract {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema, err := evaluate.LocalContract(uri, string(contents))
+	var dependencies []evaluate.Contract
+	if filename == "Repository.pkl" {
+		root, err := url.Parse(uri)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"Verifier.pkl", "Focus.pkl"} {
+			dependencyURI := root.ResolveReference(&url.URL{Path: name})
+			dependencyURI.OmitHost = root.OmitHost
+			dependencies = append(dependencies, localContract(t, dependencyURI.String(), name))
+		}
+	}
+	schema, err := evaluate.LocalContract(uri, string(contents), dependencies...)
 	if err != nil {
 		t.Fatal(err)
 	}
