@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 type Upstream struct {
@@ -69,7 +71,7 @@ var mountName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 const defaultPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-// Execute runs one container, removes it before collecting regular outputs,
+// Execute runs one container, removes it before collecting outputs,
 // and returns tool failures for nonzero exits, timeouts, and refused outputs.
 func Execute(ctx context.Context, invocation Invocation) (out Outcome, err error) {
 	out.ExitCode = -1
@@ -277,14 +279,13 @@ func remove(name string) error {
 	return err
 }
 
-// CollectOutputs returns sorted regular files beneath dir. Symlinks, FIFOs,
-// devices, and sockets are refused, without following symlinks or blocking on FIFOs.
+// CollectOutputs returns sorted files beneath dir, preserving symlink target
+// text with mode 120000 without traversal. FIFOs, devices, and sockets are refused.
 func CollectOutputs(dir string) ([]Output, error) {
-	fd, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	root, err := openOutputDirectory(dir)
 	if err != nil {
 		return nil, err
 	}
-	root := os.NewFile(uintptr(fd), dir)
 	defer root.Close()
 	outputs := []Output{}
 	if err := collectDirectory(root, "", &outputs); err != nil {
@@ -292,6 +293,64 @@ func CollectOutputs(dir string) ([]Output, error) {
 	}
 	sort.Slice(outputs, func(i, j int) bool { return outputs[i].Path < outputs[j].Path })
 	return outputs, nil
+}
+
+// ReadRegularOutput reads a Report or other regular output at a relative path.
+// Symlinks in any path component and non-regular files are refused.
+func ReadRegularOutput(dir, path string) (Output, error) {
+	if !fs.ValidPath(path) {
+		return Output{}, fmt.Errorf("invalid relative output path: %q", path)
+	}
+	directory, err := openOutputDirectory(dir)
+	if err != nil {
+		return Output{}, err
+	}
+	defer func() { directory.Close() }()
+	components := strings.Split(path, "/")
+	for _, component := range components[:len(components)-1] {
+		fd, err := syscall.Openat(int(directory.Fd()), component, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return Output{}, fmt.Errorf("%s: %w", path, err)
+		}
+		directory.Close()
+		directory = os.NewFile(uintptr(fd), component)
+	}
+	fd, err := syscall.Openat(int(directory.Fd()), components[len(components)-1], syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return Output{}, fmt.Errorf("%s: %w", path, err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return Output{}, err
+	}
+	return regularOutput(file, path, info)
+}
+
+func openOutputDirectory(dir string) (*os.File, error) {
+	fd, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), dir), nil
+}
+
+func readlinkAt(directory *os.File, name string) ([]byte, error) {
+	namePtr, err := syscall.BytePtrFromString(name)
+	if err != nil {
+		return nil, err
+	}
+	for size := 128; ; size *= 2 {
+		target := make([]byte, size)
+		n, _, errno := syscall.Syscall6(syscall.SYS_READLINKAT, directory.Fd(), uintptr(unsafe.Pointer(namePtr)), uintptr(unsafe.Pointer(&target[0])), uintptr(len(target)), 0, 0)
+		if errno != 0 {
+			return nil, errno
+		}
+		if n < uintptr(len(target)) {
+			return target[:int(n)], nil
+		}
+	}
 }
 
 func collectDirectory(directory *os.File, prefix string, outputs *[]Output) error {
@@ -302,6 +361,14 @@ func collectDirectory(directory *os.File, prefix string, outputs *[]Output) erro
 	for _, entry := range entries {
 		path := prefix + entry.Name()
 		fd, err := syscall.Openat(int(directory.Fd()), entry.Name(), syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if errors.Is(err, syscall.ELOOP) {
+			target, err := readlinkAt(directory, entry.Name())
+			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			*outputs = append(*outputs, Output{Path: path, Mode: "120000", Bytes: target})
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
@@ -326,17 +393,25 @@ func collectEntry(file *os.File, path string, outputs *[]Output) error {
 	if info.IsDir() {
 		return collectDirectory(file, path+"/", outputs)
 	}
+	output, err := regularOutput(file, path, info)
+	if err != nil {
+		return err
+	}
+	*outputs = append(*outputs, output)
+	return nil
+}
+
+func regularOutput(file *os.File, path string, info os.FileInfo) (Output, error) {
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("%s is not a regular file", path)
+		return Output{}, fmt.Errorf("%s is not a regular file", path)
 	}
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return err
+		return Output{}, err
 	}
 	mode := "100644"
 	if info.Mode().Perm()&0100 != 0 {
 		mode = "100755"
 	}
-	*outputs = append(*outputs, Output{Path: path, Mode: mode, Bytes: data})
-	return nil
+	return Output{Path: path, Mode: mode, Bytes: data}, nil
 }
