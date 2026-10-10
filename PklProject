@@ -29,5 +29,6 @@ package {
     "pkl/*.go"
     "examples/**"
     "skills/**"
+    "bin/**"
   }
 }
