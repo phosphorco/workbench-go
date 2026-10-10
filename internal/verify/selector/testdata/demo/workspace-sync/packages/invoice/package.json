@@ -1,0 +1,13 @@
+{
+  "name": "@demo/invoice",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@demo/money": "workspace:*",
+    "zod": "3.23.8"
+  }
+}

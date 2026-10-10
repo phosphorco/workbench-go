@@ -1,0 +1,65 @@
+{
+  "tracked": [
+    "bun.lock",
+    "packages/invoice/src/index.ts",
+    "packages/invoice/src/line-item.test.ts",
+    "packages/invoice/src/line-item.ts",
+    "packages/invoice/src/total.test.ts",
+    "packages/invoice/src/total.ts",
+    "packages/money/src/currency.test.ts",
+    "packages/money/src/currency.ts",
+    "packages/money/src/index.ts",
+    "packages/money/src/money.test.ts",
+    "packages/money/src/money.ts",
+    "verifiers/bun-install/VERIFIER.pkl",
+    "verifiers/bun-install/run.ts",
+    "verifiers/bun-test/VERIFIER.pkl",
+    "verifiers/bun-test/run.ts",
+    "verifiers/workspace-sync/VERIFIER.pkl",
+    "verifiers/workspace-sync/run.ts",
+    "verify.pkl",
+    "workspace.pkl"
+  ],
+  "units": [
+    {
+      "unitId": "packages/invoice/src/line-item.test.ts",
+      "inputs": [
+        "packages/invoice/src/line-item.test.ts",
+        "packages/invoice/src/line-item.ts",
+        "packages/money/src/currency.ts",
+        "packages/money/src/index.ts",
+        "packages/money/src/money.ts"
+      ],
+      "display": "packages/invoice/src/line-item.test.ts"
+    },
+    {
+      "unitId": "packages/invoice/src/total.test.ts",
+      "inputs": [
+        "packages/invoice/src/line-item.ts",
+        "packages/invoice/src/total.test.ts",
+        "packages/invoice/src/total.ts",
+        "packages/money/src/currency.ts",
+        "packages/money/src/index.ts",
+        "packages/money/src/money.ts"
+      ],
+      "display": "packages/invoice/src/total.test.ts"
+    },
+    {
+      "unitId": "packages/money/src/currency.test.ts",
+      "inputs": [
+        "packages/money/src/currency.test.ts",
+        "packages/money/src/currency.ts"
+      ],
+      "display": "packages/money/src/currency.test.ts"
+    },
+    {
+      "unitId": "packages/money/src/money.test.ts",
+      "inputs": [
+        "packages/money/src/currency.ts",
+        "packages/money/src/money.test.ts",
+        "packages/money/src/money.ts"
+      ],
+      "display": "packages/money/src/money.test.ts"
+    }
+  ]
+}

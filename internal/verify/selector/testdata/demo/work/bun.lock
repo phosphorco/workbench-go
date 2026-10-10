@@ -1,0 +1,28 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "demo",
+    },
+    "packages/invoice": {
+      "name": "@demo/invoice",
+      "version": "0.0.0",
+      "dependencies": {
+        "@demo/money": "workspace:*",
+        "zod": "3.23.8",
+      },
+    },
+    "packages/money": {
+      "name": "@demo/money",
+      "version": "0.0.0",
+    },
+  },
+  "packages": {
+    "@demo/invoice": ["@demo/invoice@workspace:packages/invoice"],
+
+    "@demo/money": ["@demo/money@workspace:packages/money"],
+
+    "zod": ["zod@3.23.8", "", {}, "sha512-XBx9AXhXktjUqnepgTiE5flcKIYWi/rme0Eaj+5Y0lftuGBq+jyRu/md4WnuxqgP1ubdpNCsYEYPxrzVHD8d6g=="],
+  }
+}
