@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/phosphorco/workbench-go/internal/buildable"
+	contracts "github.com/phosphorco/workbench-go/pkl"
 )
 
 var (
@@ -39,6 +40,9 @@ type Declaration struct {
 	Includes   map[string]ResourceInclude     `json:"includes"`
 	Packages   map[string]PackagePolicy       `json:"packages"`
 	Buildables map[string]buildable.Buildable `json:"buildables"`
+	Verifiers  map[string]contracts.Verifier  `json:"verifiers,omitempty"`
+	Gates      map[string]contracts.Gate      `json:"gates,omitempty"`
+	Focuses    map[string]contracts.Focus     `json:"focuses,omitempty"`
 }
 
 type ResourceInclude struct {
@@ -88,6 +92,9 @@ func DecodeRepositoryDeclaration(encoded []byte) (Declaration, error) {
 		Includes   map[string]ResourceInclude     `json:"includes"`
 		Packages   map[string]PackagePolicy       `json:"packages"`
 		Buildables map[string]buildable.Buildable `json:"buildables"`
+		Verifiers  map[string]contracts.Verifier  `json:"verifiers"`
+		Gates      map[string]contracts.Gate      `json:"gates"`
+		Focuses    map[string]contracts.Focus     `json:"focuses"`
 	}
 	if err := decodeStrict(encoded, &value); err != nil {
 		return Declaration{}, fmt.Errorf("decode 0.2 repository declaration: %w", err)
@@ -97,6 +104,9 @@ func DecodeRepositoryDeclaration(encoded []byte) (Declaration, error) {
 		Includes:   value.Includes,
 		Packages:   value.Packages,
 		Buildables: value.Buildables,
+		Verifiers:  value.Verifiers,
+		Gates:      value.Gates,
+		Focuses:    value.Focuses,
 	}
 	if err := declaration.Validate(); err != nil {
 		return Declaration{}, err

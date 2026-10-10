@@ -316,6 +316,11 @@ buildables: Mapping<BuildableName, Buildable> = new {}
 // Generated from ../../pkl/Repository.pkl.
 const localRepositoryDeclarationContract = `module phosphor.workbench.Repository
 
+import "Verifier.pkl"
+import "Focus.pkl" as FocusModule
+
+typealias Focus = FocusModule.Focus
+
 typealias NonEmptyString = String(length > 0)
 typealias PackageName =
   String(
@@ -432,6 +437,36 @@ class Buildable {
 includes: Mapping<GitHubRepository, Include> = new {}
 packages: Mapping<PackageName, PackagePolicy> = new {}
 buildables: Mapping<BuildableName, Buildable> = new {}
+
+/// A policy naming which Verifiers must be attested for a Tree at a boundary.
+class Gate {
+  requires: Listing<String(!isEmpty)>(!isEmpty, isDistinct)
+  /// Severities that block; empty means only attestation is required.
+  blocking: Listing<FocusModule.Severity>(isDistinct)
+}
+
+/// Keyed by Verifier id; every ` + "`" + `requires` + "`" + ` names a registered artifact Verifier.
+verifiers: Mapping<String, Verifier>(
+  toMap().every((key, verifier) -> verifier.id == key),
+  toMap().values.every((verifier) ->
+    verifier.requires.toMap().values.every((upstream) ->
+      containsKey(upstream) && this[upstream].produces == "artifact"))
+) = new {}
+
+/// Every Gate requires registered Verifiers.
+gates: Mapping<String, Gate>(
+  toMap().values.every((gate) -> gate.requires.toList().every((id) -> verifiers.containsKey(id)))
+) = new {}
+
+focuses: Mapping<String, Focus> = new {}
+
+output {
+  renderer = new JsonRenderer {
+    converters {
+      [Duration] = (duration) -> duration.toUnit("s").value
+    }
+  }
+}
 `
 
 // Generated from ../../pkl/AgentInstructions.pkl.
@@ -547,4 +582,126 @@ class SnapshotResource {
 /// Snapshot revisions are independent of the Subject's branch policy. The map
 /// key is the shape-derived identity; the value records immutable origin facts.
 resources: Mapping<ResourceIdentity, SnapshotResource>(length > 0)
+`
+
+// Generated from ../../pkl/Verifier.pkl.
+const localVerifierContract = `/// One registered diagnostics or artifact source.
+///
+/// A repository's ` + "`" + `verifiers/<id>/VERIFIER.pkl` + "`" + ` amends this module.
+module phosphor.workbench.Verifier
+
+
+/// Repository-relative: forward slashes, no leading slash, no ` + "`" + `..` + "`" + ` segment.
+typealias RepoPath = String(!isEmpty, !startsWith("/"), !contains("\\"), !split("/").contains(".."))
+
+typealias Name = String(matches(Regex(#"[a-z0-9][a-z0-9-]*"#)))
+
+typealias Produces = "report" | "artifact"
+
+abstract class Selector {
+  fixed kind: String
+  hidden defaultNoun: String
+}
+
+/// One Unit; inputs are every tracked path.
+class WholeTree extends Selector {
+  fixed kind = "WholeTree"
+  hidden defaultNoun = "tree"
+}
+
+/// One Unit; inputs are the tracked paths matching ` + "`" + `patterns` + "`" + `.
+class Paths extends Selector {
+  fixed kind = "Paths"
+  hidden defaultNoun = "selection"
+  patterns: Listing<RepoPath>(!isEmpty, isDistinct)
+}
+
+/// The Verifier's ` + "`" + `command` + "`" + `, run with ` + "`" + `VERIFY_ROLE=select` + "`" + `, enumerates its own Units.
+class Own extends Selector {
+  fixed kind = "Own"
+  hidden defaultNoun = "unit"
+}
+
+abstract class Toolchain {
+  fixed kind: String
+}
+
+/// Incremental through Units and the action cache alone.
+class StrongToolchain extends Toolchain {
+  fixed kind = "strong"
+}
+
+/// Transitional: files matching ` + "`" + `retained` + "`" + ` under /scratch survive between Runs of one Unit.
+class Weak extends Toolchain {
+  fixed kind = "weak"
+  retained: Listing<RepoPath>(!isEmpty, isDistinct)
+  auditRate: Number(isBetween(0, 1)) = 0.1
+}
+
+hidden Strong: Toolchain = new StrongToolchain {}
+
+id: Name
+
+/// Pinned by digest.
+image: String(matches(Regex(#"[^@\s]+@sha256:[0-9a-f]{64}"#)))
+
+/// Repository paths copied into /verifier, relative to their longest common directory.
+program: Listing<RepoPath>(isDistinct)
+
+command: Listing<String>(!isEmpty)
+
+selector: Selector
+
+displayNoun: String(!isEmpty) = selector.defaultNoun
+
+produces: Produces
+
+/// Artifact only: paths under /out that form the Artifact.
+outputs: Listing<RepoPath>(isDistinct, (produces == "artifact") == !isEmpty)
+
+/// Report only: the Report enumerates sub-Unit members.
+members: Boolean(!this || produces == "report") = false
+
+/// Mount name to Verifier id; mounted read-only at /upstream/<name>/.
+requires: Mapping<Name, Name>
+
+toolchain: Toolchain = Strong
+
+deterministic: Boolean = true
+
+/// ` + "`" + `none` + "`" + ` runs the container without a network; ` + "`" + `unrestricted` + "`" + ` gives it the default network.
+typealias Network = "none" | "unrestricted"
+
+network: Network = "none"
+
+timeout: Duration(isPositive) = 5.min
+
+output {
+  renderer = new JsonRenderer {
+    converters {
+      [Duration] = (duration) -> duration.toUnit("s").value
+    }
+  }
+}
+`
+
+// Generated from ../../pkl/Focus.pkl.
+const localFocusContract = `/// What a ` + "`" + `verify` + "`" + ` call attends to. Every listing narrows; an empty listing is unrestricted.
+module phosphor.workbench.Focus
+
+typealias Severity = "error" | "warning" | "suggestion" | "message"
+
+class Focus {
+  /// Globs over repository-relative paths.
+  files: Listing<String(!isEmpty, !startsWith("/"))>(isDistinct)
+  /// Diagnostic codes or error keys.
+  codes: Listing<String(!isEmpty)>(isDistinct)
+  /// Verifier ids.
+  verifiers: Listing<String(!isEmpty)>(isDistinct)
+  /// Unit ids.
+  units: Listing<String(!isEmpty)>(isDistinct)
+  /// Sub-Unit member names, such as test names.
+  members: Listing<String(!isEmpty)>(isDistinct)
+  severities: Listing<Severity>(isDistinct)
+}
 `

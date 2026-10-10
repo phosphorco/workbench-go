@@ -26,6 +26,8 @@ func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 		"../../pkl/WorkbenchSubject.pkl":       localSubjectContract,
 		"../../pkl/PackageScopeRepository.pkl": localRepositoryContract,
 		"../../pkl/Repository.pkl":             localRepositoryDeclarationContract,
+		"../../pkl/Verifier.pkl":               localVerifierContract,
+		"../../pkl/Focus.pkl":                  localFocusContract,
 	} {
 		contents, err := os.ReadFile(path)
 		if err != nil {

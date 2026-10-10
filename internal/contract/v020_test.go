@@ -121,3 +121,37 @@ func TestWorkbenchSnapshotRecordsExactParticipatingRepositoryRevisionsWithoutBra
 		}
 	}
 }
+
+func TestV020RepositoryAcceptsOnlyOptionalVerificationProperties(t *testing.T) {
+	value, err := DecodeRepositoryDeclaration([]byte(`{
+ "includes":{},"packages":{},
+ "verifiers":{"test":{"id":"test","selector":{"kind":"Own"},"toolchain":{"kind":"strong"}}},
+ "gates":{"commit":{"requires":["test"],"blocking":["error"]}},
+ "focuses":{"tests":{"verifiers":["test"]}}
+ }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Verifiers["test"].ID != "test" || value.Gates["commit"].Requires[0] != "test" || value.Focuses["tests"].Verifiers[0] != "test" {
+		t.Fatalf("verification policy lost: %#v", value)
+	}
+	if _, err := DecodeRepositoryDeclaration([]byte(`{"includes":{},"packages":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{
+		`{"includes":{},"packages":{},"distribution":{}}`,
+		`{"verifiers":{"test":{"unexpected":true}}}`,
+		`{"gates":{"commit":{"unexpected":true}}}`,
+		`{"focuses":{"test":{"unexpected":true}}}`,
+		`{"verifiers":{"test":{"selector":{"kind":"Own","patterns":[]}}}}`,
+	} {
+		if _, err := DecodeRepositoryDeclaration([]byte(source)); err == nil {
+			t.Fatalf("unknown property accepted: %s", source)
+		}
+	}
+	for _, name := range []string{"verifiers", "gates", "focuses"} {
+		if _, err := DecodePackageScopeDeclaration([]byte(`{"scope":"@test","` + name + `":{}}`)); err == nil {
+			t.Fatalf("package scope accepted %s", name)
+		}
+	}
+}

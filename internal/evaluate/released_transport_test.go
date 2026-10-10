@@ -141,3 +141,27 @@ func matchesAny(patterns []string, resource string) bool {
 	}
 	return false
 }
+
+func TestReleasedRepositoryGrantsOnlyItsVerificationDependencies(t *testing.T) {
+	const prefix = "package://github.com/phosphorco/workbench-go/releases/download/0.8.0/workbench@0.8.0#"
+	for _, root := range []string{"/Repository.pkl", "/pkl/Repository.pkl"} {
+		schema, err := ReleasedContract(prefix + root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		patterns := contractModulePatterns(schema.uri)
+		for _, name := range []string{"/pkl/Verifier.pkl", "/pkl/Focus.pkl"} {
+			if !matchesAny(patterns, prefix+name) {
+				t.Fatalf("required module denied: %s", name)
+			}
+		}
+		for _, name := range []string{"/Verifier.pkl", "/pkl/Other.pkl", "/pkl/WorkbenchSubject.pkl", "/pkl/Verifier.pkl?adjacent"} {
+			if matchesAny(patterns, prefix+name) {
+				t.Fatalf("unregistered module allowed: %s", name)
+			}
+		}
+		if matchesAny(patterns, strings.Replace(prefix, "0.8.0", "0.8.1", -1)+"/pkl/Verifier.pkl") {
+			t.Fatal("another release allowed")
+		}
+	}
+}
