@@ -153,5 +153,16 @@ func FuzzDecode(f *testing.F) {
 		if (d.Report == nil) == (d.Refused == "") {
 			t.Fatal("decoder did not return exactly one alternative")
 		}
+		if d.Report != nil {
+			if len(d.Bytes) == 0 || !json.Valid(d.Bytes) {
+				t.Fatal("accepted report has no valid canonical bytes")
+			}
+			again := report.Decode(d.Bytes, visibility())
+			if string(again.Bytes) != string(d.Bytes) {
+				t.Fatal("canonical report normalization is not idempotent")
+			}
+		} else if d.Bytes != nil {
+			t.Fatal("refused report has canonical bytes")
+		}
 	})
 }
