@@ -1,0 +1,30 @@
+{
+  "hash": "ed2f3b0b3f31c40c3d6379868608c1f75bb59ef6",
+  "entries": [
+    {
+      "path": "link",
+      "mode": "120000",
+      "oid": "dab8c79946b1756dcd7db770a986ad40d00c07f4"
+    },
+    {
+      "path": "nested/binary",
+      "mode": "100644",
+      "oid": "f690abdfe3927715f11e0fc9ce72c3e5863d82bc"
+    },
+    {
+      "path": "plain.txt",
+      "mode": "100644",
+      "oid": "7663aa741bec2b1328630882586fb7a2cbc8a255"
+    },
+    {
+      "path": "run",
+      "mode": "100755",
+      "oid": "4163036efa65bd4a469e752267498f01ea36a55c"
+    },
+    {
+      "path": "tab\tline\nfile",
+      "mode": "100644",
+      "oid": "fa292127011feb3fa2823e430af511fd919e99e8"
+    }
+  ]
+}
