@@ -1,0 +1,17 @@
+amends "modulepath:/Verifier.pkl"
+
+id = "bun-test"
+image = "oven/bun@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895"
+program { "verifiers/bun-test/run.ts" }
+command = new Listing { "bun" "/verifier/run.ts" }
+selector = new Own {}
+displayNoun = "test file"
+produces = "report"
+members = true
+requires {
+  ["workspace-sync"] = "workspace-sync"
+  ["bun-install"] = "bun-install"
+}
+deterministic = true
+network = "none"
+timeout = 5.min

@@ -1,0 +1,237 @@
+{
+  "paths": [
+    ".hidden.ts",
+    "a.ts",
+    "a.txt",
+    "b.tsx",
+    "bun.lock",
+    "nested/bun.lock",
+    "packages/invoice/src/total.test.ts",
+    "packages/money/src/money.ts",
+    "src/a.test.ts",
+    "src/nested/b.test.ts",
+    "workspace.pkl"
+  ],
+  "cases": [
+    {
+      "pattern": "bun.lock",
+      "matches": [
+        "bun.lock"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            "bun.lock"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "workspace.pkl",
+      "matches": [
+        "workspace.pkl"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            "workspace.pkl"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "**/*.ts",
+      "matches": [
+        ".hidden.ts",
+        "a.ts",
+        "packages/invoice/src/total.test.ts",
+        "packages/money/src/money.ts",
+        "src/a.test.ts",
+        "src/nested/b.test.ts"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            ".hidden.ts",
+            "a.ts",
+            "packages/invoice/src/total.test.ts",
+            "packages/money/src/money.ts",
+            "src/a.test.ts",
+            "src/nested/b.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "**/*.test.ts",
+      "matches": [
+        "packages/invoice/src/total.test.ts",
+        "src/a.test.ts",
+        "src/nested/b.test.ts"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            "packages/invoice/src/total.test.ts",
+            "src/a.test.ts",
+            "src/nested/b.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "packages/**",
+      "matches": [
+        "packages/invoice/src/total.test.ts",
+        "packages/money/src/money.ts"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            "packages/invoice/src/total.test.ts",
+            "packages/money/src/money.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "*.ts",
+      "matches": [
+        ".hidden.ts",
+        "a.ts"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            ".hidden.ts",
+            "a.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "src/**/*.test.ts",
+      "matches": [
+        "src/a.test.ts",
+        "src/nested/b.test.ts"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            "src/a.test.ts",
+            "src/nested/b.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "**/*.{ts,tsx}",
+      "matches": [
+        ".hidden.ts",
+        "a.ts",
+        "b.tsx",
+        "packages/invoice/src/total.test.ts",
+        "packages/money/src/money.ts",
+        "src/a.test.ts",
+        "src/nested/b.test.ts"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            ".hidden.ts",
+            "a.ts",
+            "b.tsx",
+            "packages/invoice/src/total.test.ts",
+            "packages/money/src/money.ts",
+            "src/a.test.ts",
+            "src/nested/b.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "[ab].ts",
+      "matches": [
+        "a.ts"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            "a.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "**",
+      "matches": [
+        ".hidden.ts",
+        "a.ts",
+        "a.txt",
+        "b.tsx",
+        "bun.lock",
+        "nested/bun.lock",
+        "packages/invoice/src/total.test.ts",
+        "packages/money/src/money.ts",
+        "src/a.test.ts",
+        "src/nested/b.test.ts",
+        "workspace.pkl"
+      ],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": [
+            ".hidden.ts",
+            "a.ts",
+            "a.txt",
+            "b.tsx",
+            "bun.lock",
+            "nested/bun.lock",
+            "packages/invoice/src/total.test.ts",
+            "packages/money/src/money.ts",
+            "src/a.test.ts",
+            "src/nested/b.test.ts",
+            "workspace.pkl"
+          ]
+        }
+      ]
+    },
+    {
+      "pattern": "nothing/**",
+      "matches": [],
+      "units": [
+        {
+          "unitId": "v",
+          "inputs": []
+        }
+      ]
+    }
+  ],
+  "whole": [
+    {
+      "unitId": "v",
+      "inputs": [
+        ".hidden.ts",
+        "a.ts",
+        "a.txt",
+        "b.tsx",
+        "bun.lock",
+        "nested/bun.lock",
+        "packages/invoice/src/total.test.ts",
+        "packages/money/src/money.ts",
+        "src/a.test.ts",
+        "src/nested/b.test.ts",
+        "workspace.pkl"
+      ]
+    }
+  ]
+}
