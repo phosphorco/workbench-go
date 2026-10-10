@@ -1,0 +1,74 @@
+[
+  {
+    "name": "optional-fields-absent",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"error\",\"message\":\"m\"}]}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"error\",\"message\":\"m\"}]}",
+    "digest": "252db580fe03ca339da75260c28ad496f4d0d49112e983d88b2e6b3aafa756f4"
+  },
+  {
+    "name": "empty-members",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"error\",\"message\":\"m\"}],\"members\":[]}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"error\",\"message\":\"m\"}],\"members\":[]}",
+    "digest": "a3803007b906d8233651babca3f9f0e40dd9de61098075cf253cf40ed228b1ba"
+  },
+  {
+    "name": "empty-advice",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"error\",\"message\":\"m\"}],\"adviceById\":{}}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"error\",\"message\":\"m\"}],\"adviceById\":{}}",
+    "digest": "87e050407ebb0ea5c944152833832185c2a7edb632e5f7cc608b9d62ecb8f2be"
+  },
+  {
+    "name": "both-empty",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"error\",\"message\":\"m\"}],\"members\":[],\"adviceById\":{}}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"error\",\"message\":\"m\"}],\"members\":[],\"adviceById\":{}}",
+    "digest": "fdbe6e35144509a6b2fbc11fee34bf114520472d5bea893b8dea258dba311a02"
+  },
+  {
+    "name": "normalized-field-order",
+    "input": "{\"adviceById\":{\"z\":\"last\",\"a\":\"first\"},\"members\":[{\"status\":\"pass\",\"discarded\":1,\"name\":\"member\"}],\"diagnostics\":[{\"range\":{\"end\":{\"column\":9,\"line\":3,\"extra\":true},\"extra\":1,\"start\":{\"column\":2,\"line\":1}},\"file\":\"src/a.ts\",\"code\":\"CODE\",\"message\":\"m\",\"severity\":\"warning\",\"errorKey\":\"k\",\"extra\":true}],\"unitId\":\"u\",\"ignored\":{\"safe\":\"unused\"}}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"warning\",\"message\":\"m\",\"code\":\"CODE\",\"file\":\"src/a.ts\",\"range\":{\"start\":{\"line\":1,\"column\":2},\"end\":{\"line\":3,\"column\":9}}}],\"members\":[{\"name\":\"member\",\"status\":\"pass\"}],\"adviceById\":{\"z\":\"last\",\"a\":\"first\"}}",
+    "digest": "b56b3fbe1a4a6e4db55012c216492fc151ca52fe650ee7a4f3d4c8b7293e9baf"
+  },
+  {
+    "name": "advice-authored-order",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[],\"adviceById\":{\"z\":{\"beta\":2,\"alpha\":1},\"a\":[{\"y\":true,\"x\":null}]}}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[],\"adviceById\":{\"z\":{\"beta\":2,\"alpha\":1},\"a\":[{\"y\":true,\"x\":null}]}}",
+    "digest": "db0c9cf5349577c4daeb44f862b42f2a36ba2b19a203cffa2dafb46aca2ddc7a"
+  },
+  {
+    "name": "advice-reversed-order",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[],\"adviceById\":{\"a\":[{\"y\":true,\"x\":null}],\"z\":{\"beta\":2,\"alpha\":1}}}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[],\"adviceById\":{\"a\":[{\"y\":true,\"x\":null}],\"z\":{\"beta\":2,\"alpha\":1}}}",
+    "digest": "34312d402660f3f598e3a61dac1a671ac77ca5ef6f964104f0fb06e760dd7baa"
+  },
+  {
+    "name": "advice-index-and-duplicate-keys",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[],\"adviceById\":{\"z\":0,\"10\":\"ten\",\"2\":\"two\",\"01\":\"one\",\"z\":3,\"4294967295\":\"not-index\",\"a\":{\"b\":1,\"a\":2,\"b\":4}}}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[],\"adviceById\":{\"2\":\"two\",\"10\":\"ten\",\"z\":3,\"01\":\"one\",\"4294967295\":\"not-index\",\"a\":{\"b\":4,\"a\":2}}}",
+    "digest": "c12866fe8b4cdc013b75149e1a0d8c3c5822b51dc1ef609fcbe4d38e11c2cef0"
+  },
+  {
+    "name": "unicode-and-escaping",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"秘密😀<&>  \",\"code\":\"\\\\u2028\",\"severity\":\"message\",\"message\":\"\\u0000\\b\\f\\n\\r\\t\\\"\\\\/秘密😀  \"}],\"members\":[{\"name\":\"秘密😀\",\"status\":\"skip\"}],\"adviceById\":{\"雪 \":\"<&>\\\"\\\\ \"}}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"秘密😀<&>  \",\"severity\":\"message\",\"message\":\"\\u0000\\b\\f\\n\\r\\t\\\"\\\\/秘密😀  \",\"code\":\"\\\\u2028\"}],\"members\":[{\"name\":\"秘密😀\",\"status\":\"skip\"}],\"adviceById\":{\"雪 \":\"<&>\\\"\\\\ \"}}",
+    "digest": "4c2d03a15df20da15e43ff09f8ee0ddeeb742148dc56c43899d197eb28feacdb"
+  },
+  {
+    "name": "authored-escapes-and-surrogates",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"\\u006b\",\"severity\":\"error\",\"message\":\"\\ud800 lone \\udfff pair \\ud83d\\ude00 slash \\/\"}],\"adviceById\":{\"\\u007a\":\"\\u2028\\u2029\",\"\\ud800\":\"\\udfff\"}}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[{\"errorKey\":\"k\",\"severity\":\"error\",\"message\":\"\\ud800 lone \\udfff pair 😀 slash /\"}],\"adviceById\":{\"z\":\"  \",\"\\ud800\":\"\\udfff\"}}",
+    "digest": "d869f38fb46847ad8a1fbd4dbd243bed37330ec287ed8267d09d301df4d3aeb8"
+  },
+  {
+    "name": "numbers-normalized",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[],\"adviceById\":{\"numbers\":[-0,1e2,1.2300,1e-6,1e-7,1e20,1e21,-1e-9,9007199254740993,1000000000000000100,5e-324,1.7976931348623157e308]}}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[],\"adviceById\":{\"numbers\":[0,100,1.23,0.000001,1e-7,100000000000000000000,1e+21,-1e-9,9007199254740992,1000000000000000100,5e-324,1.7976931348623157e+308]}}",
+    "digest": "ab4cfdd2752570196878380508eb3fc13f6deffacf718702a1b47c457bcf6590"
+  },
+  {
+    "name": "empty-report",
+    "input": "{\"unitId\":\"u\",\"diagnostics\":[]}",
+    "canonical": "{\"unitId\":\"u\",\"diagnostics\":[]}",
+    "digest": "a58980d721964e2c7746191314f808dc938b99540e00d3d4b289978e01c273c0"
+  }
+]

@@ -52,6 +52,9 @@ type Visibility struct {
 type Decoded struct {
 	Report  *DiagnosticReport
 	Refused string
+	// Bytes is the normalized report's reference-compatible CAS content.
+	// It is nil for refusals; consumers must store it instead of marshaling Report.
+	Bytes []byte
 }
 
 // Decode returns either a validated report or a refusal for every JSON shape.
@@ -68,7 +71,11 @@ func Decode(data []byte, visibility Visibility) Decoded {
 	if reason != "" {
 		return Decoded{Refused: reason}
 	}
-	return Decoded{Report: r}
+	canonical, err := canonicalReport(data)
+	if err != nil {
+		return Decoded{Refused: "report.json is not JSON"}
+	}
+	return Decoded{Report: r, Bytes: canonical}
 }
 
 func checkStrings(value any, visibility Visibility) string {
