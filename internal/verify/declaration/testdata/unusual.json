@@ -1,0 +1,35 @@
+{
+  "manifest": {
+    "id": "bun-test",
+    "image": "oven/bun@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+    "program": [
+      "verifiers/bun-test/run.ts"
+    ],
+    "command": [
+      "<&>",
+      "  ",
+      "quote\"",
+      "slash\\",
+      "literal\\u2028\\u2029"
+    ],
+    "selector": {
+      "kind": "Own"
+    },
+    "displayNoun": "test file",
+    "produces": "report",
+    "outputs": [],
+    "members": true,
+    "requires": {
+      "z": "workspace-sync",
+      "a": "bun-install"
+    },
+    "toolchain": {
+      "kind": "strong"
+    },
+    "deterministic": true,
+    "network": "none",
+    "timeout": 1e-7
+  },
+  "manifestDigest": "be5db7175e802e286da0303f4367ea197890bcb4875b71d952a40727c0231b9c",
+  "version": "df60508aa84a89e870d005d3622b7240374429b40f51ec6f76a228650d8b6f58"
+}
