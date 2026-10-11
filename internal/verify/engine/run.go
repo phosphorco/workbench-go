@@ -42,12 +42,15 @@ func (e *execution) stage(registered declaration.Registered, role, unit string, 
 		}
 	}()
 	m := registered.Manifest
-	invocation = sandbox.Invocation{Image: m.Image, Command: m.Command, UnitID: unit, Role: role, Network: m.Network, Timeout: time.Duration(m.Timeout * float64(time.Second)), WorkDir: filepath.Join(stage, "work"), VerifierDir: filepath.Join(stage, "verifier"), OutputDir: filepath.Join(stage, "out")}
+	invocation = sandbox.Invocation{Image: m.Image, Command: m.Command, UnitID: unit, Role: role, Network: m.Network, Timeout: time.Duration(m.Timeout * float64(time.Second)), WorkDir: filepath.Join(stage, "work"), OutputDir: filepath.Join(stage, "out")}
 	if err = store.Materialize(e.home, inputs, invocation.WorkDir); err != nil {
 		return
 	}
-	if err = store.Materialize(e.home, program, invocation.VerifierDir); err != nil {
-		return
+	if len(m.Program) > 0 {
+		invocation.VerifierDir = filepath.Join(stage, "verifier")
+		if err = store.Materialize(e.home, program, invocation.VerifierDir); err != nil {
+			return
+		}
 	}
 	if err = os.Mkdir(invocation.OutputDir, 0755); err != nil {
 		return
