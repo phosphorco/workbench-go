@@ -590,6 +590,15 @@ const localVerifierContract = `/// One registered diagnostics or artifact source
 /// A repository's ` + "`" + `verifiers/<id>/VERIFIER.pkl` + "`" + ` amends this module.
 module phosphor.workbench.Verifier
 
+import "Repository.pkl" as RepositoryModule
+
+typealias ManifestContract = RepositoryModule.ManifestContract
+
+class Distribution {
+  manifest: ManifestContract
+  platform: String(matches(Regex(#"[a-z0-9]+/[a-z0-9]+"#)))
+  target: RepositoryModule.RelativePath
+}
 
 /// Repository-relative: forward slashes, no leading slash, no ` + "`" + `..` + "`" + ` segment.
 typealias RepoPath = String(!isEmpty, !startsWith("/"), !contains("\\"), !split("/").contains(".."))
@@ -675,6 +684,9 @@ typealias Network = "none" | "unrestricted"
 network: Network = "none"
 
 timeout: Duration(isPositive) = 5.min
+
+/// Promotion consumes an attested artifact; it never supplies a build command.
+distribution: Distribution(produces == "artifact")? = null
 
 output {
   renderer = new JsonRenderer {
