@@ -38,9 +38,11 @@ Exit 0: clean in focus and Gate satisfied; 1: blocking or Gate unsatisfied;
 
 type IO struct {
 	WorkingDirectory func() (string, error)
-	Env              map[string]string
-	Stdout           io.Writer
-	Stderr           io.Writer
+	// Pkl is the evaluator the composition root grants; zero means ambient.
+	Pkl    *declaration.Pkl
+	Env    map[string]string
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // Main presents before updating Last Seen; focus never narrows engine work.
@@ -68,7 +70,7 @@ func Main(ctx context.Context, argv []string, streams IO) (int, error) {
 	if err != nil {
 		return fail(err)
 	}
-	evaluated, err := Evaluate(ctx, snapshot, options.Home)
+	evaluated, err := Evaluate(ctx, streams.pkl(), snapshot, options.Home)
 	if err != nil {
 		return fail(err)
 	}
@@ -165,7 +167,7 @@ func promote(ctx context.Context, argv []string, streams IO) (int, error) {
 	if err != nil {
 		return fail(err)
 	}
-	evaluated, err := Evaluate(ctx, snapshot, options.Home)
+	evaluated, err := Evaluate(ctx, streams.pkl(), snapshot, options.Home)
 	if err != nil {
 		return fail(err)
 	}
@@ -191,4 +193,11 @@ func promote(ctx context.Context, argv []string, streams IO) (int, error) {
 	}
 	_, err = fmt.Fprintf(streams.Stdout, "promoted %s to %s; artifact %s\n", receipt.Verifier, receipt.Target, receipt.ArtifactDigest)
 	return 0, err
+}
+
+func (streams IO) pkl() declaration.Pkl {
+	if streams.Pkl == nil {
+		return declaration.AmbientPkl()
+	}
+	return *streams.Pkl
 }

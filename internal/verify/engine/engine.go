@@ -35,7 +35,7 @@ type execution struct {
 }
 
 // Evaluate reads declaration, project, and lock bytes from the immutable Tree.
-func Evaluate(ctx context.Context, snapshot tree.Tree, home string) (declaration.Declaration, error) {
+func Evaluate(ctx context.Context, pkl declaration.Pkl, snapshot tree.Tree, home string) (declaration.Declaration, error) {
 	paths := []string{}
 	for _, entry := range snapshot.Entries {
 		if strings.HasSuffix(entry.Path, ".pkl") || entry.Path == "PklProject" || entry.Path == "PklProject.deps.json" {
@@ -46,7 +46,7 @@ func Evaluate(ctx context.Context, snapshot tree.Tree, home string) (declaration
 	if err != nil {
 		return declaration.Declaration{}, err
 	}
-	return declaration.Evaluate(ctx, files, home)
+	return declaration.Evaluate(ctx, pkl, files, home)
 }
 
 // Observe executes misses in requires order, bounds concurrent Units, and folds

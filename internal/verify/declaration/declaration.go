@@ -33,9 +33,24 @@ type Registered struct {
 	Version        string
 }
 
+// Pkl designates the executable that evaluates declarations. The composition
+// root grants an absolute path; AmbientPkl is for development only.
+type Pkl struct{ executable string }
+
+// NewPkl grants evaluation to one absolute Pkl executable.
+func NewPkl(executable string) (Pkl, error) {
+	if !filepath.IsAbs(executable) {
+		return Pkl{}, fmt.Errorf("Pkl executable %q is not an absolute path", executable)
+	}
+	return Pkl{executable: filepath.Clean(executable)}, nil
+}
+
+// AmbientPkl resolves pkl through PATH at evaluation time.
+func AmbientPkl() Pkl { return Pkl{executable: "pkl"} }
+
 // Evaluate reads only supplied tracked Pkl bytes and the committed lock bytes.
 // verifyHome designates the pre-populated offline package cache, never a checkout.
-func Evaluate(ctx context.Context, files map[string][]byte, verifyHome string) (Declaration, error) {
+func Evaluate(ctx context.Context, pkl Pkl, files map[string][]byte, verifyHome string) (Declaration, error) {
 	if _, ok := files[Document]; !ok {
 		return Declaration{}, fmt.Errorf("%s is not tracked at the repository root", Document)
 	}
@@ -86,7 +101,7 @@ func Evaluate(ctx context.Context, files map[string][]byte, verifyHome string) (
 		return Declaration{}, err
 	}
 	defer removeCache()
-	manager := evaluator.NewEvaluatorManagerWithCommand([]string{"/usr/bin/env", "-i", "PATH=" + os.Getenv("PATH"), "pkl"})
+	manager := evaluator.NewEvaluatorManagerWithCommand([]string{"/usr/bin/env", "-i", "PATH=" + os.Getenv("PATH"), pkl.executable})
 	defer manager.Close()
 	configure := func(options *evaluator.EvaluatorOptions) {
 		options.AllowedModules = modules

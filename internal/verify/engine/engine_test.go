@@ -442,7 +442,7 @@ dependencies { ["fixture"] { uri = "`+uri+`" } }
 	for _, path := range []string{"workbench.pkl", "PklProject", "PklProject.deps.json"} {
 		write(t, root, path, "broken after capture")
 	}
-	value, err := engine.Evaluate(context.Background(), snapshot, home)
+	value, err := engine.Evaluate(context.Background(), declaration.AmbientPkl(), snapshot, home)
 	if err != nil {
 		t.Fatal(err)
 	}

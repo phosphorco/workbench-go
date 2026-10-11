@@ -7,7 +7,10 @@ import (
 	"os"
 	"strings"
 
+	workbenchruntime "github.com/phosphorco/workbench-go/internal/runtime"
+	"github.com/phosphorco/workbench-go/internal/verify/declaration"
 	"github.com/phosphorco/workbench-go/internal/verify/engine"
+	"github.com/phosphorco/workbench-go/internal/version"
 )
 
 type verifyCommandFailure struct{ error }
@@ -25,7 +28,11 @@ func runVerifyCommand(ctx context.Context, arguments []string, workingDirectory 
 		key, value, _ := strings.Cut(entry, "=")
 		env[key] = value
 	}
-	code, err := engine.Main(ctx, arguments, engine.IO{WorkingDirectory: workingDirectory, Env: env, Stdout: output, Stderr: diagnostics})
+	pkl, err := verifyPkl()
+	if err != nil {
+		return verifyCommandFailure{fmt.Errorf("verify: %w", err)}
+	}
+	code, err := engine.Main(ctx, arguments, engine.IO{WorkingDirectory: workingDirectory, Pkl: &pkl, Env: env, Stdout: output, Stderr: diagnostics})
 	if err != nil {
 		return verifyCommandFailure{fmt.Errorf("verify: %w", err)}
 	}
@@ -33,4 +40,17 @@ func runVerifyCommand(ctx context.Context, arguments []string, workingDirectory 
 		return reportedError{err: verifyExit(code)}
 	}
 	return nil
+}
+
+// verifyPkl grants verification the same Pkl the other commands use: the
+// bundled runtime beside a released executable, PATH in development.
+func verifyPkl() (declaration.Pkl, error) {
+	if version.IsDevelopment() {
+		return declaration.AmbientPkl(), nil
+	}
+	toolchain, err := workbenchruntime.Installed()
+	if err != nil {
+		return declaration.Pkl{}, err
+	}
+	return declaration.NewPkl(toolchain.PklPath())
 }

@@ -19,7 +19,7 @@ import (
 
 func evaluate(t *testing.T, files map[string][]byte, home string) (declaration.Declaration, error) {
 	t.Helper()
-	return declaration.Evaluate(context.Background(), files, home)
+	return declaration.Evaluate(context.Background(), declaration.AmbientPkl(), files, home)
 }
 
 func source(body string) []byte { return []byte("amends \"modulepath:/Repository.pkl\"\n" + body) }
