@@ -70,6 +70,8 @@ prepare_case() {
   local version="$1"
   local operation="$2"
   local success="$3"
+  local attestation_operation=attest
+  if test "$version" = 0.6.1; then attestation_operation=verify; fi
   local root
   root="$(mktemp -d "$runner_temp/workbench-go-release-compatibility-${version}-${operation}-${success}.XXXXXX")"
   if [ "$success" = false ] && { [ "$operation" = build ] || [ "$operation" = seal ]; }; then
@@ -134,6 +136,8 @@ run_version() {
   mkdir -p "$HOME" "$MISE_DATA_DIR" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_CONFIG_DIR"
   mise install "github:phosphorco/workbench-go@$version"
 
+  local attestation_operation=attest
+  if test "$version" = 0.6.1; then attestation_operation=verify; fi
   local root
   root="$(prepare_case "$version" build true)"
   run_case "$version" build-success "$root" buildable build --name compat --platform linux-x86_64
@@ -146,9 +150,9 @@ run_version() {
   run_case "$version" seal-refusal "$root" buildable seal --name compat --candidate-root .local-build/compat
 
   root="$(prepare_case "$version" verify true)"
-  run_case "$version" verify-success "$root" buildable verify --name compat --candidate-root .local-build/compat
+  run_case "$version" verify-success "$root" buildable "$attestation_operation" --name compat --candidate-root .local-build/compat
   root="$(prepare_case "$version" verify false)"
-  run_case "$version" verify-refusal "$root" buildable verify --name compat --candidate-root .local-build/compat
+  run_case "$version" verify-refusal "$root" buildable "$attestation_operation" --name compat --candidate-root .local-build/compat
 
   root="$(prepare_case "$version" check-fresh true)"
   run_case "$version" check-fresh-success "$root" buildable check-fresh --name compat --candidate-root .local-build/compat --built-from HEAD --against origin/main

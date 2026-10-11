@@ -266,7 +266,7 @@ jobs:
           PY
           ! grep -Fq '"declarationIdentity"' "$manifest"
           verify_status=0
-          (cd "$root" && mise exec github:phosphorco/workbench-go@0.9.0 -- workbench buildable verify --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser) || verify_status=$?
+          (cd "$root" && mise exec github:phosphorco/workbench-go@0.9.0 -- workbench buildable attest --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser) || verify_status=$?
           printf 'origin-shaped legacy manifest verify exit=%s\n' "$verify_status"
           test "$verify_status" -eq 0
           fresh_status=0
@@ -388,7 +388,7 @@ jobs:
           print("published 0.6.1 sealed output evidence=sha256")
           PY
           verify_status=0
-          new_workbench buildable verify --name compat --candidate-root .local-build/compat || verify_status=$?
+          new_workbench buildable attest --name compat --candidate-root .local-build/compat || verify_status=$?
           printf 'published 0.9.0 consuming verify exit=%s\n' "$verify_status"
           test "$verify_status" -eq 0
           test ! -e "$root/.workbench"

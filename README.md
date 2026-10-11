@@ -46,7 +46,7 @@ agents through a versioned control protocol.
 
 | Surface | Status |
 | --- | --- |
-| Binary `0.9.0`; Pkl resource contracts `0.9.0` | Release candidate |
+| Binary `0.9.0`; Pkl resource contracts `0.9.0` | Released |
 | `setup`, `check`, commit saga, snapshots, prune, skills, and buildables described below | Released |
 | Structured status, Environment Index, explain/ownership queries, explicit reconciliation plans, receipts, and scoped verification | Proposed and sequenced |
 
@@ -78,8 +78,8 @@ components does not relicense them as Workbench code.
 The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
 terms together and is included unchanged in every platform archive.
 
-After publication, install the pinned `0.9.0` release. Binary and resource-contract releases have
-independent identities; this candidate introduces the `0.9.0` verification contract.
+Install the pinned `0.9.0` release. Binary and resource-contract releases have
+independent identities; this release introduces the `0.9.0` verification contract.
 
 ```sh
 mise use -g github:phosphorco/workbench-go@0.9.0
@@ -92,6 +92,36 @@ released build never falls back to `PATH` or a source checkout. GitHub Actions
 builds the four macOS/Linux ARM64/x64 archives, checksums, runtime inventory,
 and attestations from the release tag. Workbench itself is not a general
 release-publication manager.
+
+## Verify tracked source and promote attested artifacts
+
+`workbench verify` captures tracked working-tree bytes, evaluates root
+`workbench.pkl`, and runs declared Verifiers in containers with a shared action
+cache. It presents new and resolved diagnostics since this session last looked;
+unchanged diagnostics still affect exit status. Focus shapes attention while
+Gates enforce policy over the whole Observation.
+
+```sh
+workbench verify
+workbench verify 'file:src/**' code:TEST_FAIL --gate commit
+workbench verify focus:tests --json --session review --home /tmp/verify-state
+workbench verify --all
+workbench verify --reset
+workbench verify promote tool-build
+```
+
+Exit codes are `0` for clean in Focus with any named Gate satisfied, `1` for a
+blocking occurrence or unsatisfied Gate, `2` for usage, Tree, or declaration
+errors, and `3` for an unknown Unit in Focus when no blocking condition takes
+precedence. `--all` reads without updating Last Seen; `--reset` clears Last Seen
+before presenting. `--json` emits `{observation, delta, focus}`. `--gate` names a
+Gate in the declaration; `--session` and `--home` override session and state
+location. Focus accepts `file:`, `code:`, `unit:`, `member:`, `verifier:`,
+`severity:`, and declared `focus:` tokens.
+
+See [Verification](docs/verification.md) for the full grammar, environment
+defaults, declaration example, sandbox contract, and promotion requirements.
+Buildable manifest checking is separately named `workbench buildable attest`.
 
 ## A Workbench is a disposable local environment for one line of work
 
@@ -666,7 +696,7 @@ repository checkout can build before an assembled projection exists:
 ```sh
 workbench buildable build --name <name> --platform <platform>
 workbench buildable seal --name <name> --candidate-root .local-build/<name>
-workbench buildable verify --name <name> --candidate-root .local-build/<name> \
+workbench buildable attest --name <name> --candidate-root .local-build/<name> \
   --run-declared-verification
 workbench buildable check-fresh --name <name> \
   --candidate-root .local-build/<name> --built-from <revision> --against <revision>
@@ -680,7 +710,7 @@ The producer writes exactly one strict JSON source record named
 must compare the record bytes across every archive before assembly. `seal`
 then owns the final manifest: it records the producer-input digest and the
 hash, size, executable fact, path, destination, and kind of every declared
-output. `verify` rechecks those facts; `check-fresh` proves the candidate was
+output. `attest` rechecks those facts; `check-fresh` proves the candidate was
 built from one revision and that
 the promoted-against revision has the same producer inputs; `promote` installs
 a byte-identical verified tree at the committed root.
