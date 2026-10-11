@@ -313,9 +313,10 @@ func TestReferenceStdinParity(t *testing.T) {
 }
 
 func TestCancellationKillsAndRemoves(t *testing.T) {
-	in := invocation(t, `cat /etc/hostname; printf started > /out/started; sleep 60 & wait`)
+	in := invocation(t, `cat /etc/hostname > /out/.started; mv /out/.started /out/started; sleep 60 & wait`)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	started := filepath.Join(in.OutputDir, "started")
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -326,7 +327,7 @@ func TestCancellationKillsAndRemoves(t *testing.T) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if _, err := os.Stat(filepath.Join(in.OutputDir, "started")); err == nil {
+				if _, err := os.Stat(started); err == nil {
 					cancel()
 					return
 				}
@@ -340,10 +341,11 @@ func TestCancellationKillsAndRemoves(t *testing.T) {
 	if !errors.As(err, &failure) || !errors.Is(err, context.Canceled) || out.TimedOut || out.Outputs != nil {
 		t.Fatalf("cancellation: %+v %v", out, err)
 	}
-	id := strings.TrimSpace(string(out.Stdout))
-	if id == "" {
-		t.Fatal("container never started")
+	hostname, readErr := os.ReadFile(started)
+	if readErr != nil {
+		t.Fatalf("container never started: %v", readErr)
 	}
+	id := strings.TrimSpace(string(hostname))
 	if data, err := exec.Command("docker", "inspect", id).CombinedOutput(); err == nil {
 		t.Fatalf("container leaked: %s", data)
 	}
