@@ -16,9 +16,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 )
 
 type Upstream struct {
@@ -303,107 +301,108 @@ func CollectOutputs(dir string) ([]Output, error) {
 // ReadRegularOutput reads a Report or other regular output at a relative path.
 // Symlinks in any path component and non-regular files are refused.
 func ReadRegularOutput(dir, path string) (Output, error) {
-	if !fs.ValidPath(path) {
+	if !fs.ValidPath(path) || path == "." {
 		return Output{}, fmt.Errorf("invalid relative output path: %q", path)
 	}
-	directory, err := openOutputDirectory(dir)
+	root, err := openOutputDirectory(dir)
 	if err != nil {
 		return Output{}, err
 	}
-	defer func() { directory.Close() }()
+	defer root.Close()
 	components := strings.Split(path, "/")
-	for _, component := range components[:len(components)-1] {
-		fd, err := syscall.Openat(int(directory.Fd()), component, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	for i := range components {
+		prefix := strings.Join(components[:i+1], "/")
+		info, err := root.Lstat(prefix)
 		if err != nil {
 			return Output{}, fmt.Errorf("%s: %w", path, err)
 		}
-		directory.Close()
-		directory = os.NewFile(uintptr(fd), component)
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return Output{}, fmt.Errorf("%s: %s is a symlink", path, prefix)
+		}
+		if i < len(components)-1 && !info.IsDir() {
+			return Output{}, fmt.Errorf("%s: %s is not a directory", path, prefix)
+		}
 	}
-	fd, err := syscall.Openat(int(directory.Fd()), components[len(components)-1], syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return Output{}, fmt.Errorf("%s: %w", path, err)
-	}
-	file := os.NewFile(uintptr(fd), path)
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return Output{}, err
-	}
-	return regularOutput(file, path, info)
+	return regularOutputAt(root, path)
 }
 
-func openOutputDirectory(dir string) (*os.File, error) {
-	fd, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+// openOutputDirectory confines every later open to dir; dir itself must not be
+// a symlink. Collection happens after the container has exited, so the
+// Lstat-then-open sequence below is not racing a writer.
+func openOutputDirectory(dir string) (*os.Root, error) {
+	info, err := os.Lstat(dir)
 	if err != nil {
 		return nil, err
 	}
-	return os.NewFile(uintptr(fd), dir), nil
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symlink", dir)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
+	return os.OpenRoot(dir)
 }
 
-func readlinkAt(directory *os.File, name string) ([]byte, error) {
-	namePtr, err := syscall.BytePtrFromString(name)
+func collectDirectory(root *os.Root, prefix string, outputs *[]Output) error {
+	name := "."
+	if prefix != "" {
+		name = strings.TrimSuffix(prefix, "/")
+	}
+	directory, err := root.Open(name)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	for size := 128; ; size *= 2 {
-		target := make([]byte, size)
-		n, _, errno := syscall.Syscall6(syscall.SYS_READLINKAT, directory.Fd(), uintptr(unsafe.Pointer(namePtr)), uintptr(unsafe.Pointer(&target[0])), uintptr(len(target)), 0, 0)
-		if errno != 0 {
-			return nil, errno
-		}
-		if n < uintptr(len(target)) {
-			return target[:int(n)], nil
-		}
-	}
-}
-
-func collectDirectory(directory *os.File, prefix string, outputs *[]Output) error {
 	entries, err := directory.ReadDir(-1)
+	directory.Close()
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
 		path := prefix + entry.Name()
-		fd, err := syscall.Openat(int(directory.Fd()), entry.Name(), syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-		if errors.Is(err, syscall.ELOOP) {
-			target, err := readlinkAt(directory, entry.Name())
-			if err != nil {
-				return fmt.Errorf("%s: %w", path, err)
-			}
-			*outputs = append(*outputs, Output{Path: path, Mode: "120000", Bytes: target})
-			continue
-		}
+		info, err := root.Lstat(path)
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
-		file := os.NewFile(uintptr(fd), path)
-		err = collectEntry(file, path, outputs)
-		closeErr := file.Close()
-		if err != nil {
-			return err
-		}
-		if closeErr != nil {
-			return closeErr
+		switch {
+		case info.Mode()&fs.ModeSymlink != 0:
+			target, err := root.Readlink(path)
+			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			*outputs = append(*outputs, Output{Path: path, Mode: "120000", Bytes: []byte(target)})
+		case info.IsDir():
+			if err := collectDirectory(root, path+"/", outputs); err != nil {
+				return err
+			}
+		default:
+			output, err := regularOutputAt(root, path)
+			if err != nil {
+				return err
+			}
+			*outputs = append(*outputs, output)
 		}
 	}
 	return nil
 }
 
-func collectEntry(file *os.File, path string, outputs *[]Output) error {
-	info, err := file.Stat()
+func regularOutputAt(root *os.Root, path string) (Output, error) {
+	info, err := root.Lstat(path)
 	if err != nil {
-		return err
+		return Output{}, fmt.Errorf("%s: %w", path, err)
 	}
-	if info.IsDir() {
-		return collectDirectory(file, path+"/", outputs)
+	if !info.Mode().IsRegular() {
+		return Output{}, fmt.Errorf("%s is not a regular file", path)
 	}
-	output, err := regularOutput(file, path, info)
+	file, err := root.Open(path)
 	if err != nil {
-		return err
+		return Output{}, fmt.Errorf("%s: %w", path, err)
 	}
-	*outputs = append(*outputs, output)
-	return nil
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return Output{}, err
+	}
+	return regularOutput(file, path, opened)
 }
 
 func regularOutput(file *os.File, path string, info os.FileInfo) (Output, error) {
