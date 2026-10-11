@@ -157,6 +157,9 @@ func run(ctx context.Context, arguments []string, workingDirectory func() (strin
 	if len(arguments) > 0 && arguments[0] == "context" {
 		return runContextCommand(ctx, arguments[1:], workingDirectory, output, diagnostics)
 	}
+	if len(arguments) > 0 && arguments[0] == "verify" {
+		return runVerifyCommand(ctx, arguments[1:], workingDirectory, output, diagnostics)
+	}
 	application := chooseApplications(version.IsDevelopment(), developmentApplications, releasedApplications)
 	return runWith(ctx, arguments, workingDirectory, output, diagnostics, application)
 }
