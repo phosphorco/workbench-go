@@ -486,3 +486,13 @@ func TestReferenceArtifactParity(t *testing.T) {
 		}
 	}
 }
+
+func TestImageOwnedProgramIsNotShadowed(t *testing.T) {
+	in := invocation(t, `set -eu; test ! -e /verifier; printf ok > /out/report.json`)
+	in.VerifierDir = ""
+	if got := string(run(t, in).Outputs[0].Bytes); got != "ok" {
+		t.Fatalf("report = %q", got)
+	}
+	mounted := invocation(t, `set -eu; test -d /verifier; printf ok > /out/report.json`)
+	run(t, mounted)
+}

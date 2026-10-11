@@ -27,7 +27,9 @@ type Upstream struct {
 }
 
 // Invocation grants only the fixed mounts in the Run contract. WorkDir is
-// already staged by the caller; ScratchDir is empty for strong toolchains.
+// already staged by the caller; ScratchDir is empty for strong toolchains;
+// VerifierDir is empty when the program lives in the image, so nothing
+// shadows the image's /verifier.
 type Invocation struct {
 	Image       string
 	Command     []string
@@ -189,7 +191,10 @@ func createArgs(in Invocation) ([]string, error) {
 		host, target string
 		writable     bool
 	}
-	mounts := []mount{{in.WorkDir, "/work", false}, {in.VerifierDir, "/verifier", false}, {in.OutputDir, "/out", true}}
+	mounts := []mount{{in.WorkDir, "/work", false}, {in.OutputDir, "/out", true}}
+	if in.VerifierDir != "" {
+		mounts = append(mounts, mount{in.VerifierDir, "/verifier", false})
+	}
 	seen := map[string]bool{}
 	for _, up := range in.Upstream {
 		if !mountName.MatchString(up.Name) || seen[up.Name] {
