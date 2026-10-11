@@ -22,7 +22,7 @@ import (
 const (
 	defaultCommitPlan = "commit-plan.pkl"
 	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
-	usage             = "usage: workbench plan <verb> <file.plan.pkl> | setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable resolve|check|build|seal|verify|check-fresh|promote|materialize ... | skills check | context ... | self skills list|export | version"
+	usage             = "usage: workbench verify [focus...] [options] | plan <verb> <file.plan.pkl> | setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable resolve|check|build|seal|attest|check-fresh|promote|materialize ... | skills check | context ... | self skills list|export | version"
 )
 
 const rootHelp = `workbench <command>
@@ -30,12 +30,15 @@ const rootHelp = `workbench <command>
 Environment operations:
   setup                         Reconcile the Subject's environment.
   check                         Run setup, then typecheck and tests.
+  verify [focus...] [options]    Verify tracked bytes; show this session's changes.
+  verify promote <verifier>     Promote an attested artifact.
+  verify --help                 Focus, Gate, state, and exit-code options.
   commit [commit-plan.pkl]       Deliver the exact declared source change.
   snapshot record [file]         Write an exact resource revision snapshot.
   snapshot reproduce <file>      Acquire a snapshot's resource revisions.
   prune <identity>...            Remove named managed orphans after checks.
   run <buildable> -- <args>       Execute a declared tool.
-  buildable <operation>          Resolve, check, build, seal, verify, check-fresh,
+  buildable <operation>          Resolve, check, build, seal, attest, check-fresh,
                                 promote, or materialize a declared buildable.
   skills check                  Validate the project's local skill catalog.
   context                       Install, run, and inspect bounded context enrichment.
@@ -474,7 +477,7 @@ func parseBuildableInvocation(arguments []string) (invocation, error) {
 		if len(values) == 2 && values["candidate-root"] != "" && len(switches) == 0 {
 			return invocation{kind: commandSealBuildable, arguments: []string{name, values["candidate-root"]}}, nil
 		}
-	case "verify":
+	case "attest":
 		if len(values) == 2 && values["candidate-root"] != "" && len(switches) <= 1 {
 			_, runDeclared := switches["run-declared-verification"]
 			if len(switches) == 0 || runDeclared {

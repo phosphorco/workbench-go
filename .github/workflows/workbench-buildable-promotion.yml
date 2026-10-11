@@ -280,8 +280,12 @@ jobs:
           mise exec "github:phosphorco/workbench-go@${WORKBENCH_VERSION}" -- \
             workbench buildable seal --name "$BUILDABLE" \
             --candidate-root ".local-build/$BUILDABLE"
+          attestation_operation=attest
+          if [[ "$(printf '%s\n' "$WORKBENCH_VERSION" 0.9.0 | sort -V | head -n 1)" != 0.9.0 ]]; then
+            attestation_operation=verify
+          fi
           mise exec "github:phosphorco/workbench-go@${WORKBENCH_VERSION}" -- \
-            workbench buildable verify --name "$BUILDABLE" \
+            workbench buildable "$attestation_operation" --name "$BUILDABLE" \
             --candidate-root ".local-build/$BUILDABLE" \
             --run-declared-verification
           tar -cf "$RUNNER_TEMP/${BUILDABLE}-complete-candidate.tar" ".local-build/$BUILDABLE"
@@ -371,8 +375,12 @@ jobs:
             echo "promotion PR is missing committed candidate: $candidate_root" >&2
             exit 1
           fi
+          attestation_operation=attest
+          if [[ "$(printf '%s\n' "$WORKBENCH_VERSION" 0.9.0 | sort -V | head -n 1)" != 0.9.0 ]]; then
+            attestation_operation=verify
+          fi
           mise exec "github:phosphorco/workbench-go@${WORKBENCH_VERSION}" -- \
-            workbench buildable verify --name "$BUILDABLE" \
+            workbench buildable "$attestation_operation" --name "$BUILDABLE" \
             --candidate-root "$candidate_root"
 
   promote:
