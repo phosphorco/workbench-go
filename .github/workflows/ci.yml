@@ -37,3 +37,10 @@ jobs:
       - run: |
           test -x "$PKL_EXECUTABLE"
           go vet ./...
+      - name: Cross-build the supported macOS release targets
+        run: |
+          set -euo pipefail
+          for arch in arm64 amd64; do
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -buildvcs=false \
+              -o "$RUNNER_TEMP/workbench-darwin-$arch" ./cmd/workbench
+          done
