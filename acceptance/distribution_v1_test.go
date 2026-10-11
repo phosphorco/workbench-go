@@ -109,36 +109,36 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release-acceptance.yml"))
 	for _, marker := range []string{
-		"mise install github:phosphorco/workbench-go@0.8.1",
+		"mise install github:phosphorco/workbench-go@0.9.0",
 		"workbench skills check",
 		"workbench buildable resolve --name cold --platform linux-x86_64 --format json",
 		`"digest":"[0-9a-f]{64}"`,
-		"releases/download/0.8.0/workbench@0.8.0#/Repository.pkl",
+		"releases/download/0.9.0/workbench@0.9.0#/Repository.pkl",
 		`root = ".local-build/cold"`, `root = ".ci-build/cold"`,
 		`test ! -e "$MISE_DATA_DIR/installs"`, "published Workbench cold resolver=",
 		"GH_TOKEN: \"\"", "GITHUB_TOKEN: \"\"",
 		"Verify and check freshness of an origin-shaped legacy manifest",
-		"workbench buildable verify --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser",
+		"workbench buildable attest --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser",
 		"workbench buildable check-fresh --name basindb-state-sql-browser --candidate-root .local-build/basindb-state-sql-browser --built-from HEAD --against origin/main",
 		"origin-shaped fixture origin/main=", "origin-shaped legacy manifest verify exit=",
 		"origin-shaped legacy manifest check-fresh exit=", "origin-shaped legacy manifest keys=",
 		"origin-shaped legacy manifest source facts=synthetic fixture", "origin/main observed output identities=",
 		"basindb_sql_browser.js", "basindb_sql_browser_bg.wasm", "basindb_sql_browser.d.ts",
-		"Consume a candidate sealed by published 0.6.1 with published 0.8.1",
-		"published_revision:", "required: true", "fixture_revision:", "default: published-0.8.1", "EXPECTED_PUBLISHED_REVISION: ${{ inputs.published_revision }}", "FIXTURE_REVISION: ${{ inputs.fixture_revision }}", "ACCEPTANCE_REVISION=\"$FIXTURE_REVISION\"", "published binary provenance does not match expected published revision", "github:phosphorco/workbench-go@0.6.1",
+		"Consume a candidate sealed by published 0.6.1 with published 0.9.0",
+		"published_revision:", "required: true", "fixture_revision:", "default: published-0.9.0", "EXPECTED_PUBLISHED_REVISION: ${{ inputs.published_revision }}", "FIXTURE_REVISION: ${{ inputs.fixture_revision }}", "ACCEPTANCE_REVISION=\"$FIXTURE_REVISION\"", "published binary provenance does not match expected published revision", "github:phosphorco/workbench-go@0.6.1",
 		"releases/download/0.6.0/workbench@0.6.0#/Repository.pkl",
 		"published 0.6.1 legacy manifest declarationIdentity=absent",
-		"published 0.6.1 sealed output evidence=sha256", "published 0.8.1 consuming verify exit=",
-		"published 0.8.1 consuming check-fresh exit=", "buildable materialize --name compat --platform linux-x86_64 --destination materialized",
+		"published 0.6.1 sealed output evidence=sha256", "published 0.9.0 consuming verify exit=",
+		"published 0.9.0 consuming check-fresh exit=", "buildable materialize --name compat --platform linux-x86_64 --destination materialized",
 		"bash acceptance/release_compatibility.sh",
-		"command/scenario                  0.6.1 exit  0.8.1 exit", "python3 - \"$manifest\"",
+		"command/scenario                  0.6.1 exit  0.9.0 exit", "python3 - \"$manifest\"",
 	} {
 		if !strings.Contains(workflow, marker) {
 			t.Errorf("final public acceptance workflow lacks marker %q", marker)
 		}
 	}
 	if strings.Contains(workflow, "git clone --depth 1 --branch main https://github.com/phosphorco/monorepo.git") {
-		t.Fatal("release acceptance must not clone the private monorepo; use the public 0.6.1 seal/0.8.1 consume witness")
+		t.Fatal("release acceptance must not clone the private monorepo; use the public 0.6.1 seal/0.9.0 consume witness")
 	}
 	for _, forbidden := range []string{"workbench setup", "0.4.0/workbench@0.4.0", "workbench/proof-0.4.0"} {
 		if strings.Contains(workflow, forbidden) {
@@ -159,7 +159,7 @@ func TestDistributionV1ArchiveAndMiseCandidateNamesPublicBoundary(t *testing.T) 
 func TestReleaseWorkflowBuildsCompleteCandidateBeforeTagOnlyPublication(t *testing.T) {
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release.yml"))
 	for _, marker := range []string{
-		`tags: ["0.8.1"]`,
+		`tags: ["0.9.0"]`,
 		"workflow_dispatch:",
 		"release/acquire-pkl.sh",
 		`case "$PKL_EXECUTABLE" in /*)`,
@@ -171,7 +171,7 @@ func TestReleaseWorkflowBuildsCompleteCandidateBeforeTagOnlyPublication(t *testi
 		"Prove installed context activation, no-source behavior, and cleanup",
 		`daemon_pids=$(lsof -t "$socket" | sort -u)`,
 		"subject-path: candidate/out/workbench-*.tar.gz",
-		"subject-path: contracts/workbench@0.8.0.zip",
+		"subject-path: contracts/workbench@0.9.0.zip",
 		"gh release create",
 	} {
 		if !strings.Contains(workflow, marker) {
@@ -229,10 +229,10 @@ func TestPublishedCompatibilityMatrixOwnsIndependentOldAndNewExitChecks(t *testi
 	for _, marker := range []string{
 		"mise install \"github:phosphorco/workbench-go@$version\"",
 		"amends \"package://github.com/phosphorco/workbench-go/releases/download/0.6.0/workbench@0.6.0#/Repository.pkl\"",
-		"command/scenario                  0.6.1 exit  0.8.1 exit",
+		"command/scenario                  0.6.1 exit  0.9.0 exit",
 		"buildable build --name compat --platform linux-x86_64",
 		"buildable seal --name compat --candidate-root .local-build/compat",
-		"buildable verify --name compat --candidate-root .local-build/compat",
+		`buildable "$attestation_operation" --name compat --candidate-root .local-build/compat`,
 		"buildable check-fresh --name compat --candidate-root .local-build/compat --built-from HEAD --against origin/main",
 		"buildable materialize --name compat --platform linux-x86_64 --destination materialized",
 		"test \"$old_status\" -eq 1",

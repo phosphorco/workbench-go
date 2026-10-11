@@ -1,0 +1,300 @@
+[
+  {
+    "name": "workspace-sync",
+    "action": {
+      "version": "e35df38e7a694be0727c10b3610d2716b8fb2fb12caf795899dd5c5ea185c970",
+      "role": "run",
+      "unitId": "workspace-sync",
+      "inputs": [
+        {
+          "path": "workspace.pkl",
+          "digest": "21a3230e03772a58aff1b3709a9e232850916337e1fba95c434076b6668c6e08",
+          "mode": "100644"
+        }
+      ],
+      "upstream": [],
+      "program": [
+        {
+          "path": "run.ts",
+          "digest": "1310ca2c8932dbd118668bd97442558a3e1f546b5e15c69699dfbd6024f548d8",
+          "mode": "100644"
+        }
+      ],
+      "command": [
+        "bun",
+        "/verifier/run.ts"
+      ],
+      "imageDigest": "sha256:d4dfb48b4cdb0a7114036a735b35160e5fb192fed8d845d5cffcb0f706d881e0",
+      "verifier": "workspace-sync"
+    },
+    "key": "d018211169d68fc00971d48ff5d4eb7ce313a75c4cb60e486ae33c6edc903c2a",
+    "directory": "54dd495c595a35da272066821a71578cf0b391e84716139bb90a92f06e19e15b"
+  },
+  {
+    "name": "bun-install",
+    "action": {
+      "version": "e35df38e7a694be0727c10b3610d2716b8fb2fb12caf795899dd5c5ea185c970",
+      "role": "run",
+      "unitId": "bun-install",
+      "inputs": [
+        {
+          "path": "bun.lock",
+          "digest": "0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f",
+          "mode": "100644"
+        }
+      ],
+      "upstream": [
+        {
+          "name": "workspace-sync",
+          "digest": "7bfc45549296c4fcb50324881ec31b1a18e18107d0c9e0fa69c5a78929c932db"
+        }
+      ],
+      "program": [
+        {
+          "path": "run.ts",
+          "digest": "1310ca2c8932dbd118668bd97442558a3e1f546b5e15c69699dfbd6024f548d8",
+          "mode": "100644"
+        }
+      ],
+      "command": [
+        "bun",
+        "/verifier/run.ts"
+      ],
+      "imageDigest": "sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+      "verifier": "bun-install"
+    },
+    "key": "6be24ec8ff68dff4ec3ad3c5ebf7552d72b6d591301747515b714dfd921758e6",
+    "directory": "addd11dabef50b78d0d551508266f41ff4bb3c4227bbe3750a8654c89783698e"
+  },
+  {
+    "name": "bun-test",
+    "action": {
+      "version": "e35df38e7a694be0727c10b3610d2716b8fb2fb12caf795899dd5c5ea185c970",
+      "role": "run",
+      "unitId": "packages/a/test.ts",
+      "inputs": [
+        {
+          "path": "packages/a/test.ts",
+          "digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "mode": "100644"
+        },
+        {
+          "path": "packages/a/a.ts",
+          "digest": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "mode": "100644"
+        }
+      ],
+      "upstream": [
+        {
+          "name": "workspace-sync",
+          "digest": "7bfc45549296c4fcb50324881ec31b1a18e18107d0c9e0fa69c5a78929c932db"
+        },
+        {
+          "name": "bun-install",
+          "digest": "2188dfc2d889b53230f6891977d505642d718b940aa3eec23985afb379141dcd"
+        }
+      ],
+      "program": [
+        {
+          "path": "run.ts",
+          "digest": "1310ca2c8932dbd118668bd97442558a3e1f546b5e15c69699dfbd6024f548d8",
+          "mode": "100644"
+        }
+      ],
+      "command": [
+        "bun",
+        "/verifier/run.ts"
+      ],
+      "imageDigest": "sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+      "verifier": "bun-test"
+    },
+    "key": "7d6a23960811d63e21185bcf477042afa81a6e762809adcbc832a60b881abfdd",
+    "directory": "f5df798ad301ac13cdb20fe5a5893d447f11dc715b8bf2ca647748eaa835a2f9"
+  },
+  {
+    "name": "select",
+    "action": {
+      "version": "e35df38e7a694be0727c10b3610d2716b8fb2fb12caf795899dd5c5ea185c970",
+      "role": "select",
+      "unitId": "*",
+      "inputs": [
+        {
+          "path": "a.ts",
+          "digest": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "mode": "100644"
+        }
+      ],
+      "upstream": [],
+      "program": [
+        {
+          "path": "run.ts",
+          "digest": "1310ca2c8932dbd118668bd97442558a3e1f546b5e15c69699dfbd6024f548d8",
+          "mode": "100644"
+        }
+      ],
+      "command": [
+        "bun",
+        "/verifier/run.ts"
+      ],
+      "imageDigest": "sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+      "verifier": "bun-test"
+    },
+    "key": "58f1cd1c457cec1372cc19d4bd2fd7e7cbe26883d2a95a77d779ea826fbb3759",
+    "directory": "f0ebf4562dae97186e0725b9889a1c4d6badd814dc3a8e26d2155b2d4f59445a"
+  },
+  {
+    "name": "empty",
+    "action": {
+      "version": "e35df38e7a694be0727c10b3610d2716b8fb2fb12caf795899dd5c5ea185c970",
+      "role": "run",
+      "unitId": "unit",
+      "inputs": [],
+      "upstream": [],
+      "program": [],
+      "command": [],
+      "imageDigest": "sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+      "verifier": "empty"
+    },
+    "key": "cf97cb4e7189b482e7b46880f00f69fc1c07a3fa8475ea0d8a9f875664bff2fc",
+    "directory": "0a46677c30ae496fe43f21512d8fb27ef272f61212e16b79f8515a72e100b9a1"
+  },
+  {
+    "name": "unicode-modes",
+    "action": {
+      "version": "e35df38e7a694be0727c10b3610d2716b8fb2fb12caf795899dd5c5ea185c970",
+      "role": "run",
+      "unitId": "雪",
+      "inputs": [
+        {
+          "path": "😀.ts",
+          "digest": "4030f0c0b99ba5e189b6fe295448a8ca31ca589a55930175de18032545c11501",
+          "mode": "100644"
+        },
+        {
+          "path": ".ts",
+          "digest": "7685a5cb2b57c5026f3bcb223275c917ffcaf8c7a89262d68689e0c84802f230",
+          "mode": "100644"
+        },
+        {
+          "path": "café/<&>.ts",
+          "digest": "7acb2c21678a5410901008e5918ba8a58b8c17a3fbd9838bb61384eb26248750",
+          "mode": "100644"
+        },
+        {
+          "path": "bin/tool",
+          "digest": "3af71adb278ad4af33c144b78fa1ae708da03b773d98324ae991a7daedb53ca2",
+          "mode": "100755"
+        },
+        {
+          "path": "link",
+          "digest": "b4d371f570d910a6d7956a5f8ddff022a601c2dd958fa285de41b8b8c7048219",
+          "mode": "120000"
+        }
+      ],
+      "upstream": [],
+      "program": [
+        {
+          "path": "run.ts",
+          "digest": "1310ca2c8932dbd118668bd97442558a3e1f546b5e15c69699dfbd6024f548d8",
+          "mode": "100644"
+        }
+      ],
+      "command": [
+        "bun",
+        "/verifier/run.ts"
+      ],
+      "imageDigest": "sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+      "verifier": "edges"
+    },
+    "key": "a49baf32146e6fdaa666454869dda711d228592674540cfdec43250447dc3e22",
+    "directory": "f1856242f4eef0cfe72f06c5a73d64dee6fed8674b7097cd700d601bb8ee117e"
+  },
+  {
+    "name": "tuple-sort",
+    "action": {
+      "version": "e35df38e7a694be0727c10b3610d2716b8fb2fb12caf795899dd5c5ea185c970",
+      "role": "run",
+      "unitId": "unit",
+      "inputs": [
+        {
+          "path": "a",
+          "digest": "594e519ae499312b29433b7dd8a97ff068defcba9755b6d5d00e84c524d67b06",
+          "mode": "100644"
+        },
+        {
+          "path": "a!",
+          "digest": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "mode": "100644"
+        },
+        {
+          "path": "a,",
+          "digest": "f36a4e58670569181595399beec37e22c3dba2d8d2abd191b86602a16c23289c",
+          "mode": "100644"
+        },
+        {
+          "path": "a",
+          "digest": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "mode": "100644"
+        }
+      ],
+      "upstream": [
+        {
+          "name": "a",
+          "digest": "z"
+        },
+        {
+          "name": "a!",
+          "digest": "a"
+        }
+      ],
+      "program": [
+        {
+          "path": "z.ts",
+          "digest": "594e519ae499312b29433b7dd8a97ff068defcba9755b6d5d00e84c524d67b06",
+          "mode": "100644"
+        },
+        {
+          "path": "a.ts",
+          "digest": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "mode": "100644"
+        }
+      ],
+      "command": [
+        "bun",
+        "/verifier/run.ts"
+      ],
+      "imageDigest": "sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+      "verifier": "edges"
+    },
+    "key": "c34a68674a16e5904b0d68771b2a90bdbe9a4c836f6d1dc1d6b5f69d5b134561",
+    "directory": "6425a34c76601d2bdaf52cf753f3c48fbd999f92d12e57bb14ad4aa3981404cb"
+  },
+  {
+    "name": "json-strings",
+    "action": {
+      "version": "e35df38e7a694be0727c10b3610d2716b8fb2fb12caf795899dd5c5ea185c970",
+      "role": "run",
+      "unitId": "unit",
+      "inputs": [],
+      "upstream": [],
+      "program": [
+        {
+          "path": "run.ts",
+          "digest": "1310ca2c8932dbd118668bd97442558a3e1f546b5e15c69699dfbd6024f548d8",
+          "mode": "100644"
+        }
+      ],
+      "command": [
+        "\"\\\n\t",
+        "<&>",
+        "  ",
+        "\\u2028\\u2029",
+        "\\\\u2028"
+      ],
+      "imageDigest": "sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895",
+      "verifier": "<&>  "
+    },
+    "key": "2523227a2071ef2659b8f1647309edc46eda8107f532df5fe1e580200bd1a9b6",
+    "directory": "0a46677c30ae496fe43f21512d8fb27ef272f61212e16b79f8515a72e100b9a1"
+  }
+]

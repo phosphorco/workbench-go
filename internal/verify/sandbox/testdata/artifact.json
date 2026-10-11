@@ -1,0 +1,26 @@
+[
+  {
+    "path": "node_modules/.bin/tool",
+    "mode": "120000",
+    "bytes": "../package/tool",
+    "digest": "bd9c2c1f4b19e835f3ecd0e68562df7a5c91d3f23aa0f2a9a903e77d83b965c2"
+  },
+  {
+    "path": "node_modules/absolute",
+    "mode": "120000",
+    "bytes": "/private/host-only-input",
+    "digest": "69e780df1e7ae389e7fa51dce70065569d3cc2679a3d29982203900fcc704613"
+  },
+  {
+    "path": "node_modules/package/tool",
+    "mode": "100755",
+    "bytes": "executable",
+    "digest": "a29c2123a01df1d0febb9d308a20d8a2fe3d40a91ca8b1294f59f08f9773ebea"
+  },
+  {
+    "path": "node_modules/workspace",
+    "mode": "120000",
+    "bytes": "package",
+    "digest": "bc4a71180870f7945155fbb02f4b0a2e3faa2a62d6d31b7039013055ed19869a"
+  }
+]

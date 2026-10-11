@@ -1,7 +1,9 @@
 package evaluate_test
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -195,4 +197,84 @@ func explicitTestEvaluator(t *testing.T) evaluate.Evaluator {
 		t.Fatal(err)
 	}
 	return evaluator
+}
+
+func TestLocalContractRequiresEachExplicitDependency(t *testing.T) {
+	const uri = "workbench-contract:/dependencies/WorkbenchSubject.pkl"
+	runtime := explicitTestEvaluator(t)
+	source := []byte(`amends "workbench-contract:/dependencies/WorkbenchSubject.pkl"
+import "workbench-contract:/dependencies/fragment.pkl"
+import "workbench-contract:/dependencies/second.pkl"
+workLine { branch = fragment.branch; baseBranch = second.branch }
+entrypoints { "https://github.com/example/library" }
+`)
+	root := localContract(t, uri, "WorkbenchSubject.pkl")
+	fragment, err := evaluate.LocalContract("workbench-contract:/dependencies/fragment.pkl", `branch = "topic"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := evaluate.LocalContract("workbench-contract:/dependencies/second.pkl", `branch = "main"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile("../../pkl/WorkbenchSubject.pkl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial, err := evaluate.LocalContract(uri, string(contents), fragment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, schema := range []evaluate.Contract{root, partial} {
+		if _, err := runtime.EvaluateSubject(t.Context(), source, schema); err == nil {
+			t.Fatal("unregistered import succeeded")
+		}
+	}
+	complete, err := evaluate.LocalContract(uri, string(contents), fragment, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := runtime.EvaluateSubject(t.Context(), source, complete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject.WorkLine.Branch != "topic" || subject.WorkLine.BaseBranch != "main" {
+		t.Fatalf("subject: %#v", subject)
+	}
+	if _, err := runtime.EvaluateSubject(t.Context(), bytes.ReplaceAll(source, []byte("second.pkl"), []byte("adjacent.pkl")), complete); err == nil {
+		t.Fatal("dependency registration granted an adjacent module")
+	}
+	if _, err := evaluate.LocalContract(uri, string(contents), fragment, fragment); err == nil {
+		t.Fatal("duplicate dependency accepted")
+	}
+	different, err := evaluate.LocalContract("other:/fragment.pkl", `branch = "bad"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := evaluate.LocalContract(uri, string(contents), different); err == nil {
+		t.Fatal("dependency in another scheme accepted")
+	}
+}
+
+func TestRepositoryEvaluationCarriesVerificationPolicy(t *testing.T) {
+	const uri = "workbench-contract:/Repository.pkl"
+	source := []byte(`amends "workbench-contract:/Repository.pkl"
+import "workbench-contract:/Verifier.pkl" as V
+verifiers { ["test"] {
+ id = "test"
+ image = "example/tool@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ command { "run" }
+ selector = new V.WholeTree {}
+ produces = "report"
+} }
+gates { ["commit"] = new Gate { requires { "test" }; blocking { "error" } } }
+focuses { ["tests"] = new Focus { verifiers { "test" } } }
+`)
+	value, err := explicitTestEvaluator(t).EvaluateRepositoryDeclaration(t.Context(), source, localContract(t, uri, "Repository.pkl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Verifiers["test"].Timeout != 300 || value.Gates["commit"].Requires[0] != "test" || value.Focuses["tests"].Verifiers[0] != "test" {
+		t.Fatalf("verification policy: %#v", value)
+	}
 }

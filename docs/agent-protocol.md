@@ -8,6 +8,9 @@ Status: proposed protocol for the target architecture in
 [agent-system.md](agent-system.md). It is deliberately concrete enough to drive
 implementation and acceptance tests, but none of the commands in this document
 should be treated as released until the roadmap marks its slice complete.
+The released `workbench verify` interface is documented in
+[Verification](verification.md); its Focus grammar and result shape supersede
+the earlier scoped-verification proposal.
 
 ## Public command families
 
@@ -43,7 +46,7 @@ usage error to discover the control surface.
 workbench plan [--refresh local|remote] [--output <file>]
 workbench apply <plan-file>
 workbench setup
-workbench verify [--scope workbench|changed|resource:<id>|package:<name>]
+workbench verify [focus...] [--gate <name>] [--all] [--reset] [--json]
 workbench check
 ```
 
@@ -73,7 +76,7 @@ unchanged.
 ```text
 workbench skills check
 workbench run <buildable> -- <arguments...>
-workbench buildable check|build|seal|verify|check-fresh|promote|materialize ...
+workbench buildable check|build|seal|attest|check-fresh|promote|materialize ...
 ```
 
 These existing operations become discoverable through status, resource, and

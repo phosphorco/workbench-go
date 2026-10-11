@@ -1,0 +1,1052 @@
+[
+  {
+    "pattern": "src/**",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/**",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/**",
+    "file": "src/c.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/**",
+    "file": "src/nested/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/**",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/**",
+    "file": "src/.hidden",
+    "match": true
+  },
+  {
+    "pattern": "src/**",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "src/**",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "src/**",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/**",
+    "file": "src/🦊.txt",
+    "match": true
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "src/c.txt",
+    "match": true
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "src/nested/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "a.txt",
+    "match": true
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "**/*.txt",
+    "file": "src/🦊.txt",
+    "match": true
+  },
+  {
+    "pattern": "*.txt",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "*.txt",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "*.txt",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "*.txt",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "*.txt",
+    "file": "a.txt",
+    "match": true
+  },
+  {
+    "pattern": "*.txt",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "*.txt",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "*.txt",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "*.txt",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "*.txt",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/*",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/*",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/*",
+    "file": "src/c.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/*",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/*",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/*",
+    "file": "src/.hidden",
+    "match": true
+  },
+  {
+    "pattern": "src/*",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "src/*",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "src/*",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/*",
+    "file": "src/🦊.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/{a,b}.txt",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/[ab].txt",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/[!c].txt",
+    "file": "src/🦊.txt",
+    "match": true
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "src/c.txt",
+    "match": true
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "src/nested/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "a.txt",
+    "match": true
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "src/.hidden",
+    "match": true
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "a/b",
+    "match": true
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "a/x/b",
+    "match": true
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "!src/a.txt",
+    "file": "src/🦊.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "src/c.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/?.txt",
+    "file": "src/🦊.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "src/nested/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/**/a.txt",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "**",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "**",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "**",
+    "file": "src/c.txt",
+    "match": true
+  },
+  {
+    "pattern": "**",
+    "file": "src/nested/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "**",
+    "file": "a.txt",
+    "match": true
+  },
+  {
+    "pattern": "**",
+    "file": "src/.hidden",
+    "match": true
+  },
+  {
+    "pattern": "**",
+    "file": "a/b",
+    "match": true
+  },
+  {
+    "pattern": "**",
+    "file": "a/x/b",
+    "match": true
+  },
+  {
+    "pattern": "**",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "**",
+    "file": "src/🦊.txt",
+    "match": true
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "a/b",
+    "match": true
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "a/x/b",
+    "match": true
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**/b",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "src/.hidden",
+    "match": true
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "**/.hidden",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "src/\\*.txt",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "!!src/a.txt",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "src/c.txt",
+    "match": true
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "src/nested/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "a.txt",
+    "match": true
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "src/.hidden",
+    "match": true
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "a/b",
+    "match": true
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "a/x/b",
+    "match": true
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "!!!src/a.txt",
+    "file": "src/🦊.txt",
+    "match": true
+  },
+  {
+    "pattern": "[",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "{a",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**b",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**b",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**b",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**b",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**b",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**b",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "a/**b",
+    "file": "a/b",
+    "match": true
+  },
+  {
+    "pattern": "a/**b",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "a/**b",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "a/**b",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "src/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "src/b.txt",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "src/c.txt",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "src/nested/a.txt",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "a.txt",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "src/.hidden",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "a/x/b",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "src/*.txt",
+    "match": false
+  },
+  {
+    "pattern": "@(a|b)",
+    "file": "src/🦊.txt",
+    "match": false
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "src/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "src/b.txt",
+    "match": true
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "src/c.txt",
+    "match": true
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "src/nested/a.txt",
+    "match": true
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "a.txt",
+    "match": true
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "src/.hidden",
+    "match": true
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "a/b",
+    "match": true
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "a/x/b",
+    "match": true
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "src/*.txt",
+    "match": true
+  },
+  {
+    "pattern": "!(a|b)",
+    "file": "src/🦊.txt",
+    "match": true
+  }
+]

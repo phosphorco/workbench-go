@@ -1,0 +1,34 @@
+/// A repository's `workbench.pkl` amends this module.
+module Repository
+
+import "Verifier.pkl"
+import "Focus.pkl" as FocusModule
+import "JsonOutput.pkl"
+
+typealias Focus = FocusModule.Focus
+
+/// A policy naming which Verifiers must be attested for a Tree at a boundary.
+class Gate {
+  requires: Listing<String(!isEmpty)>(!isEmpty, isDistinct)
+  /// Severities that block; empty means only attestation is required.
+  blocking: Listing<FocusModule.Severity>(isDistinct)
+}
+
+/// Keyed by Verifier id; every `requires` names a registered artifact Verifier.
+verifiers: Mapping<String, Verifier>(
+  toMap().every((key, verifier) -> verifier.id == key),
+  toMap().values.every((verifier) ->
+    verifier.requires.toMap().values.every((upstream) ->
+      containsKey(upstream) && this[upstream].produces == "artifact"))
+)
+
+/// Every Gate requires registered Verifiers.
+gates: Mapping<String, Gate>(
+  toMap().values.every((gate) -> gate.requires.toList().every((id) -> verifiers.containsKey(id)))
+)
+
+focuses: Mapping<String, Focus>
+
+output {
+  renderer = JsonOutput.renderer
+}

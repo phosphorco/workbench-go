@@ -1,0 +1,93 @@
+/// Workspace policy: the only source of package manifests and TypeScript
+/// configuration. `pkl eval -f json workspace.pkl` yields `{ files: { path: content } }`;
+/// the workspace-sync Verifier writes each entry as a file. Nothing it generates is tracked.
+module demo.Workspace
+
+typealias PackageName = String(matches(Regex(#"^@demo/[a-z][a-z-]*$"#)))
+typealias ExactVersion = String(matches(Regex(#"^\d+\.\d+\.\d+$"#)))
+
+/// Third-party versions, pinned exactly. A package names a dependency; the version comes from here.
+catalog: Mapping<String, ExactVersion> = new {
+  ["zod"] = "3.23.8"
+}
+
+class Package {
+  name: PackageName
+  /// Workspace packages this package imports.
+  workspace: Listing<PackageName> = new {}
+  /// Third-party packages this package imports; each must be in the catalog.
+  thirdParty: Listing<String> = new {}
+}
+
+packages: Mapping<String, Package> = new {
+  ["packages/money"] { name = "@demo/money" }
+  ["packages/invoice"] {
+    name = "@demo/invoice"
+    workspace { "@demo/money" }
+    thirdParty { "zod" }
+  }
+}
+
+typescript: Mapping<String, Any> = new {
+  ["target"] = "ES2022"
+  ["module"] = "Preserve"
+  ["moduleResolution"] = "bundler"
+  ["strict"] = true
+  ["noEmit"] = true
+  ["allowImportingTsExtensions"] = true
+  ["verbatimModuleSyntax"] = true
+  ["skipLibCheck"] = true
+}
+
+local function packageJson(pkg: Package) = new Dynamic {
+  name = pkg.name
+  version = "0.0.0"
+  private = true
+  type = "module"
+  exports { ["."] = "./src/index.ts" }
+  when (!pkg.workspace.isEmpty || !pkg.thirdParty.isEmpty) {
+    dependencies {
+      for (dep in pkg.workspace) { [dep] = "workspace:*" }
+      for (dep in pkg.thirdParty) { [dep] = catalog[dep] }
+    }
+  }
+}
+
+local function tsconfig(dir: String, pkg: Package) = new Dynamic {
+  `extends` = "../../tsconfig.base.json"
+  include { "src/**/*.ts" }
+  when (!pkg.workspace.isEmpty) {
+    references {
+      for (dep in pkg.workspace) {
+        new { path = "../../" + packages.toMap().filter((_, p) -> p.name == dep).keys.single }
+      }
+    }
+  }
+}
+
+files: Mapping<String, Dynamic> = new {
+  ["package.json"] {
+    name = "demo"
+    private = true
+    type = "module"
+    workspaces { "packages/*" }
+  }
+  ["tsconfig.base.json"] {
+    compilerOptions = typescript.toMap().toDynamic()
+  }
+  ["tsconfig.json"] {
+    files = new Listing {}
+    references {
+      for (dir, _ in packages) { new { path = "./" + dir } }
+    }
+  }
+  for (dir, pkg in packages) {
+    ["\(dir)/package.json"] = packageJson(pkg)
+    ["\(dir)/tsconfig.json"] = tsconfig(dir, pkg)
+  }
+}
+
+output {
+  renderer = new JsonRenderer {}
+  value = new Dynamic { files = module.files }
+}

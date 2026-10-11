@@ -42,7 +42,7 @@ func TestRunWithDispatchesExactCommandsAndArguments(t *testing.T) {
 		{"check buildable", []string{"buildable", "check", "--name", "tsgo"}, call{name: "buildable check", root: "/workbench", values: []string{"tsgo"}}},
 		{"build buildable", []string{"buildable", "build", "--platform", "linux-x86_64", "--name", "tsgo"}, call{name: "buildable build", root: "/workbench", values: []string{"tsgo", "linux-x86_64"}}},
 		{"seal buildable", []string{"buildable", "seal", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"}, call{name: "buildable seal", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo"}}},
-		{"verify buildable", []string{"buildable", "verify", "--run-declared-verification", "--candidate-root", ".local-build/tsgo", "--name", "tsgo"}, call{name: "buildable verify", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", "true"}}},
+		{"attest buildable", []string{"buildable", "attest", "--run-declared-verification", "--candidate-root", ".local-build/tsgo", "--name", "tsgo"}, call{name: "buildable attest", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", "true"}}},
 		{"check buildable freshness", []string{"buildable", "check-fresh", "--name", "tsgo", "--against", "origin/main", "--candidate-root", ".local-build/tsgo", "--built-from", "abc"}, call{name: "buildable check-fresh", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", "abc", "origin/main"}}},
 		{"promote buildable", []string{"buildable", "promote", "--committed-root", ".ci-build/tsgo", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"}, call{name: "buildable promote", root: "/workbench", values: []string{"tsgo", ".local-build/tsgo", ".ci-build/tsgo"}}},
 		{"materialize buildable", []string{"buildable", "materialize", "--destination", "pkg/@scope", "--platform", "browser-wasm", "--name", "browser-module"}, call{name: "buildable materialize", root: "/workbench", values: []string{"browser-module", "browser-wasm", "pkg/@scope"}}},
@@ -77,8 +77,9 @@ func TestInvalidCommandsAcquireNoAuthority(t *testing.T) {
 		{"snapshot"}, {"snapshot", "record", "a", "b"}, {"snapshot", "reproduce"},
 		{"prune"}, {"prune", ""}, {"run"}, {"run", "tsgo"}, {"run", "", "--"}, {"run", "tsgo", "-b", "."},
 		{"buildable"}, {"buildable", "check"}, {"buildable", "check", "--name", "tsgo", "--extra", "value"}, {"buildable", "resolve", "--name", "tsgo", "--platform", "linux-x86_64"},
+		{"buildable", "verify", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"},
 		{"buildable", "build", "--name", "tsgo"}, {"buildable", "seal", "--name", "tsgo", "--candidate-root"},
-		{"buildable", "verify", "--name", "tsgo", "--run-declared-verification", "--run-declared-verification", "--candidate-root", ".local-build/tsgo"},
+		{"buildable", "attest", "--name", "tsgo", "--run-declared-verification", "--run-declared-verification", "--candidate-root", ".local-build/tsgo"},
 		{"buildable", "check-fresh", "--name", "tsgo", "--candidate-root", ".local-build/tsgo", "--built-from", "a"},
 		{"buildable", "promote", "--name", "tsgo", "--candidate-root", ".local-build/tsgo"},
 		{"buildable", "materialize", "--name", "browser-module", "--platform", "browser-wasm"},
@@ -550,7 +551,7 @@ func recordingApplications(calls *[]call) applications {
 			return nil
 		},
 		verifyBuildable: func(_ context.Context, root, name, candidate string, runDeclared bool) error {
-			*calls = append(*calls, call{name: "buildable verify", root: root, values: []string{name, candidate, fmt.Sprint(runDeclared)}})
+			*calls = append(*calls, call{name: "buildable attest", root: root, values: []string{name, candidate, fmt.Sprint(runDeclared)}})
 			return nil
 		},
 		checkFreshBuildable: func(_ context.Context, root, name, candidate, builtFrom, against string) error {

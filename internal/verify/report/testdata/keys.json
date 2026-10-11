@@ -1,0 +1,789 @@
+[
+  {
+    "name": "before",
+    "files": {
+      "src/秘密.ts": [
+        104,
+        101,
+        97,
+        100,
+        101,
+        114,
+        10,
+        98,
+        97,
+        100,
+        10,
+        98,
+        97,
+        100,
+        10,
+        108,
+        97,
+        115,
+        116,
+        13,
+        10
+      ]
+    },
+    "units": [
+      {
+        "verifier": "v",
+        "unitId": "b",
+        "report": {
+          "unitId": "b",
+          "diagnostics": [
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 3,
+                  "column": 2
+                }
+              }
+            }
+          ],
+          "members": [
+            {
+              "name": "member",
+              "status": "fail"
+            }
+          ]
+        }
+      },
+      {
+        "verifier": "v",
+        "unitId": "a",
+        "report": {
+          "unitId": "a",
+          "diagnostics": [
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 2,
+                  "column": 2
+                }
+              }
+            },
+            {
+              "errorKey": "CRLF",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 4,
+                  "column": 2
+                }
+              }
+            }
+          ],
+          "members": [
+            {
+              "name": "member",
+              "status": "fail"
+            }
+          ]
+        }
+      }
+    ],
+    "occurrences": [
+      {
+        "key": "e49a00c8d19d3f0c885c11ca1b319d79cdd2d2149b2765068b0ee91da633c0ce",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 2,
+            "column": 2
+          }
+        },
+        "anchor": "2f05d4b689d270cafb02285f35f44866f7dc8a2d368a3f9d1124373eeab31fb1:0"
+      },
+      {
+        "key": "5b50a9853e42efde633bbf8b1a9f221f8b682bdcf5122b4fddf0113cc465113e",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "CRLF",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 4,
+            "column": 2
+          }
+        },
+        "anchor": "5757d8f7a782e8ba4b0709517873038910bc69bd4b2f07f7697e684982edbfc0:0"
+      },
+      {
+        "key": "7e351aa167ee069a68cbf86a6a0843100517d94ccd3876100b22178f7754c235",
+        "verifier": "v",
+        "unitId": "b",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 3,
+            "column": 2
+          }
+        },
+        "anchor": "2f05d4b689d270cafb02285f35f44866f7dc8a2d368a3f9d1124373eeab31fb1:1"
+      }
+    ],
+    "members": [
+      {
+        "verifier": "v",
+        "unitId": "b",
+        "name": "member",
+        "status": "fail"
+      },
+      {
+        "verifier": "v",
+        "unitId": "a",
+        "name": "member",
+        "status": "fail"
+      }
+    ]
+  },
+  {
+    "name": "edited-above",
+    "files": {
+      "src/秘密.ts": [
+        105,
+        110,
+        115,
+        101,
+        114,
+        116,
+        101,
+        100,
+        10,
+        104,
+        101,
+        97,
+        100,
+        101,
+        114,
+        10,
+        98,
+        97,
+        100,
+        10,
+        98,
+        97,
+        100,
+        10,
+        108,
+        97,
+        115,
+        116,
+        13,
+        10
+      ]
+    },
+    "units": [
+      {
+        "verifier": "v",
+        "unitId": "b",
+        "report": {
+          "unitId": "b",
+          "diagnostics": [
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 4,
+                  "column": 2
+                }
+              }
+            }
+          ],
+          "members": [
+            {
+              "name": "member",
+              "status": "fail"
+            }
+          ]
+        }
+      },
+      {
+        "verifier": "v",
+        "unitId": "a",
+        "report": {
+          "unitId": "a",
+          "diagnostics": [
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 3,
+                  "column": 2
+                }
+              }
+            },
+            {
+              "errorKey": "CRLF",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 5,
+                  "column": 2
+                }
+              }
+            }
+          ],
+          "members": [
+            {
+              "name": "member",
+              "status": "fail"
+            }
+          ]
+        }
+      }
+    ],
+    "occurrences": [
+      {
+        "key": "e49a00c8d19d3f0c885c11ca1b319d79cdd2d2149b2765068b0ee91da633c0ce",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 3,
+            "column": 2
+          }
+        },
+        "anchor": "2f05d4b689d270cafb02285f35f44866f7dc8a2d368a3f9d1124373eeab31fb1:0"
+      },
+      {
+        "key": "5b50a9853e42efde633bbf8b1a9f221f8b682bdcf5122b4fddf0113cc465113e",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "CRLF",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 5,
+            "column": 2
+          }
+        },
+        "anchor": "5757d8f7a782e8ba4b0709517873038910bc69bd4b2f07f7697e684982edbfc0:0"
+      },
+      {
+        "key": "7e351aa167ee069a68cbf86a6a0843100517d94ccd3876100b22178f7754c235",
+        "verifier": "v",
+        "unitId": "b",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 4,
+            "column": 2
+          }
+        },
+        "anchor": "2f05d4b689d270cafb02285f35f44866f7dc8a2d368a3f9d1124373eeab31fb1:1"
+      }
+    ],
+    "members": [
+      {
+        "verifier": "v",
+        "unitId": "b",
+        "name": "member",
+        "status": "fail"
+      },
+      {
+        "verifier": "v",
+        "unitId": "a",
+        "name": "member",
+        "status": "fail"
+      }
+    ]
+  },
+  {
+    "name": "changed-line",
+    "files": {
+      "src/秘密.ts": [
+        104,
+        101,
+        97,
+        100,
+        101,
+        114,
+        10,
+        99,
+        104,
+        97,
+        110,
+        103,
+        101,
+        100,
+        10,
+        98,
+        97,
+        100,
+        10,
+        108,
+        97,
+        115,
+        116,
+        13,
+        10
+      ]
+    },
+    "units": [
+      {
+        "verifier": "v",
+        "unitId": "b",
+        "report": {
+          "unitId": "b",
+          "diagnostics": [
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 3,
+                  "column": 2
+                }
+              }
+            }
+          ],
+          "members": [
+            {
+              "name": "member",
+              "status": "fail"
+            }
+          ]
+        }
+      },
+      {
+        "verifier": "v",
+        "unitId": "a",
+        "report": {
+          "unitId": "a",
+          "diagnostics": [
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 2,
+                  "column": 2
+                }
+              }
+            },
+            {
+              "errorKey": "CRLF",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 4,
+                  "column": 2
+                }
+              }
+            }
+          ],
+          "members": [
+            {
+              "name": "member",
+              "status": "fail"
+            }
+          ]
+        }
+      }
+    ],
+    "occurrences": [
+      {
+        "key": "504170be93ad85e01f6c76a4630d352a874916228902339fb5cf29d44a67ddc9",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 2,
+            "column": 2
+          }
+        },
+        "anchor": "d67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed:0"
+      },
+      {
+        "key": "5b50a9853e42efde633bbf8b1a9f221f8b682bdcf5122b4fddf0113cc465113e",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "CRLF",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 4,
+            "column": 2
+          }
+        },
+        "anchor": "5757d8f7a782e8ba4b0709517873038910bc69bd4b2f07f7697e684982edbfc0:0"
+      },
+      {
+        "key": "e49a00c8d19d3f0c885c11ca1b319d79cdd2d2149b2765068b0ee91da633c0ce",
+        "verifier": "v",
+        "unitId": "b",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 3,
+            "column": 2
+          }
+        },
+        "anchor": "2f05d4b689d270cafb02285f35f44866f7dc8a2d368a3f9d1124373eeab31fb1:0"
+      }
+    ],
+    "members": [
+      {
+        "verifier": "v",
+        "unitId": "b",
+        "name": "member",
+        "status": "fail"
+      },
+      {
+        "verifier": "v",
+        "unitId": "a",
+        "name": "member",
+        "status": "fail"
+      }
+    ]
+  },
+  {
+    "name": "missing-line-and-file",
+    "files": {
+      "src/秘密.ts": [
+        120,
+        10
+      ]
+    },
+    "units": [
+      {
+        "verifier": "v",
+        "unitId": "a",
+        "report": {
+          "unitId": "a",
+          "diagnostics": [
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 20,
+                  "column": 2
+                }
+              }
+            },
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 2,
+                  "column": 2
+                }
+              }
+            },
+            {
+              "errorKey": "unit",
+              "severity": "message",
+              "message": "no file"
+            },
+            {
+              "errorKey": "no range",
+              "severity": "warning",
+              "message": "no range",
+              "file": "missing"
+            }
+          ],
+          "members": [
+            {
+              "name": "member",
+              "status": "fail"
+            }
+          ]
+        }
+      }
+    ],
+    "occurrences": [
+      {
+        "key": "9346294acf21f00a94abe8321890497f91931c1588a403d544b8b2667723d08d",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 20,
+            "column": 2
+          }
+        },
+        "anchor": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855:0"
+      },
+      {
+        "key": "1d6d2cdb625b0af555b5980486b1ff1a3c1af382b128efdfe8863fbd6317c6e6",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 2,
+            "column": 2
+          }
+        },
+        "anchor": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855:1"
+      },
+      {
+        "key": "9cd5607aa17aae32f625eb6e947ae11fbbbad098cba414ced566c272f820ceb0",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "unit",
+        "severity": "message",
+        "message": "no file",
+        "anchor": "a"
+      },
+      {
+        "key": "4b5f3bbe03e818485a64a53268210de35b1a4bfd80a7559a896acaca4ca21ded",
+        "verifier": "v",
+        "unitId": "a",
+        "errorKey": "no range",
+        "severity": "warning",
+        "message": "no range",
+        "file": "missing",
+        "anchor": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855:0"
+      }
+    ],
+    "members": [
+      {
+        "verifier": "v",
+        "unitId": "a",
+        "name": "member",
+        "status": "fail"
+      }
+    ]
+  },
+  {
+    "name": "binary-lines-and-utf16-order",
+    "files": {
+      "src/秘密.ts": [
+        255,
+        0,
+        13,
+        10,
+        254
+      ]
+    },
+    "units": [
+      {
+        "verifier": "",
+        "unitId": "z",
+        "report": {
+          "unitId": "z",
+          "diagnostics": [
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 1,
+                  "column": 2
+                }
+              }
+            }
+          ],
+          "members": [
+            {
+              "name": "member",
+              "status": "fail"
+            }
+          ]
+        }
+      },
+      {
+        "verifier": "😀",
+        "unitId": "z",
+        "report": {
+          "unitId": "z",
+          "diagnostics": [
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 1,
+                  "column": 2
+                }
+              }
+            },
+            {
+              "errorKey": "FAIL<&>  \\u2028",
+              "code": "CODE",
+              "severity": "error",
+              "message": "failure",
+              "file": "src/秘密.ts",
+              "range": {
+                "start": {
+                  "line": 2,
+                  "column": 2
+                }
+              }
+            }
+          ],
+          "members": [
+            {
+              "name": "member",
+              "status": "fail"
+            }
+          ]
+        }
+      }
+    ],
+    "occurrences": [
+      {
+        "key": "41736cd78b81e6d5067b9549674bc76d2eb60a8137d528aca41a5d950d103407",
+        "verifier": "😀",
+        "unitId": "z",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 1,
+            "column": 2
+          }
+        },
+        "anchor": "eb5de5f7d01dd4a4e886385d2d3557d3da8b638330c5e85d65c43dd02876ee43:0"
+      },
+      {
+        "key": "32ab8a283e53c5a5f03467b1a03be15330aad37ebdbb9d8bdd84378577a8fc6c",
+        "verifier": "😀",
+        "unitId": "z",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 2,
+            "column": 2
+          }
+        },
+        "anchor": "aa687b58b0e73e2e383f8c500d75b591e188efe0168b3ffbcd3771caaa6dd4c7:0"
+      },
+      {
+        "key": "859ec9d3d3c0015b7ee2738ad35316c40a8f57a2c7c81386ab7063d6daf288ce",
+        "verifier": "",
+        "unitId": "z",
+        "errorKey": "FAIL<&>  \\u2028",
+        "code": "CODE",
+        "severity": "error",
+        "message": "failure",
+        "file": "src/秘密.ts",
+        "range": {
+          "start": {
+            "line": 1,
+            "column": 2
+          }
+        },
+        "anchor": "eb5de5f7d01dd4a4e886385d2d3557d3da8b638330c5e85d65c43dd02876ee43:0"
+      }
+    ],
+    "members": [
+      {
+        "verifier": "",
+        "unitId": "z",
+        "name": "member",
+        "status": "fail"
+      },
+      {
+        "verifier": "😀",
+        "unitId": "z",
+        "name": "member",
+        "status": "fail"
+      }
+    ]
+  }
+]

@@ -1,0 +1,18 @@
+amends "modulepath:/Repository.pkl"
+
+verifiers {
+  ["workspace-sync"] = import("verifiers/workspace-sync/VERIFIER.pkl")
+  ["bun-install"] = import("verifiers/bun-install/VERIFIER.pkl")
+  ["bun-test"] = import("verifiers/bun-test/VERIFIER.pkl")
+}
+
+gates {
+  ["commit"] = new Gate {
+    requires { "bun-test" }
+    blocking { "error" }
+  }
+}
+
+focuses {
+  ["tests"] = new Focus { verifiers { "bun-test" } }
+}
