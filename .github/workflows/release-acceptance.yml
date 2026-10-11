@@ -83,6 +83,33 @@ jobs:
           test "$("$planner_binary" version)" = "workbench 0.9.0 ($EXPECTED_PUBLISHED_REVISION)"
           bash acceptance/planner_release.sh "$planner_binary" "$RUNNER_TEMP/published-planner"
 
+      - name: Verify tracked source with the private Pkl runtime and no Pkl on PATH
+        run: |
+          set -euo pipefail
+          export MISE_DATA_DIR="$RUNNER_TEMP/planner-mise-data"
+          export MISE_CACHE_DIR="$RUNNER_TEMP/planner-mise-cache"
+          export MISE_STATE_DIR="$RUNNER_TEMP/planner-mise-state"
+          export MISE_CONFIG_DIR="$RUNNER_TEMP/planner-mise-config"
+          verify_binary="$(mise which --tool github:phosphorco/workbench-go@0.9.0 workbench)"
+          root="$RUNNER_TEMP/private-pkl-verify"
+          tools="$RUNNER_TEMP/verify-git-only"
+          mkdir -p "$root" "$tools"
+          ln -s "$(command -v git)" "$tools/git"
+          cat > "$root/workbench.pkl" <<'EOF'
+          amends "modulepath:/Repository.pkl"
+          EOF
+          git -C "$root" init
+          git -C "$root" add workbench.pkl
+          git -C "$root" -c user.name=Release -c user.email=release@example.invalid commit -m fixture
+          if PATH="$tools" command -v pkl; then
+            echo "verification smoke unexpectedly has Pkl on PATH" >&2
+            exit 1
+          fi
+          (cd "$root" && PATH="$tools" "$verify_binary" verify --home "$RUNNER_TEMP/private-pkl-state" --session release) > "$RUNNER_TEMP/private-pkl-verify.stdout"
+          grep -Fx '0 unchanged' "$RUNNER_TEMP/private-pkl-verify.stdout"
+          PATH="$tools" "$verify_binary" verify --help > "$RUNNER_TEMP/private-pkl-help.stdout"
+          grep -F 'usage: workbench verify' "$RUNNER_TEMP/private-pkl-help.stdout"
+
       - name: Resolve a cold buildable through the published 0.9.0 asset
         run: |
           set -euo pipefail
