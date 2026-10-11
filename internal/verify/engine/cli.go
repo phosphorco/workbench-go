@@ -6,8 +6,11 @@ import (
 	"io"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/phosphorco/workbench-go/internal/verify/client"
+	"github.com/phosphorco/workbench-go/internal/verify/declaration"
+	"github.com/phosphorco/workbench-go/internal/verify/distribution"
 	"github.com/phosphorco/workbench-go/internal/verify/observe"
 	"github.com/phosphorco/workbench-go/internal/verify/report"
 	"github.com/phosphorco/workbench-go/internal/verify/sandbox"
@@ -17,6 +20,7 @@ import (
 const Usage = `usage: workbench verify [file:<glob>]... [code:<c>,<c>]... [unit:<id>]... [member:<name>]...
                         [verifier:<id>]... [severity:<s>]... [focus:<name>]...
                         [--gate <name>] [--all] [--reset] [--json] [--home DIR] [--session ID]
+       workbench verify promote <verifier> [--home DIR]
 
 Verifies tracked working-tree bytes against workbench.pkl and prints what changed
 since this session last looked.
@@ -41,6 +45,9 @@ type IO struct {
 
 // Main presents before updating Last Seen; focus never narrows engine work.
 func Main(ctx context.Context, argv []string, streams IO) (int, error) {
+	if len(argv) > 0 && argv[0] == "promote" {
+		return promote(ctx, argv[1:], streams)
+	}
 	options, err := client.Parse(argv, streams.Env)
 	if err != nil {
 		if _, writeErr := fmt.Fprintf(streams.Stderr, "%s\n%s", err, Usage); writeErr != nil {
@@ -134,4 +141,54 @@ func Main(ctx context.Context, argv []string, streams IO) (int, error) {
 		status, blocking = &value, gate.Blocking
 	}
 	return client.Present(client.Presentation{Options: options, Observation: observation, Occurrences: occurrences, Members: members, Focus: focus, Gate: status, Blocking: blocking}, streams.Stdout)
+}
+
+func promote(ctx context.Context, argv []string, streams IO) (int, error) {
+	fail := func(err error) (int, error) { _, writeErr := fmt.Fprintln(streams.Stderr, err); return 2, writeErr }
+	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+		return fail(fmt.Errorf("usage: workbench verify promote <verifier> [--home DIR]"))
+	}
+	for i := 1; i < len(argv); i += 2 {
+		if argv[i] != "--home" || i+1 >= len(argv) {
+			return fail(fmt.Errorf("unrecognized promote argument %q", argv[i]))
+		}
+	}
+	options, err := client.Parse(argv[1:], streams.Env)
+	if err != nil {
+		return fail(err)
+	}
+	cwd, err := streams.WorkingDirectory()
+	if err != nil {
+		return fail(err)
+	}
+	snapshot, err := tree.Compute(ctx, cwd, options.Home)
+	if err != nil {
+		return fail(err)
+	}
+	evaluated, err := Evaluate(ctx, snapshot, options.Home)
+	if err != nil {
+		return fail(err)
+	}
+	raw, exists := evaluated.Manifests[argv[0]]
+	if !exists {
+		return fail(fmt.Errorf("no verifier %q in workbench.pkl", argv[0]))
+	}
+	registered, err := declaration.Register(raw)
+	if err != nil {
+		return fail(err)
+	}
+	if err := distribution.Validate(registered.Manifest); err != nil {
+		return fail(err)
+	}
+	concurrency, _ := strconv.Atoi(streams.Env["VERIFY_CONCURRENCY"])
+	observation, err := Observe(ctx, Options{Home: options.Home, Tree: snapshot, Declaration: evaluated, Concurrency: concurrency})
+	if err != nil {
+		return fail(err)
+	}
+	receipt, err := distribution.Promote(distribution.Options{Home: options.Home, Root: snapshot.Root, Tree: snapshot.Hash, Verifier: registered, Observation: observation})
+	if err != nil {
+		return fail(err)
+	}
+	_, err = fmt.Fprintf(streams.Stdout, "promoted %s to %s; artifact %s\n", receipt.Verifier, receipt.Target, receipt.ArtifactDigest)
+	return 0, err
 }

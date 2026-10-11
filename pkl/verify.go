@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/phosphorco/workbench-go/internal/buildable"
 )
 
 //go:embed Repository.pkl
@@ -44,6 +46,13 @@ type Verifier struct {
 	Deterministic bool              `json:"deterministic"`
 	Network       string            `json:"network"`
 	Timeout       float64           `json:"timeout"`
+	Distribution  *Distribution     `json:"distribution,omitempty"`
+}
+
+type Distribution struct {
+	Manifest buildable.ManifestContract `json:"manifest"`
+	Platform string                     `json:"platform"`
+	Target   string                     `json:"target"`
 }
 
 type Selector struct {
