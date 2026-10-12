@@ -109,8 +109,8 @@ type Presentation struct {
 	Blocking    []string
 }
 
-// JSONOutput emits the reference CLI envelope, including observed occurrences.
-func JSONOutput(o observe.Observation, occurrences []report.Occurrence, members []report.MemberStatus, d Delta, f Focus) (string, error) {
+// ObservationJSONOutput exposes the full Observation for explicit inspection.
+func ObservationJSONOutput(o observe.Observation, occurrences []report.Occurrence, members []report.MemberStatus, d Delta, f Focus) (string, error) {
 	wire := struct {
 		Observation struct {
 			Tree        string                `json:"tree"`
@@ -119,17 +119,25 @@ func JSONOutput(o observe.Observation, occurrences []report.Occurrence, members 
 			Unknown     []observe.Unknown     `json:"unknown"`
 			Occurrences []report.Occurrence   `json:"occurrences"`
 			Members     []report.MemberStatus `json:"members"`
+			Complete    bool                  `json:"complete"`
 		} `json:"observation"`
 		Delta Delta `json:"delta"`
 		Focus Focus `json:"focus"`
 	}{Delta: d, Focus: normalizedFocus(f)}
 	wire.Observation.Tree = o.Tree
+	wire.Observation.Complete = o.Complete
 	wire.Observation.Verifiers = append([]observe.Verifier{}, o.Verifiers...)
 	wire.Observation.Results = append([]observe.Result{}, o.Results...)
 	wire.Observation.Unknown = append([]observe.Unknown{}, o.Unknown...)
 	wire.Observation.Occurrences = append([]report.Occurrence{}, occurrences...)
 	wire.Observation.Members = append([]report.MemberStatus{}, members...)
 	data, err := encode(wire, true)
+	return string(data) + "\n", err
+}
+
+// JSONOutput renders the same grouped fold as text without engine mechanics.
+func JSONOutput(o observe.Observation, occurrences []report.Occurrence, members []report.MemberStatus, d Delta, f Focus) (string, error) {
+	data, err := encode(d.Output, true)
 	return string(data) + "\n", err
 }
 
@@ -142,14 +150,11 @@ func Present(p Presentation, output io.Writer) (int, error) {
 			return 2, err
 		}
 	}
-	last := LastSeen{Occurrences: []SeenEntry{}}
-	if !p.Options.All {
-		var err error
-		last, err = ReadLastSeen(path)
-		if err != nil {
-			return 2, err
-		}
+	last, err := ReadLastSeen(path)
+	if err != nil {
+		return 2, err
 	}
+
 	d, next := Fold(FoldInput{p.Observation, p.Occurrences, p.Members, last, p.Focus, p.Gate})
 	blocking := p.Blocking
 	if blocking == nil {
@@ -159,7 +164,11 @@ func Present(p Presentation, output io.Writer) (int, error) {
 	text := Render(d, RenderOptions{p.Options.All, exit})
 	if p.Options.JSON {
 		var err error
-		text, err = JSONOutput(p.Observation, p.Occurrences, p.Members, d, p.Focus)
+		if p.Options.ObservationJSON {
+			text, err = ObservationJSONOutput(p.Observation, p.Occurrences, p.Members, d, p.Focus)
+		} else {
+			text, err = JSONOutput(p.Observation, p.Occurrences, p.Members, d, p.Focus)
+		}
 		if err != nil {
 			return 2, err
 		}

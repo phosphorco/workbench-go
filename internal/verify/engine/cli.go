@@ -17,24 +17,7 @@ import (
 	"github.com/phosphorco/workbench-go/internal/verify/tree"
 )
 
-const Usage = `usage: workbench verify [file:<glob>]... [code:<c>,<c>]... [unit:<id>]... [member:<name>]...
-                        [verifier:<id>]... [severity:<s>]... [focus:<name>]...
-                        [--gate <name>] [--all] [--reset] [--json] [--home DIR] [--session ID]
-       workbench verify promote <verifier> [--home DIR]
-
-Verifies tracked working-tree bytes against workbench.pkl and prints what changed
-since this session last looked.
-
-  --gate <name>  require the named Gate over the whole Observation
-  --all          show all occurrences without writing Last Seen
-  --reset        clear this session's Last Seen before presenting
-  --json         print {observation, delta, focus}
-  --home DIR     state directory (VERIFY_HOME, else ~/.verify)
-  --session ID   session (PHOSPHOR_VERIFY_SESSION, BB_THREAD_ID, else default)
-
-Exit 0: clean in focus and Gate satisfied; 1: blocking or Gate unsatisfied;
-     2: usage, Tree, or declaration error; 3: unknown Unit in focus.
-`
+const Usage = client.Usage
 
 type IO struct {
 	WorkingDirectory func() (string, error)

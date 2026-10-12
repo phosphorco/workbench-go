@@ -19,6 +19,7 @@ type Seen struct {
 	File     *string       `json:"file,omitempty"`
 	Range    *report.Range `json:"range,omitempty"`
 	Anchor   string        `json:"anchor"`
+	Message  *string       `json:"message,omitempty"`
 }
 
 type SeenEntry struct {
@@ -109,8 +110,8 @@ type Gate struct {
 type GateStatus struct {
 	Name      string   `json:"name"`
 	Satisfied bool     `json:"satisfied"`
-	Missing   []string `json:"missing"`
 	Blocking  int      `json:"blocking"`
+	Missing   []string `json:"missing"`
 }
 type Elsewhere struct {
 	New       int `json:"new"`
@@ -131,6 +132,7 @@ type ObservationSummary struct {
 	Verifiers []observe.Verifier `json:"verifiers"`
 }
 type Delta struct {
+	Output      GroupedOutput       `json:"-"`
 	Observation ObservationSummary  `json:"observation"`
 	New         []report.Occurrence `json:"new"`
 	Resolved    []Resolved          `json:"resolved"`
@@ -162,6 +164,8 @@ func Fold(in FoldInput) (Delta, LastSeen) {
 		present[o.Key] = true
 	}
 	elsewhere := Elsewhere{}
+	resolvedEntries := []taggedOccurrence{}
+	entries := []taggedOccurrence{}
 	for _, e := range in.LastSeen.Occurrences {
 		if present[e.Key] {
 			continue
@@ -173,6 +177,16 @@ func Fold(in FoldInput) (Delta, LastSeen) {
 			next.Occurrences = upsert(next.Occurrences, indices, e)
 			continue
 		}
+		s := e.Seen
+		message := s.ErrorKey
+		if s.Message != nil {
+			message = *s.Message
+		}
+		severity := s.Severity
+		if severity == "" {
+			severity = "error"
+		}
+		resolvedEntries = append(resolvedEntries, taggedOccurrence{report.Occurrence{Key: e.Key, Verifier: s.Verifier, UnitID: s.UnitID, Diagnostic: report.Diagnostic{ErrorKey: s.ErrorKey, Code: s.Code, Severity: severity, Message: message, File: s.File, Range: s.Range}, Anchor: s.Anchor}, "resolved"})
 		if !Focused(in.Focus, e.Seen) {
 			elsewhere.Resolved++
 			continue
@@ -187,6 +201,11 @@ func Fold(in FoldInput) (Delta, LastSeen) {
 		_, wasSeen := prior[o.Key]
 		s := seen(o)
 		focused := Focused(in.Focus, s)
+		status := "new"
+		if wasSeen {
+			status = "unchanged"
+		}
+		entries = append(entries, taggedOccurrence{o, status})
 		if focused {
 			if wasSeen {
 				d.Unchanged++
@@ -213,10 +232,11 @@ func Fold(in FoldInput) (Delta, LastSeen) {
 			}
 		}
 	}
+	d.Output = output(in.Observation, d, groupOccurrences(append(entries, resolvedEntries...), in.Focus))
 	return d, next
 }
 func seen(o report.Occurrence) Seen {
-	return Seen{o.Verifier, o.UnitID, o.ErrorKey, o.Code, o.Severity, o.File, o.Range, o.Anchor}
+	return Seen{o.Verifier, o.UnitID, o.ErrorKey, o.Code, o.Severity, o.File, o.Range, o.Anchor, &o.Message}
 }
 
 // EvaluateGate reads the whole Observation and has no Focus input.

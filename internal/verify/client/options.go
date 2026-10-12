@@ -9,15 +9,16 @@ import (
 )
 
 type Options struct {
-	Focus      Focus
-	FocusNames []string
-	Gate       *string
-	All        bool
-	Reset      bool
-	JSON       bool
-	Home       string
-	Session    string
-	Help       bool
+	Focus           Focus
+	FocusNames      []string
+	Gate            *string
+	All             bool
+	Reset           bool
+	JSON            bool
+	ObservationJSON bool
+	Home            string
+	Session         string
+	Help            bool
 }
 
 type UsageError struct{ Message string }
@@ -43,6 +44,10 @@ func Parse(argv []string, env map[string]string) (Options, error) {
 			o.Reset = true
 		case "--json":
 			o.JSON = true
+			o.ObservationJSON = false
+		case "--json=observation":
+			o.JSON = true
+			o.ObservationJSON = true
 		case "--help", "-h":
 			o.Help = true
 			return o, nil
@@ -126,3 +131,25 @@ func ResolveFocus(o Options, declared map[string]Focus) (Focus, error) {
 	}
 	return f, nil
 }
+
+const Usage = `workbench verify [--gate <name>] [--json]
+                 [file:<glob>]... [code:<c>,<c>]... [unit:<id>]... [member:<name>]...
+                 [verifier:<id>,<id>]... [severity:<s>,<s>]... [focus:<name>]...
+                 [--all] [--reset] [--json=observation] [--home DIR] [--session ID]
+workbench verify promote <verifier> [--home DIR]
+
+Verifies tracked working-tree bytes against workbench.pkl and prints what changed
+since this session last looked. Focus force-shows matching occurrences without
+narrowing verification.
+
+  --gate <name>       require the named Gate over the whole Observation
+  --json              print grouped errors, occurrence status, and Unit coverage
+  --all               show unchanged occurrences without writing Last Seen
+  --reset             clear this session's Last Seen before presenting
+  --json=observation  inspect the full Observation, Delta, and Focus
+  --home DIR          state directory (VERIFY_HOME, else ~/.verify)
+  --session ID        session (PHOSPHOR_VERIFY_SESSION, BB_THREAD_ID, else default)
+
+Exit 0: clean in focus and Gate satisfied; 1: blocking or Gate unsatisfied;
+     2: usage, Tree, or declaration error; 3: unknown Unit in focus.
+`

@@ -7,10 +7,11 @@ pinned Verifier images must be available. The released executable bundles Pkl;
 a development build uses Pkl on PATH.
 
 ```text
-workbench verify [file:<glob>]... [code:<c>,<c>]... [unit:<id>]...
+workbench verify [--gate <name>] [--json]
+                 [file:<glob>]... [code:<c>,<c>]... [unit:<id>]...
                  [member:<name>]... [verifier:<id>,<id>]...
                  [severity:<s>,<s>]... [focus:<name>]...
-                 [--gate <name>] [--all] [--reset] [--json]
+                 [--all] [--reset] [--json=observation]
                  [--session ID] [--home DIR]
 workbench verify promote <verifier> [--home DIR]
 ```
@@ -29,7 +30,8 @@ workbench verify --reset
 | Option | Behavior |
 | --- | --- |
 | `--gate <name>` | Require the declared Gate over the entire Observation, including occurrences outside Focus. |
-| `--json` | Emit `{observation, delta, focus}` instead of rendered text. |
+| `--json` | Emit grouped errors, occurrence status, and Unit coverage. |
+| `--json=observation` | Inspect the full `{observation, delta, focus}` envelope, including action keys and provenance. |
 | `--all` | Show every occurrence, including seen occurrences; leave Last Seen unchanged. |
 | `--reset` | Clear this session's Last Seen before the normal call. Combined with `--all`, the reset still clears state. |
 | `--session ID` | Override `PHOSPHOR_VERIFY_SESSION`, then `BB_THREAD_ID`, then `default`. |
@@ -43,12 +45,64 @@ and private object storage: it does not write the checkout's Git index or HEAD.
 Untracked files never enter the Tree. Declare and track all source, manifests,
 and Verifier programs before verifying them.
 
-A normal call writes Last Seen only after output succeeds. New occurrences are
-grouped by error, file, and position; resolved occurrences include their last
-anchor; unchanged occurrences are counted. Unknown Units retain their previous
-occurrences in Last Seen because they were not observed. Resolved occurrences
+The first text line tells you the next action: `clean · push satisfied`,
+`1 new · 2 unchanged · push blocked`, or an Unknown line when verification is
+incomplete. Unknowns include a retry hint. Errors share one template per identity,
+followed by each file and its occurrences:
+
+```text
+1 new · 1 unchanged · push blocked
+error TS2339 [tsc] Property '<arg1>' does not exist on type 'Money'.
+  src/money.ts
+    new 12:5  tag
+```
+
+Quoted values that vary become `<arg1>`, `<arg2>`, and so on; constant quoted
+values stay literal. Short messages retain exact headers when a template would
+cost more. New, unchanged, and resolved occurrences share the same group.
+Resolved positions and messages are their last known values. Unchanged positions
+are hidden unless Focus or `--all` forces them visible; counts always carry them.
+
+`--json` preserves the error → file → occurrence nesting in the same fold:
+
+```json
+{
+  "tree": "01234567",
+  "units": { "total": 2, "ran": ["tsc:src/money.ts"] },
+  "groups": [{
+    "code": "TS2339", "verifier": "tsc", "severity": "error",
+    "message": "Property '<arg1>' does not exist on type 'Money'.",
+    "parameterized": true,
+    "files": [{ "path": "src/money.ts", "occurrences": [
+      { "line": 12, "column": 5, "args": ["tag"], "status": "new" },
+      { "line": 19, "column": 5, "args": ["currency"], "status": "unchanged" }
+    ] }],
+    "counts": { "new": 1, "resolved": 0, "unchanged": 1 }
+  }],
+  "unknown": [],
+  "gate": { "name": "push", "satisfied": false, "blocking": 2, "missing": [] }
+}
+```
+
+`units.ran` is sorted; `units.total` includes attested and individually unknown
+Units. Unknown entries aggregate one Verifier/reason and retain known `unitIds`.
+If selection failed, its Unit count is unknowable: the entry has `"units": null,
+"scope": "all"`, and `units.unknownVerifiers` names Verifiers excluded from the
+partial total. Text says `Unknown: every test file of bun-test (select exited 1)`.
+Fileless diagnostics use a parenthesized Unit path; unknown positions are JSON
+`null`. Gate is `null` when none was requested.
+
+Focus adds `elsewhere: {new, resolved, unchanged}` and force-shows matching
+unchanged occurrences and selected members in text. Templates are derived
+before Focus filters occurrences. Default JSON contains no action keys,
+attestations, provenance, or versions; use `--json=observation` for those details.
+
+A normal call writes Last Seen only after output succeeds. Unknown Units retain
+their previous occurrences because they were not observed. Resolved occurrences
 leave Last Seen even when outside Focus; occurrences outside Focus that have
 not been shown are not marked seen. If a resolved occurrence reappears, it is new.
+Older session files without retained messages use the error key for resolutions
+until each occurrence has been observed again.
 
 ## Focus grammar
 

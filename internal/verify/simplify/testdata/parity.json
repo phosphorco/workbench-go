@@ -1,0 +1,518 @@
+[
+  {
+    "name": "exact repeated",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Repeated exact message"
+          },
+          "errorMessage": "Repeated exact message",
+          "errorKey": "rule",
+          "filePath": "/repo/src/example.ts",
+          "errorCode": "rule",
+          "formattedPosition": "1:1"
+        },
+        {
+          "diagnostic": {
+            "message": "Repeated exact message"
+          },
+          "errorMessage": "Repeated exact message",
+          "errorKey": "rule",
+          "filePath": "/repo/src/example.ts",
+          "errorCode": "rule",
+          "formattedPosition": "2:1"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorCode\":\"rule\",\"errorMessage\":\"Repeated exact message\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"/repo/src/example.ts\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Repeated exact message\"},\"originalMessage\":\"Repeated exact message\",\"placeholders\":[],\"annotations\":[],\"formattedPosition\":\"1:1\"},{\"diagnostic\":{\"message\":\"Repeated exact message\"},\"originalMessage\":\"Repeated exact message\",\"placeholders\":[],\"annotations\":[],\"formattedPosition\":\"2:1\"}]}]}]}]}"
+  },
+  {
+    "name": "annotations",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Repeated exact message"
+          },
+          "errorMessage": "Repeated exact message",
+          "errorKey": "rule",
+          "annotations": [
+            "fixed-in-patch"
+          ]
+        },
+        {
+          "diagnostic": {
+            "message": "Repeated exact message"
+          },
+          "errorMessage": "Repeated exact message",
+          "errorKey": "rule"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorMessage\":\"Repeated exact message\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Repeated exact message\"},\"originalMessage\":\"Repeated exact message\",\"placeholders\":[],\"annotations\":[\"fixed-in-patch\"]},{\"diagnostic\":{\"message\":\"Repeated exact message\"},\"originalMessage\":\"Repeated exact message\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "imports",
+    "input": {
+      "rootFolders": [
+        {
+          "path": "/repo",
+          "label": "repo"
+        }
+      ],
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Import \"../a.ts\" is not allowed."
+          },
+          "errorMessage": "Import \"../a.ts\" is not allowed.",
+          "errorKey": "import-rule",
+          "filePath": "/repo/src/a.ts"
+        },
+        {
+          "diagnostic": {
+            "message": "Import \"../b.ts\" is not allowed."
+          },
+          "errorMessage": "Import \"../b.ts\" is not allowed.",
+          "errorKey": "import-rule",
+          "filePath": "/repo/src/b.ts"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"import-rule\",\"errorMessage\":\"Import \\\"<arg1>\\\" is not allowed.\",\"isParameterized\":true,\"occurrences\":[{\"rootFolder\":\"repo\",\"files\":[{\"filePath\":\"src/a.ts\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"../a.ts\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"../a.ts\\\" is not allowed.\",\"placeholders\":[\"../a.ts\"],\"annotations\":[]}]},{\"filePath\":\"src/b.ts\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"../b.ts\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"../b.ts\\\" is not allowed.\",\"placeholders\":[\"../b.ts\"],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "distinct repeated slots",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Property 'tag' does not exist on type 'ExecutionEvent'.\nProperty 'tag' does not exist on type '{ readonly type: \"execution.started\"; }'."
+          },
+          "errorMessage": "Property 'tag' does not exist on type 'ExecutionEvent'.\nProperty 'tag' does not exist on type '{ readonly type: \"execution.started\"; }'.",
+          "errorKey": "typescript:TS2339"
+        },
+        {
+          "diagnostic": {
+            "message": "Property 'profile' does not exist on type 'ExecutionEvent'.\nProperty 'session' does not exist on type '{ readonly type: \"execution.started\"; }'."
+          },
+          "errorMessage": "Property 'profile' does not exist on type 'ExecutionEvent'.\nProperty 'session' does not exist on type '{ readonly type: \"execution.started\"; }'.",
+          "errorKey": "typescript:TS2339"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"typescript:TS2339\",\"errorMessage\":\"Property '<arg1>' does not exist on type 'ExecutionEvent'.\\nProperty '<arg2>' does not exist on type '{ readonly type: \\\"execution.started\\\"; }'.\",\"isParameterized\":true,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Property 'tag' does not exist on type 'ExecutionEvent'.\\nProperty 'tag' does not exist on type '{ readonly type: \\\"execution.started\\\"; }'.\"},\"originalMessage\":\"Property 'tag' does not exist on type 'ExecutionEvent'.\\nProperty 'tag' does not exist on type '{ readonly type: \\\"execution.started\\\"; }'.\",\"placeholders\":[\"tag\",\"tag\"],\"annotations\":[]},{\"diagnostic\":{\"message\":\"Property 'profile' does not exist on type 'ExecutionEvent'.\\nProperty 'session' does not exist on type '{ readonly type: \\\"execution.started\\\"; }'.\"},\"originalMessage\":\"Property 'profile' does not exist on type 'ExecutionEvent'.\\nProperty 'session' does not exist on type '{ readonly type: \\\"execution.started\\\"; }'.\",\"placeholders\":[\"profile\",\"session\"],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "constant slots",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Symbol \"UserRepo\" must not import \"../a.ts\"."
+          },
+          "errorMessage": "Symbol \"UserRepo\" must not import \"../a.ts\".",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "Symbol \"UserRepo\" must not import \"../b.ts\"."
+          },
+          "errorMessage": "Symbol \"UserRepo\" must not import \"../b.ts\".",
+          "errorKey": "rule"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorMessage\":\"Symbol \\\"UserRepo\\\" must not import \\\"<arg1>\\\".\",\"isParameterized\":true,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Symbol \\\"UserRepo\\\" must not import \\\"../a.ts\\\".\"},\"originalMessage\":\"Symbol \\\"UserRepo\\\" must not import \\\"../a.ts\\\".\",\"placeholders\":[\"../a.ts\"],\"annotations\":[]},{\"diagnostic\":{\"message\":\"Symbol \\\"UserRepo\\\" must not import \\\"../b.ts\\\".\"},\"originalMessage\":\"Symbol \\\"UserRepo\\\" must not import \\\"../b.ts\\\".\",\"placeholders\":[\"../b.ts\"],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "short fallback",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "\"a\""
+          },
+          "errorMessage": "\"a\"",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "\"b\""
+          },
+          "errorMessage": "\"b\"",
+          "errorKey": "rule"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorMessage\":\"\\\"a\\\"\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"\\\"a\\\"\"},\"originalMessage\":\"\\\"a\\\"\",\"placeholders\":[],\"annotations\":[]}]}]}]},{\"errorKey\":\"rule\",\"errorMessage\":\"\\\"b\\\"\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"\\\"b\\\"\"},\"originalMessage\":\"\\\"b\\\"\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "different error keys",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Import \"../a.ts\" is not allowed."
+          },
+          "errorMessage": "Import \"../a.ts\" is not allowed.",
+          "errorKey": "a"
+        },
+        {
+          "diagnostic": {
+            "message": "Import \"../b.ts\" is not allowed."
+          },
+          "errorMessage": "Import \"../b.ts\" is not allowed.",
+          "errorKey": "b"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"a\",\"errorMessage\":\"Import \\\"../a.ts\\\" is not allowed.\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"../a.ts\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"../a.ts\\\" is not allowed.\",\"placeholders\":[],\"annotations\":[]}]}]}]},{\"errorKey\":\"b\",\"errorMessage\":\"Import \\\"../b.ts\\\" is not allowed.\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"../b.ts\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"../b.ts\\\" is not allowed.\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "different verifiers and codes",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Import \"../a.ts\" is not allowed."
+          },
+          "errorMessage": "Import \"../a.ts\" is not allowed.",
+          "errorKey": "rule",
+          "verifier": "a",
+          "errorCode": "A"
+        },
+        {
+          "diagnostic": {
+            "message": "Import \"../b.ts\" is not allowed."
+          },
+          "errorMessage": "Import \"../b.ts\" is not allowed.",
+          "errorKey": "rule",
+          "verifier": "b",
+          "errorCode": "A"
+        },
+        {
+          "diagnostic": {
+            "message": "Import \"../c.ts\" is not allowed."
+          },
+          "errorMessage": "Import \"../c.ts\" is not allowed.",
+          "errorKey": "rule",
+          "verifier": "a",
+          "errorCode": "B"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorCode\":\"A\",\"errorMessage\":\"Import \\\"../a.ts\\\" is not allowed.\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"../a.ts\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"../a.ts\\\" is not allowed.\",\"placeholders\":[],\"annotations\":[]}]}]}]},{\"errorKey\":\"rule\",\"errorCode\":\"A\",\"errorMessage\":\"Import \\\"../b.ts\\\" is not allowed.\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"../b.ts\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"../b.ts\\\" is not allowed.\",\"placeholders\":[],\"annotations\":[]}]}]}]},{\"errorKey\":\"rule\",\"errorCode\":\"B\",\"errorMessage\":\"Import \\\"../c.ts\\\" is not allowed.\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"../c.ts\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"../c.ts\\\" is not allowed.\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "escaped and backtick values",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Cannot use `a\\`b` in \"fixed\"."
+          },
+          "errorMessage": "Cannot use `a\\`b` in \"fixed\".",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "Cannot use `c\\`d` in \"fixed\"."
+          },
+          "errorMessage": "Cannot use `c\\`d` in \"fixed\".",
+          "errorKey": "rule"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorMessage\":\"Cannot use `<arg1>` in \\\"fixed\\\".\",\"isParameterized\":true,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Cannot use `a\\\\`b` in \\\"fixed\\\".\"},\"originalMessage\":\"Cannot use `a\\\\`b` in \\\"fixed\\\".\",\"placeholders\":[\"a\\\\`b\"],\"annotations\":[]},{\"diagnostic\":{\"message\":\"Cannot use `c\\\\`d` in \\\"fixed\\\".\"},\"originalMessage\":\"Cannot use `c\\\\`d` in \\\"fixed\\\".\",\"placeholders\":[\"c\\\\`d\"],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "mixed delimiters",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Import \"alpha\" is not allowed."
+          },
+          "errorMessage": "Import \"alpha\" is not allowed.",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "Import 'beta' is not allowed."
+          },
+          "errorMessage": "Import 'beta' is not allowed.",
+          "errorKey": "rule"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorMessage\":\"Import \\\"<arg1>\\\" is not allowed.\",\"isParameterized\":true,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"alpha\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"alpha\\\" is not allowed.\",\"placeholders\":[\"alpha\"],\"annotations\":[]},{\"diagnostic\":{\"message\":\"Import 'beta' is not allowed.\"},\"originalMessage\":\"Import 'beta' is not allowed.\",\"placeholders\":[\"beta\"],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "malformed quotes and scaffolds",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Missing \"end"
+          },
+          "errorMessage": "Missing \"end",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "Ordinary message"
+          },
+          "errorMessage": "Ordinary message",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "Import \"a\" is not allowed."
+          },
+          "errorMessage": "Import \"a\" is not allowed.",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "Import \"b\" is not allowed."
+          },
+          "errorMessage": "Import \"b\" is not allowed.",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "Cannot use \"c\"."
+          },
+          "errorMessage": "Cannot use \"c\".",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "Cannot use \"d\"."
+          },
+          "errorMessage": "Cannot use \"d\".",
+          "errorKey": "rule"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorMessage\":\"Import \\\"<arg1>\\\" is not allowed.\",\"isParameterized\":true,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"a\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"a\\\" is not allowed.\",\"placeholders\":[\"a\"],\"annotations\":[]},{\"diagnostic\":{\"message\":\"Import \\\"b\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"b\\\" is not allowed.\",\"placeholders\":[\"b\"],\"annotations\":[]}]}]}]},{\"errorKey\":\"rule\",\"errorMessage\":\"Cannot use \\\"<arg1>\\\".\",\"isParameterized\":true,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Cannot use \\\"c\\\".\"},\"originalMessage\":\"Cannot use \\\"c\\\".\",\"placeholders\":[\"c\"],\"annotations\":[]},{\"diagnostic\":{\"message\":\"Cannot use \\\"d\\\".\"},\"originalMessage\":\"Cannot use \\\"d\\\".\",\"placeholders\":[\"d\"],\"annotations\":[]}]}]}]},{\"errorKey\":\"rule\",\"errorMessage\":\"Missing \\\"end\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Missing \\\"end\"},\"originalMessage\":\"Missing \\\"end\",\"placeholders\":[],\"annotations\":[]}]}]}]},{\"errorKey\":\"rule\",\"errorMessage\":\"Ordinary message\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Ordinary message\"},\"originalMessage\":\"Ordinary message\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "utf16 cost",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "\"🦊\""
+          },
+          "errorMessage": "\"🦊\"",
+          "errorKey": "rule"
+        },
+        {
+          "diagnostic": {
+            "message": "\"🐻\""
+          },
+          "errorMessage": "\"🐻\"",
+          "errorKey": "rule"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorMessage\":\"\\\"🦊\\\"\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"\\\"🦊\\\"\"},\"originalMessage\":\"\\\"🦊\\\"\",\"placeholders\":[],\"annotations\":[]}]}]}]},{\"errorKey\":\"rule\",\"errorMessage\":\"\\\"🐻\\\"\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"\\\"🐻\\\"\"},\"originalMessage\":\"\\\"🐻\\\"\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "fallback identities",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": 1,
+          "errorMessage": "same",
+          "errorCode": "CODE"
+        },
+        {
+          "diagnostic": 2,
+          "errorMessage": "same",
+          "errorCode": "CODE"
+        },
+        {
+          "diagnostic": 3,
+          "errorMessage": "other"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"CODE\",\"errorCode\":\"CODE\",\"errorMessage\":\"same\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":1,\"originalMessage\":\"same\",\"placeholders\":[],\"annotations\":[]},{\"diagnostic\":2,\"originalMessage\":\"same\",\"placeholders\":[],\"annotations\":[]}]}]}]},{\"errorKey\":\"other\",\"errorMessage\":\"other\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":3,\"originalMessage\":\"other\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "paths and longest roots",
+    "input": {
+      "rootFolders": [
+        {
+          "path": "C:/repo",
+          "label": "repo"
+        },
+        {
+          "path": "C:/repo/nested",
+          "label": "nested"
+        }
+      ],
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Repeated"
+          },
+          "errorMessage": "Repeated",
+          "errorKey": "rule",
+          "filePath": "C:\\repo\\nested\\a.ts"
+        },
+        {
+          "diagnostic": {
+            "message": "Repeated"
+          },
+          "errorMessage": "Repeated",
+          "errorKey": "rule",
+          "filePath": "C:/repo//b.ts/"
+        },
+        {
+          "diagnostic": {
+            "message": "Repeated"
+          },
+          "errorMessage": "Repeated",
+          "errorKey": "rule",
+          "filePath": "/outside/x"
+        },
+        {
+          "diagnostic": {
+            "message": "Repeated"
+          },
+          "errorMessage": "Repeated",
+          "errorKey": "rule",
+          "filePath": "C:/repo/nested/a.ts"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"rule\",\"errorMessage\":\"Repeated\",\"isParameterized\":false,\"occurrences\":[{\"rootFolder\":\"nested\",\"files\":[{\"filePath\":\"a.ts\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Repeated\"},\"originalMessage\":\"Repeated\",\"placeholders\":[],\"annotations\":[]},{\"diagnostic\":{\"message\":\"Repeated\"},\"originalMessage\":\"Repeated\",\"placeholders\":[],\"annotations\":[]}]}]},{\"rootFolder\":\"repo\",\"files\":[{\"filePath\":\"b.ts\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Repeated\"},\"originalMessage\":\"Repeated\",\"placeholders\":[],\"annotations\":[]}]}]},{\"files\":[{\"filePath\":\"/outside/x\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Repeated\"},\"originalMessage\":\"Repeated\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "empty",
+    "input": {
+      "diagnostics": []
+    },
+    "expected": "{\"groups\":[]}"
+  },
+  {
+    "name": "demo: first run executes every Unit",
+    "input": {
+      "diagnostics": []
+    },
+    "expected": "{\"groups\":[]}"
+  },
+  {
+    "name": "demo: second run executes nothing",
+    "input": {
+      "diagnostics": []
+    },
+    "expected": "{\"groups\":[]}"
+  },
+  {
+    "name": "demo: editing one test re-runs only that Unit",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "key": "619969dff2814dea0deb66b3101c6fff08f434e6db029d16faab9f4d0ef3b264",
+            "verifier": "bun-test",
+            "unitId": "packages/money/src/money.test.ts",
+            "errorKey": "formats with the currency's minor units",
+            "code": "TEST_FAIL",
+            "severity": "error",
+            "message": "expect(received).toBe(expected)\n\nExpected: \"12.35 USD\"\nReceived: \"12.34 USD\"",
+            "file": "packages/money/src/money.test.ts",
+            "range": {
+              "start": {
+                "line": 16,
+                "column": 1
+              }
+            },
+            "anchor": "a3c687081c4a43e13a0f0b2d727a47792b6fdc9c5517acc4b4d537dc581211ae:0"
+          },
+          "errorMessage": "expect(received).toBe(expected)\n\nExpected: \"12.35 USD\"\nReceived: \"12.34 USD\"",
+          "errorKey": "formats with the currency's minor units",
+          "errorCode": "TEST_FAIL",
+          "verifier": "bun-test",
+          "filePath": "packages/money/src/money.test.ts",
+          "formattedPosition": "16:1"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"formats with the currency's minor units\",\"errorCode\":\"TEST_FAIL\",\"errorMessage\":\"expect(received).toBe(expected)\\n\\nExpected: \\\"12.35 USD\\\"\\nReceived: \\\"12.34 USD\\\"\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"packages/money/src/money.test.ts\",\"occurrences\":[{\"diagnostic\":{\"key\":\"619969dff2814dea0deb66b3101c6fff08f434e6db029d16faab9f4d0ef3b264\",\"verifier\":\"bun-test\",\"unitId\":\"packages/money/src/money.test.ts\",\"errorKey\":\"formats with the currency's minor units\",\"code\":\"TEST_FAIL\",\"severity\":\"error\",\"message\":\"expect(received).toBe(expected)\\n\\nExpected: \\\"12.35 USD\\\"\\nReceived: \\\"12.34 USD\\\"\",\"file\":\"packages/money/src/money.test.ts\",\"range\":{\"start\":{\"line\":16,\"column\":1}},\"anchor\":\"a3c687081c4a43e13a0f0b2d727a47792b6fdc9c5517acc4b4d537dc581211ae:0\"},\"originalMessage\":\"expect(received).toBe(expected)\\n\\nExpected: \\\"12.35 USD\\\"\\nReceived: \\\"12.34 USD\\\"\",\"placeholders\":[],\"annotations\":[],\"formattedPosition\":\"16:1\"}]}]}]}]}"
+  },
+  {
+    "name": "demo: reverting the test under a focus that excludes it resolves it elsewhere",
+    "input": {
+      "diagnostics": []
+    },
+    "expected": "{\"groups\":[]}"
+  },
+  {
+    "name": "demo: the failing test reappears as new, though its resolution was never shown",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "key": "619969dff2814dea0deb66b3101c6fff08f434e6db029d16faab9f4d0ef3b264",
+            "verifier": "bun-test",
+            "unitId": "packages/money/src/money.test.ts",
+            "errorKey": "formats with the currency's minor units",
+            "code": "TEST_FAIL",
+            "severity": "error",
+            "message": "expect(received).toBe(expected)\n\nExpected: \"12.35 USD\"\nReceived: \"12.34 USD\"",
+            "file": "packages/money/src/money.test.ts",
+            "range": {
+              "start": {
+                "line": 16,
+                "column": 1
+              }
+            },
+            "anchor": "a3c687081c4a43e13a0f0b2d727a47792b6fdc9c5517acc4b4d537dc581211ae:0"
+          },
+          "errorMessage": "expect(received).toBe(expected)\n\nExpected: \"12.35 USD\"\nReceived: \"12.34 USD\"",
+          "errorKey": "formats with the currency's minor units",
+          "errorCode": "TEST_FAIL",
+          "verifier": "bun-test",
+          "filePath": "packages/money/src/money.test.ts",
+          "formattedPosition": "16:1"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"formats with the currency's minor units\",\"errorCode\":\"TEST_FAIL\",\"errorMessage\":\"expect(received).toBe(expected)\\n\\nExpected: \\\"12.35 USD\\\"\\nReceived: \\\"12.34 USD\\\"\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"packages/money/src/money.test.ts\",\"occurrences\":[{\"diagnostic\":{\"key\":\"619969dff2814dea0deb66b3101c6fff08f434e6db029d16faab9f4d0ef3b264\",\"verifier\":\"bun-test\",\"unitId\":\"packages/money/src/money.test.ts\",\"errorKey\":\"formats with the currency's minor units\",\"code\":\"TEST_FAIL\",\"severity\":\"error\",\"message\":\"expect(received).toBe(expected)\\n\\nExpected: \\\"12.35 USD\\\"\\nReceived: \\\"12.34 USD\\\"\",\"file\":\"packages/money/src/money.test.ts\",\"range\":{\"start\":{\"line\":16,\"column\":1}},\"anchor\":\"a3c687081c4a43e13a0f0b2d727a47792b6fdc9c5517acc4b4d537dc581211ae:0\"},\"originalMessage\":\"expect(received).toBe(expected)\\n\\nExpected: \\\"12.35 USD\\\"\\nReceived: \\\"12.34 USD\\\"\",\"placeholders\":[],\"annotations\":[],\"formattedPosition\":\"16:1\"}]}]}]}]}"
+  },
+  {
+    "name": "demo: reverting the test resolves the occurrence from the cache, within a code focus",
+    "input": {
+      "diagnostics": []
+    },
+    "expected": "{\"groups\":[]}"
+  },
+  {
+    "name": "demo: changing the pinned dependency re-runs workspace-sync, bun-install, and every test",
+    "input": {
+      "diagnostics": []
+    },
+    "expected": "{\"groups\":[]}"
+  },
+  {
+    "name": "demo: a member focus force-shows one test with totals elsewhere",
+    "input": {
+      "diagnostics": []
+    },
+    "expected": "{\"groups\":[]}"
+  },
+  {
+    "name": "demo: a Verifier that fails makes its Units unknown and the exit status 3",
+    "input": {
+      "diagnostics": []
+    },
+    "expected": "{\"groups\":[]}"
+  }
+]
