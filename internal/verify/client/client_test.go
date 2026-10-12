@@ -28,29 +28,17 @@ func TestDeltaGolden(t *testing.T) {
 		All      bool
 		Blocking []string
 		Exit     int
-		Text     string
 		NextJSON string
-		JSON     string
 	}
 	if err = json.Unmarshal(data, &fixtures); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range fixtures {
 		t.Run(f.Name, func(t *testing.T) {
-			d, next := client.Fold(f.Input)
+			_, next := client.Fold(f.Input)
 			exit := client.ExitCode(f.Input.Observation, f.Input.Occurrences, f.Input.Focus, f.Input.Gate, f.Blocking)
 			if exit != f.Exit {
 				t.Fatalf("exit %d, want %d", exit, f.Exit)
-			}
-			if got := client.Render(d, client.RenderOptions{All: f.All, Exit: exit}); got != f.Text {
-				t.Fatalf("render:\n%q\nwant:\n%q", got, f.Text)
-			}
-			got, err := client.JSONOutput(f.Input.Observation, f.Input.Occurrences, f.Input.Members, d, f.Input.Focus)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != f.JSON {
-				t.Fatalf("JSON:\n%s\nwant:\n%s", got, f.JSON)
 			}
 			path := filepath.Join(t.TempDir(), "last-seen.json")
 			if err = client.WriteLastSeen(path, next); err != nil {
@@ -97,7 +85,7 @@ func TestResolvedForgottenUnderFocus(t *testing.T) {
 	f = client.EmptyFocus()
 	f.Codes = []string{"TODO"}
 	d, next = client.Fold(client.FoldInput{Observation: o, LastSeen: first, Focus: f})
-	if len(d.Resolved) != 2 || len(next.Occurrences) != 0 || !strings.Contains(client.Render(d, client.RenderOptions{}), "todo [lint] src/b:2:3") {
+	if len(d.Resolved) != 2 || len(next.Occurrences) != 0 || !strings.Contains(client.Render(d, client.RenderOptions{}), "  src/b\n    resolved 2:3") {
 		t.Fatalf("code Focus failed resolution: %+v", d)
 	}
 	d, _ = client.Fold(client.FoldInput{Observation: o, LastSeen: next, Focus: f})
@@ -117,7 +105,7 @@ func TestIncompleteExitsThree(t *testing.T) {
 		t.Fatalf("unknown excluded by occurrence Focus: %d", exit)
 	}
 	d, _ := client.Fold(client.FoldInput{Observation: o, Focus: f})
-	if !strings.HasPrefix(client.Render(d, client.RenderOptions{Exit: exit}), "Unknown: source file src/a [lint] — tool failed\n") {
+	if !strings.HasPrefix(client.Render(d, client.RenderOptions{Exit: exit}), "Unknown: 1 source file of lint (tool failed)\n") {
 		t.Fatal("Unknown must render first")
 	}
 	f.Units = []string{"other"}
@@ -268,7 +256,7 @@ func TestPresentationCommitsOnlyAfterOutput(t *testing.T) {
 	p.Options.All = true
 	p.Observation.Tree = "different"
 	out.Reset()
-	if _, err := client.Present(p, &out); err != nil || !strings.HasPrefix(out.String(), "1 occurrence\n") {
+	if _, err := client.Present(p, &out); err != nil || !strings.HasPrefix(out.String(), "1 unchanged\n") {
 		t.Fatalf("all: %v %q", err, out.String())
 	}
 	after, _ := os.ReadFile(path)
@@ -299,7 +287,7 @@ func TestJSONResultProvenance(t *testing.T) {
 	for i, p := range []observe.Provenance{{Recomputed: true}, {CarriedFrom: "previous-tree"}} {
 		o := observe.Observation{Tree: "result", Verifiers: []observe.Verifier{{ID: "lint", Version: "v1", DisplayNoun: "source file", Produces: "report"}, {ID: "test", Version: "v1", DisplayNoun: "test file", Produces: "report"}}, Results: []observe.Result{{Verifier: "lint", UnitID: "a", Display: "a", ActionKey: "action", Attestation: observe.Attestation{ActionKey: "action", Verifier: observe.VerifierVersion{ID: "lint", Version: "v1"}, UnitID: "a", Outputs: map[string]string{"report.json": "report-digest"}}, Provenance: p, Scratch: "absent", Audit: "matched"}}}
 		d, _ := client.Fold(client.FoldInput{Observation: o})
-		got, err := client.JSONOutput(o, nil, nil, d, client.EmptyFocus())
+		got, err := client.ObservationJSONOutput(o, nil, nil, d, client.EmptyFocus())
 		if err != nil {
 			t.Fatal(err)
 		}

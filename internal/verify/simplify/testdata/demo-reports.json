@@ -1,0 +1,74 @@
+[
+  {
+    "name": "first run executes every Unit",
+    "occurrences": []
+  },
+  {
+    "name": "second run executes nothing",
+    "occurrences": []
+  },
+  {
+    "name": "editing one test re-runs only that Unit",
+    "occurrences": [
+      {
+        "key": "619969dff2814dea0deb66b3101c6fff08f434e6db029d16faab9f4d0ef3b264",
+        "verifier": "bun-test",
+        "unitId": "packages/money/src/money.test.ts",
+        "errorKey": "formats with the currency's minor units",
+        "code": "TEST_FAIL",
+        "severity": "error",
+        "message": "expect(received).toBe(expected)\n\nExpected: \"12.35 USD\"\nReceived: \"12.34 USD\"",
+        "file": "packages/money/src/money.test.ts",
+        "range": {
+          "start": {
+            "line": 16,
+            "column": 1
+          }
+        },
+        "anchor": "a3c687081c4a43e13a0f0b2d727a47792b6fdc9c5517acc4b4d537dc581211ae:0"
+      }
+    ]
+  },
+  {
+    "name": "reverting the test under a focus that excludes it resolves it elsewhere",
+    "occurrences": []
+  },
+  {
+    "name": "the failing test reappears as new, though its resolution was never shown",
+    "occurrences": [
+      {
+        "key": "619969dff2814dea0deb66b3101c6fff08f434e6db029d16faab9f4d0ef3b264",
+        "verifier": "bun-test",
+        "unitId": "packages/money/src/money.test.ts",
+        "errorKey": "formats with the currency's minor units",
+        "code": "TEST_FAIL",
+        "severity": "error",
+        "message": "expect(received).toBe(expected)\n\nExpected: \"12.35 USD\"\nReceived: \"12.34 USD\"",
+        "file": "packages/money/src/money.test.ts",
+        "range": {
+          "start": {
+            "line": 16,
+            "column": 1
+          }
+        },
+        "anchor": "a3c687081c4a43e13a0f0b2d727a47792b6fdc9c5517acc4b4d537dc581211ae:0"
+      }
+    ]
+  },
+  {
+    "name": "reverting the test resolves the occurrence from the cache, within a code focus",
+    "occurrences": []
+  },
+  {
+    "name": "changing the pinned dependency re-runs workspace-sync, bun-install, and every test",
+    "occurrences": []
+  },
+  {
+    "name": "a member focus force-shows one test with totals elsewhere",
+    "occurrences": []
+  },
+  {
+    "name": "a Verifier that fails makes its Units unknown and the exit status 3",
+    "occurrences": []
+  }
+]

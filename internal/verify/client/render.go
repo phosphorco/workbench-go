@@ -2,11 +2,8 @@ package client
 
 import (
 	"fmt"
-	"sort"
 	"strings"
-	"unicode/utf16"
-
-	"github.com/phosphorco/workbench-go/internal/verify/report"
+	"unicode"
 )
 
 type RenderOptions struct {
@@ -21,117 +18,35 @@ func plural(n int, noun string) string {
 	}
 	return fmt.Sprintf("%d %s%s", n, noun, suffix)
 }
-func position(r *report.Range) string {
-	if r == nil {
-		return "(file)"
+func summary(counts Elsewhere, gate *GateStatus, unknown bool) string {
+	parts := []string{}
+	if counts.New > 0 {
+		parts = append(parts, fmt.Sprintf("%d new", counts.New))
 	}
-	return fmt.Sprintf("%d:%d", r.Start.Line, r.Start.Column)
-}
-func jsLess(a, b string) bool {
-	x, y := utf16.Encode([]rune(a)), utf16.Encode([]rune(b))
-	for i := 0; i < len(x) && i < len(y); i++ {
-		if x[i] != y[i] {
-			return x[i] < y[i]
-		}
+	if counts.Resolved > 0 {
+		parts = append(parts, fmt.Sprintf("%d resolved", counts.Resolved))
 	}
-	return len(x) < len(y)
-}
-func grouped(occurrences []FocusOccurrence, indent string, markNew bool) []string {
-	type identity struct{ severity, verifier, code, errorKey, message string }
-	groups := [][]FocusOccurrence{}
-	indices := map[identity]int{}
-	for _, o := range occurrences {
-		code := o.ErrorKey
-		if o.Code != nil {
-			code = *o.Code
-		}
-		key := identity{o.Severity, o.Verifier, code, o.ErrorKey, o.Message}
-		i, ok := indices[key]
-		if !ok {
-			i = len(groups)
-			indices[key] = i
-			groups = append(groups, nil)
-		}
-		groups[i] = append(groups[i], o)
+	if counts.Unchanged > 0 {
+		parts = append(parts, fmt.Sprintf("%d unchanged", counts.Unchanged))
 	}
-	lines := []string{}
-	for _, group := range groups {
-		h := group[0]
-		code := h.ErrorKey
-		if h.Code != nil {
-			code = *h.Code
-		}
-		lines = append(lines, indent+h.Severity+" "+code+" ["+h.Verifier+"]")
-		message := h.Message
-		if h.Code != nil && h.ErrorKey != *h.Code && !strings.Contains(message, h.ErrorKey) {
-			message = h.ErrorKey + ": " + message
-		}
-		for _, line := range strings.Split(message, "\n") {
-			if line != "" {
-				line = indent + "  " + line
-			}
-			lines = append(lines, line)
-		}
-		files := map[string][]FocusOccurrence{}
-		for _, o := range group {
-			file := "(" + o.UnitID + ")"
-			if o.File != nil {
-				file = *o.File
-			}
-			files[file] = append(files[file], o)
-		}
-		names := []string{}
-		for file := range files {
-			names = append(names, file)
-		}
-		sort.Slice(names, func(i, j int) bool { return jsLess(names[i], names[j]) })
-		for _, file := range names {
-			lines = append(lines, indent+"  "+file)
-			located := files[file]
-			sort.SliceStable(located, func(i, j int) bool {
-				var a, b report.Position
-				if located[i].Range != nil {
-					a = located[i].Range.Start
-				}
-				if located[j].Range != nil {
-					b = located[j].Range.Start
-				}
-				if a.Line != b.Line {
-					return a.Line < b.Line
-				}
-				return a.Column < b.Column
-			})
-			for _, o := range located {
-				suffix := ""
-				if markNew && !o.Seen {
-					suffix = "  new"
-				}
-				lines = append(lines, indent+"    "+position(o.Range)+suffix)
-			}
-		}
+	if len(parts) == 0 && !unknown {
+		parts = append(parts, "clean")
 	}
-	return lines
-}
-func resolvedLines(resolved []Resolved) []string {
-	lines := []string{}
-	for _, r := range resolved {
-		file := ""
-		if r.File != nil {
-			file = *r.File
+	if gate != nil {
+		status := "satisfied"
+		if !gate.Satisfied {
+			status = "blocked"
 		}
-		anchor := ""
-		if r.LastAnchor.Range != nil {
-			anchor = ":" + position(r.LastAnchor.Range)
-		}
-		lines = append(lines, strings.TrimRight("  "+r.ErrorKey+" ["+r.Verifier+"] "+file+anchor, " \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"))
+		parts = append(parts, gate.Name+" "+status)
 	}
-	return lines
+	return strings.Join(parts, " · ")
 }
 
-// Render follows the reference's error, file, position grouping byte for byte.
+// Render reads the grouped fold: status annotates occurrences, never group identity.
 func Render(d Delta, options RenderOptions) string {
-	unknown := []string{}
-	for _, u := range d.Unknown {
+	out := d.Output
+	lines := []string{}
+	for _, u := range out.Unknown {
 		noun := "unit"
 		for _, v := range d.Observation.Verifiers {
 			if v.ID == u.Verifier {
@@ -139,71 +54,72 @@ func Render(d Delta, options RenderOptions) string {
 				break
 			}
 		}
-		line := "Unknown: " + noun + " " + u.Display + " [" + u.Verifier + "] — " + u.Reason
-		if u.UnitID == "*" {
-			line = "Unknown: every " + noun + " of " + u.Verifier + " — " + u.Reason
+		scope := "every " + noun
+		if u.Units != nil {
+			scope = plural(*u.Units, noun)
 		}
-		unknown = append(unknown, line)
+		lines = append(lines, "Unknown: "+scope+" of "+u.Verifier+" ("+u.Reason+")")
 	}
-	lines := []string{}
-	if options.Exit == 3 {
-		lines = append(lines, unknown...)
+	counts := Elsewhere{}
+	for _, g := range out.Groups {
+		counts.New += g.Counts.New
+		counts.Resolved += g.Counts.Resolved
+		counts.Unchanged += g.Counts.Unchanged
 	}
-	if f := d.Focus; f != nil {
-		header := "In focus: " + plural(len(f.Occurrences), "occurrence")
-		if len(d.New) > 0 {
-			header += fmt.Sprintf(", %d new", len(d.New))
+	if s := summary(counts, out.Gate, len(out.Unknown) > 0); s != "" {
+		lines = append(lines, s)
+	}
+	if len(out.Unknown) > 0 {
+		lines = append(lines, "Rerun workbench verify to retry unknown Units.")
+	}
+	for _, g := range out.Groups {
+		forced := options.All || d.Focus != nil
+		if !forced && g.Counts.New+g.Counts.Resolved == 0 {
+			continue
 		}
-		lines = append(lines, header)
-		lines = append(lines, grouped(f.Occurrences, "  ", !options.All)...)
-		for _, m := range f.Members {
-			lines = append(lines, "  "+m.Status+" \""+m.Name+"\" ["+m.Verifier+"] "+m.UnitID)
+		lines = append(lines, g.Severity+" "+g.Code+" ["+g.Verifier+"] "+g.ErrorKey)
+		if g.Message != g.ErrorKey {
+			for _, line := range strings.Split(g.Message, "\n") {
+				lines = append(lines, "  "+line)
+			}
 		}
-		if len(d.Resolved) > 0 {
-			lines = append(lines, "Resolved in focus")
-			lines = append(lines, resolvedLines(d.Resolved)...)
+		for _, file := range g.Files {
+			positions := []string{}
+			for _, o := range file.Occurrences {
+				if !forced && o.Status == "unchanged" {
+					continue
+				}
+				pos := "(file)"
+				if o.Line != nil && o.Column != nil {
+					pos = fmt.Sprintf("%d:%d", *o.Line, *o.Column)
+				}
+				line := "    " + o.Status + " " + pos
+				if len(o.Args) > 0 {
+					line += "  " + strings.Join(o.Args, ", ")
+				}
+				positions = append(positions, line)
+			}
+			if len(positions) > 0 {
+				lines = append(lines, "  "+file.Path)
+				lines = append(lines, positions...)
+			}
 		}
-		e := f.Elsewhere
+	}
+	if d.Focus != nil {
+		for _, m := range d.Focus.Members {
+			lines = append(lines, "  "+m.Status+" "+quote(m.Name)+" ["+m.Verifier+"] "+m.UnitID)
+		}
+		e := d.Focus.Elsewhere
 		if e.New+e.Resolved+e.Unchanged > 0 {
-			lines = append(lines, fmt.Sprintf("Elsewhere (not shown): %d new, %d resolved, %d unchanged", e.New, e.Resolved, e.Unchanged))
-		}
-	} else {
-		if len(d.New) > 0 {
-			header := fmt.Sprintf("%d new", len(d.New))
-			if options.All {
-				header = plural(len(d.New), "occurrence")
-			}
-			lines = append(lines, header)
-			occurrences := []FocusOccurrence{}
-			for _, o := range d.New {
-				occurrences = append(occurrences, FocusOccurrence{Occurrence: o})
-			}
-			lines = append(lines, grouped(occurrences, "", false)...)
-		}
-		if len(d.Resolved) > 0 {
-			lines = append(lines, fmt.Sprintf("%d resolved", len(d.Resolved)))
-			lines = append(lines, resolvedLines(d.Resolved)...)
-		}
-		if !options.All {
-			lines = append(lines, fmt.Sprintf("%d unchanged", d.Unchanged))
+			lines = append(lines, fmt.Sprintf("Elsewhere: %d new · %d resolved · %d unchanged", e.New, e.Resolved, e.Unchanged))
 		}
 	}
-	if options.Exit != 3 {
-		lines = append(lines, unknown...)
+	if g := out.Gate; g != nil && len(g.Missing) > 0 {
+		lines = append(lines, "Not attested: "+strings.Join(g.Missing, ", "))
 	}
-	if g := d.Gate; g != nil {
-		status := "satisfied"
-		if !g.Satisfied {
-			reasons := []string{}
-			if len(g.Missing) > 0 {
-				reasons = append(reasons, "not attested: "+strings.Join(g.Missing, ", "))
-			}
-			if g.Blocking > 0 {
-				reasons = append(reasons, plural(g.Blocking, "blocking occurrence"))
-			}
-			status = "not satisfied (" + strings.Join(reasons, "; ") + ")"
-		}
-		lines = append(lines, "Gate "+g.Name+": "+status)
+	renderedLines := strings.Split(strings.Join(lines, "\n"), "\n")
+	for i, line := range renderedLines {
+		renderedLines[i] = strings.TrimRightFunc(line, unicode.IsSpace)
 	}
-	return strings.Join(lines, "\n") + "\n"
+	return strings.Join(renderedLines, "\n") + "\n"
 }
