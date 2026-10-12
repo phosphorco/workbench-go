@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/phosphorco/workbench-go/internal/verify/client"
 	"github.com/phosphorco/workbench-go/internal/verify/observe"
@@ -72,6 +73,21 @@ func groupFixtures(t *testing.T) []groupedFixture {
 	legacy.Occurrences = append([]client.SeenEntry{}, emptyLast.Occurrences...)
 	legacy.Occurrences[0].Seen.Message = nil
 	fixtures = append(fixtures, groupedFixture{Name: "legacy-session-resolution", Input: client.FoldInput{Observation: o, LastSeen: legacy}})
+
+	shared := occurrence("shared", "src/shared.txt")
+	shared.ErrorKey = "Repeated exact message"
+	shared.Message = shared.ErrorKey
+	fixtures = append(fixtures, groupedFixture{Name: "error-key-equals-message", Input: client.FoldInput{Observation: o, Occurrences: []report.Occurrence{shared}}, Exit: 1})
+	sameCodeA, sameCodeB := occurrence("family-a", "src/a.txt"), occurrence("family-b", "src/b.txt")
+	sameCodeA.ErrorKey = "family A"
+	sameCodeB.ErrorKey = "family B"
+	sameCodeA.Message = "Shared diagnostic message"
+	sameCodeB.Message = sameCodeA.Message
+	fixtures = append(fixtures, groupedFixture{Name: "same-code-distinct-error-keys", Input: client.FoldInput{Observation: o, Occurrences: []report.Occurrence{sameCodeA, sameCodeB}}, Exit: 1})
+	whitespace := occurrence("whitespace", "src/whitespace.txt")
+	whitespace.ErrorKey = "test identity"
+	whitespace.Message = "first \t\n  \t\nsecond \u00a0\n"
+	fixtures = append(fixtures, groupedFixture{Name: "message-trailing-whitespace", Input: client.FoldInput{Observation: o, Occurrences: []report.Occurrence{whitespace}}, Exit: 1})
 	return fixtures
 }
 func snapshotOutputs(t *testing.T, jsonMode bool) {
@@ -175,5 +191,47 @@ func TestGroupedOptionsAndHelp(t *testing.T) {
 	}
 	if !strings.HasPrefix(client.Usage, "workbench verify [--gate <name>] [--json]\n") {
 		t.Fatal("help must lead with the next-action options")
+	}
+}
+
+func TestGroupedRenderNoTrailingWhitespace(t *testing.T) {
+	for _, fixture := range groupFixtures(t) {
+		t.Run(fixture.Name, func(t *testing.T) {
+			d, _ := client.Fold(fixture.Input)
+			text := client.Render(d, client.RenderOptions{All: fixture.All, Exit: fixture.Exit})
+			for i, line := range strings.Split(text, "\n") {
+				if strings.TrimRightFunc(line, unicode.IsSpace) != line {
+					t.Fatalf("line %d ends in whitespace: %q", i+1, line)
+				}
+			}
+		})
+	}
+}
+
+func TestGroupedErrorIdentity(t *testing.T) {
+	for _, fixture := range groupFixtures(t) {
+		if fixture.Name != "same-code-distinct-error-keys" && fixture.Name != "error-key-equals-message" {
+			continue
+		}
+		t.Run(fixture.Name, func(t *testing.T) {
+			d, _ := client.Fold(fixture.Input)
+			text := client.Render(d, client.RenderOptions{})
+			data, err := client.JSONOutput(fixture.Input.Observation, fixture.Input.Occurrences, nil, d, fixture.Input.Focus)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct{ Groups []struct{ ErrorKey string } }
+			if err = json.Unmarshal([]byte(data), &wire); err != nil {
+				t.Fatal(err)
+			}
+			for i, o := range fixture.Input.Occurrences {
+				if wire.Groups[i].ErrorKey != o.ErrorKey {
+					t.Fatalf("JSON lost error identity: got %q, want %q", wire.Groups[i].ErrorKey, o.ErrorKey)
+				}
+				if strings.Count(text, o.ErrorKey) != 1 {
+					t.Fatalf("text must show error identity exactly once:\n%s", text)
+				}
+			}
+		})
 	}
 }

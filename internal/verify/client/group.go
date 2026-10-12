@@ -21,6 +21,7 @@ type GroupFile struct {
 }
 type Group struct {
 	Code          string      `json:"code"`
+	ErrorKey      string      `json:"errorKey"`
 	Verifier      string      `json:"verifier"`
 	Severity      string      `json:"severity"`
 	Message       string      `json:"message"`
@@ -72,7 +73,7 @@ func groupOccurrences(entries []taggedOccurrence, focus Focus) []Group {
 		if simplified.ErrorCode != nil {
 			code = *simplified.ErrorCode
 		}
-		group := Group{Code: code, Verifier: first.Verifier, Severity: first.Severity, Message: simplified.ErrorMessage, Parameterized: simplified.IsParameterized, Files: []GroupFile{}}
+		group := Group{Code: code, ErrorKey: simplified.ErrorKey, Verifier: first.Verifier, Severity: first.Severity, Message: simplified.ErrorMessage, Parameterized: simplified.IsParameterized, Files: []GroupFile{}}
 		for _, root := range simplified.Occurrences {
 			for _, file := range root.Files {
 				f := GroupFile{Path: file.FilePath, Occurrences: []GroupOccurrence{}}

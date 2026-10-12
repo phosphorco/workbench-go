@@ -47,12 +47,15 @@ and Verifier programs before verifying them.
 
 The first text line tells you the next action: `clean · push satisfied`,
 `1 new · 2 unchanged · push blocked`, or an Unknown line when verification is
-incomplete. Unknowns include a retry hint. Errors share one template per identity,
-followed by each file and its occurrences:
+incomplete. Unknowns include a retry hint. Errors show their error key (the test
+name for a failing test) in the header,
+followed by the message template, each file, and its occurrences. An error key
+equal to the message appears once. Rendered lines never end in whitespace:
 
 ```text
 1 new · 1 unchanged · push blocked
-error TS2339 [tsc] Property '<arg1>' does not exist on type 'Money'.
+error TS2339 [tsc] typescript:TS2339
+  Property '<arg1>' does not exist on type 'Money'.
   src/money.ts
     new 12:5  tag
 ```
@@ -70,7 +73,8 @@ are hidden unless Focus or `--all` forces them visible; counts always carry them
   "tree": "01234567",
   "units": { "total": 2, "ran": ["tsc:src/money.ts"] },
   "groups": [{
-    "code": "TS2339", "verifier": "tsc", "severity": "error",
+    "code": "TS2339", "errorKey": "typescript:TS2339",
+    "verifier": "tsc", "severity": "error",
     "message": "Property '<arg1>' does not exist on type 'Money'.",
     "parameterized": true,
     "files": [{ "path": "src/money.ts", "occurrences": [

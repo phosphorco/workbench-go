@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 type RenderOptions struct {
@@ -76,8 +77,12 @@ func Render(d Delta, options RenderOptions) string {
 		if !forced && g.Counts.New+g.Counts.Resolved == 0 {
 			continue
 		}
-		message := strings.ReplaceAll(g.Message, "\n", "\n  ")
-		lines = append(lines, g.Severity+" "+g.Code+" ["+g.Verifier+"] "+message)
+		lines = append(lines, g.Severity+" "+g.Code+" ["+g.Verifier+"] "+g.ErrorKey)
+		if g.Message != g.ErrorKey {
+			for _, line := range strings.Split(g.Message, "\n") {
+				lines = append(lines, "  "+line)
+			}
+		}
 		for _, file := range g.Files {
 			positions := []string{}
 			for _, o := range file.Occurrences {
@@ -112,5 +117,9 @@ func Render(d Delta, options RenderOptions) string {
 	if g := out.Gate; g != nil && len(g.Missing) > 0 {
 		lines = append(lines, "Not attested: "+strings.Join(g.Missing, ", "))
 	}
-	return strings.Join(lines, "\n") + "\n"
+	renderedLines := strings.Split(strings.Join(lines, "\n"), "\n")
+	for i, line := range renderedLines {
+		renderedLines[i] = strings.TrimRightFunc(line, unicode.IsSpace)
+	}
+	return strings.Join(renderedLines, "\n") + "\n"
 }

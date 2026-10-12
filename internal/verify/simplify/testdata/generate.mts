@@ -32,6 +32,8 @@ add('distinct repeated slots',[
 add('constant slots',[entry('Symbol "UserRepo" must not import "../a.ts".'),entry('Symbol "UserRepo" must not import "../b.ts".')])
 add('short fallback',[entry('"a"'),entry('"b"')])
 add('different error keys',[entry('Import "../a.ts" is not allowed.',{errorKey:'a'}),entry('Import "../b.ts" is not allowed.',{errorKey:'b'})])
+add('same code and message distinct error identities', [entry('Shared diagnostic message',{errorKey:'family A',errorCode:'CODE',verifier:'lint'}),entry('Shared diagnostic message',{errorKey:'family B',errorCode:'CODE',verifier:'lint'})])
+add('error identity equals message', [entry('Repeated exact message',{errorKey:'Repeated exact message',errorCode:'CODE'})])
 add('different verifiers and codes', [entry('Import "../a.ts" is not allowed.',{verifier:'a',errorCode:'A'}),entry('Import "../b.ts" is not allowed.',{verifier:'b',errorCode:'A'}),entry('Import "../c.ts" is not allowed.',{verifier:'a',errorCode:'B'})])
 add('escaped and backtick values',[entry('Cannot use `a\\`b` in "fixed".'),entry('Cannot use `c\\`d` in "fixed".')])
 add('mixed delimiters',[entry('Import "alpha" is not allowed.'),entry("Import 'beta' is not allowed.")])

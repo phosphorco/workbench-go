@@ -2,7 +2,9 @@
 
 `Fold` annotates occurrences with delta status, simplifies families before
 Focus filters attention, and builds `Delta.Output`. Text and default JSON read
-that same grouped value. Last Seen retains original messages and positions so
+that same grouped value, including the error key in JSON and the text header.
+Messages render below the header unless identical to the error key, and blank
+lines stay empty. Last Seen retains original messages and positions so
 resolved occurrences join their family. Legacy sessions lacking messages use
 the error key until refreshed. `--all` reads Last Seen to retain actual status
 and never writes it; `--reset` explicitly clears it first.

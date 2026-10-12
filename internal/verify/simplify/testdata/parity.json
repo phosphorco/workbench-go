@@ -171,6 +171,48 @@
     "expected": "{\"groups\":[{\"errorKey\":\"a\",\"errorMessage\":\"Import \\\"../a.ts\\\" is not allowed.\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"../a.ts\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"../a.ts\\\" is not allowed.\",\"placeholders\":[],\"annotations\":[]}]}]}]},{\"errorKey\":\"b\",\"errorMessage\":\"Import \\\"../b.ts\\\" is not allowed.\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Import \\\"../b.ts\\\" is not allowed.\"},\"originalMessage\":\"Import \\\"../b.ts\\\" is not allowed.\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
   },
   {
+    "name": "same code and message distinct error identities",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Shared diagnostic message"
+          },
+          "errorMessage": "Shared diagnostic message",
+          "errorKey": "family A",
+          "errorCode": "CODE",
+          "verifier": "lint"
+        },
+        {
+          "diagnostic": {
+            "message": "Shared diagnostic message"
+          },
+          "errorMessage": "Shared diagnostic message",
+          "errorKey": "family B",
+          "errorCode": "CODE",
+          "verifier": "lint"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"family A\",\"errorCode\":\"CODE\",\"errorMessage\":\"Shared diagnostic message\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Shared diagnostic message\"},\"originalMessage\":\"Shared diagnostic message\",\"placeholders\":[],\"annotations\":[]}]}]}]},{\"errorKey\":\"family B\",\"errorCode\":\"CODE\",\"errorMessage\":\"Shared diagnostic message\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Shared diagnostic message\"},\"originalMessage\":\"Shared diagnostic message\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
+    "name": "error identity equals message",
+    "input": {
+      "diagnostics": [
+        {
+          "diagnostic": {
+            "message": "Repeated exact message"
+          },
+          "errorMessage": "Repeated exact message",
+          "errorKey": "Repeated exact message",
+          "errorCode": "CODE"
+        }
+      ]
+    },
+    "expected": "{\"groups\":[{\"errorKey\":\"Repeated exact message\",\"errorCode\":\"CODE\",\"errorMessage\":\"Repeated exact message\",\"isParameterized\":false,\"occurrences\":[{\"files\":[{\"filePath\":\"\",\"occurrences\":[{\"diagnostic\":{\"message\":\"Repeated exact message\"},\"originalMessage\":\"Repeated exact message\",\"placeholders\":[],\"annotations\":[]}]}]}]}]}"
+  },
+  {
     "name": "different verifiers and codes",
     "input": {
       "diagnostics": [
