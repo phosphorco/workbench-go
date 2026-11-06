@@ -110,7 +110,7 @@ func TestBuildBindingWorkflowAssemblyPrefix(t *testing.T) {
 			err = buildable.SealDeclared(context.Background(), assembled, "hello", declaration, ".local-build/hello")
 			if tc.mixed {
 				if err == nil {
-					t.Fatal("sealed assembled platforms from different source worlds")
+					t.Fatal("sealed assembled platforms from different producer inputs")
 				}
 				return
 			}
