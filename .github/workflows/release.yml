@@ -42,7 +42,9 @@ jobs:
           test -n "$PKL_EXECUTABLE"
           case "$PKL_EXECUTABLE" in /*) ;; *) echo "PKL_EXECUTABLE is not absolute: $PKL_EXECUTABLE" >&2; exit 1 ;; esac
           test -x "$PKL_EXECUTABLE"
-          go test ./...
+          # Isolate timing-sensitive hook witnesses from other packages; tests
+          # still exercise concurrent callers within each package.
+          go test -p 1 ./...
           go vet ./...
 
   binaries:
