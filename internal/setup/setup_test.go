@@ -1443,7 +1443,33 @@ func TestProjectSkillsV020RefusesTrackedForgedOwnershipWithoutMutation(t *testin
 	afterGit := exactGitSnapshot(t, entry)
 	afterTree := readTree(t, root)
 	if !reflect.DeepEqual(beforeGit, afterGit) || !reflect.DeepEqual(beforeTree, afterTree) {
-		t.Fatalf("tracked forged ownership refusal mutated state:\nGit before=%#v\nGit after=%#v", beforeGit, afterGit)
+		paths := make(map[string]struct{}, len(beforeTree)+len(afterTree))
+		for path := range beforeTree {
+			paths[path] = struct{}{}
+		}
+		for path := range afterTree {
+			paths[path] = struct{}{}
+		}
+		var changes []string
+		for path := range paths {
+			before, wasPresent := beforeTree[path]
+			after, isPresent := afterTree[path]
+			if wasPresent && isPresent && before == after {
+				continue
+			}
+			beforeHash, afterHash := "absent", "absent"
+			if wasPresent {
+				digest := sha256.Sum256([]byte(before))
+				beforeHash = hex.EncodeToString(digest[:])
+			}
+			if isPresent {
+				digest := sha256.Sum256([]byte(after))
+				afterHash = hex.EncodeToString(digest[:])
+			}
+			changes = append(changes, fmt.Sprintf("%s before=%s after=%s", path, beforeHash, afterHash))
+		}
+		slices.Sort(changes)
+		t.Fatalf("tracked forged ownership refusal mutated state:\nGit before=%#v\nGit after=%#v\nTree changes:\n%s", beforeGit, afterGit, strings.Join(changes, "\n"))
 	}
 }
 

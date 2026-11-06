@@ -7,6 +7,16 @@ on:
         description: Required revision embedded in the published binary; callers must state it explicitly.
         required: true
         type: string
+      published_version:
+        description: Published binary version to verify.
+        required: false
+        type: string
+        default: 0.9.1
+      contract_version:
+        description: Published contract version paired with the binary.
+        required: false
+        type: string
+        default: 0.9.0
       fixture_revision:
         description: Synthetic source revision label for the old-seal/new-consume fixture.
         required: false
@@ -18,6 +28,16 @@ on:
         description: Required revision embedded in the published binary; enter the published release build revision.
         required: true
         type: string
+      published_version:
+        description: Published binary version to verify.
+        required: false
+        type: string
+        default: 0.9.1
+      contract_version:
+        description: Published contract version paired with the binary.
+        required: false
+        type: string
+        default: 0.9.0
       fixture_revision:
         description: Synthetic source revision label for the old-seal/new-consume fixture.
         required: false
@@ -40,6 +60,8 @@ jobs:
       MISE_GITHUB_GH_CLI_TOKENS: "false"
       MISE_GITHUB_USE_GIT_CREDENTIALS: "false"
       EXPECTED_PUBLISHED_REVISION: ${{ inputs.published_revision }}
+      PUBLISHED_VERSION: ${{ inputs.published_version }}
+      CONTRACT_VERSION: ${{ inputs.contract_version }}
       FIXTURE_REVISION: ${{ inputs.fixture_revision }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -47,14 +69,23 @@ jobs:
         with:
           version: 2026.8.12
           cache: false
+      - name: Validate the requested published coordinates
+        run: |
+          set -euo pipefail
+          case "$PUBLISHED_VERSION/$CONTRACT_VERSION" in
+            0.9.1/0.9.0|0.10.0/0.10.0) ;;
+            *) echo "unsupported published binary and contract pair" >&2; exit 1 ;;
+          esac
+          [[ "$EXPECTED_PUBLISHED_REVISION" =~ ^[0-9a-f]{40}$ ]]
+
       - name: Install through the anonymous public GitHub backend and validate a catalog
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/anonymous-home" "$RUNNER_TEMP/catalog/.agents/skills/release-smoke"
           export HOME="$RUNNER_TEMP/anonymous-home"
-          mise install github:phosphorco/workbench-go@0.9.1
-          published_version="$(mise exec github:phosphorco/workbench-go@0.9.1 -- workbench version)"
-          expected_version="workbench 0.9.1 ($EXPECTED_PUBLISHED_REVISION)"
+          mise install github:phosphorco/workbench-go@${PUBLISHED_VERSION}
+          published_version="$(mise exec github:phosphorco/workbench-go@${PUBLISHED_VERSION} -- workbench version)"
+          expected_version="workbench ${PUBLISHED_VERSION} ($EXPECTED_PUBLISHED_REVISION)"
           if [[ "$published_version" != "$expected_version" ]]; then
             printf 'published binary provenance does not match expected published revision: observed=%s expected=%s\n' "$published_version" "$expected_version" >&2
             exit 1
@@ -69,7 +100,7 @@ jobs:
 
           # Release smoke
           EOF
-          (cd "$RUNNER_TEMP/catalog" && mise exec github:phosphorco/workbench-go@0.9.1 -- workbench skills check)
+          (cd "$RUNNER_TEMP/catalog" && mise exec github:phosphorco/workbench-go@${PUBLISHED_VERSION} -- workbench skills check)
 
       - name: Exercise the published planner and exported skills
         run: |
@@ -78,9 +109,9 @@ jobs:
           export MISE_CACHE_DIR="$RUNNER_TEMP/planner-mise-cache"
           export MISE_STATE_DIR="$RUNNER_TEMP/planner-mise-state"
           export MISE_CONFIG_DIR="$RUNNER_TEMP/planner-mise-config"
-          mise install github:phosphorco/workbench-go@0.9.1
-          planner_binary="$(mise which --tool github:phosphorco/workbench-go@0.9.1 workbench)"
-          test "$("$planner_binary" version)" = "workbench 0.9.1 ($EXPECTED_PUBLISHED_REVISION)"
+          mise install github:phosphorco/workbench-go@${PUBLISHED_VERSION}
+          planner_binary="$(mise which --tool github:phosphorco/workbench-go@${PUBLISHED_VERSION} workbench)"
+          test "$("$planner_binary" version)" = "workbench ${PUBLISHED_VERSION} ($EXPECTED_PUBLISHED_REVISION)"
           bash acceptance/planner_release.sh "$planner_binary" "$RUNNER_TEMP/published-planner"
 
       - name: Verify tracked source with the private Pkl runtime and no Pkl on PATH
@@ -90,7 +121,7 @@ jobs:
           export MISE_CACHE_DIR="$RUNNER_TEMP/planner-mise-cache"
           export MISE_STATE_DIR="$RUNNER_TEMP/planner-mise-state"
           export MISE_CONFIG_DIR="$RUNNER_TEMP/planner-mise-config"
-          verify_binary="$(mise which --tool github:phosphorco/workbench-go@0.9.1 workbench)"
+          verify_binary="$(mise which --tool github:phosphorco/workbench-go@${PUBLISHED_VERSION} workbench)"
           root="$RUNNER_TEMP/private-pkl-verify"
           tools="$RUNNER_TEMP/verify-git-only"
           mkdir -p "$root" "$tools"
@@ -109,6 +140,65 @@ jobs:
           grep -Fx 'clean' "$RUNNER_TEMP/private-pkl-verify.stdout"
           PATH="$tools" "$verify_binary" verify --help > "$RUNNER_TEMP/private-pkl-help.stdout"
           test "$(sed -n '1p' "$RUNNER_TEMP/private-pkl-help.stdout")" = 'workbench verify [--gate <name>] [--json]'
+
+      - name: Exercise the published observed build binding
+        if: inputs.published_version == '0.10.0' && matrix.runner == 'ubuntu-24.04'
+        run: |
+          set -euo pipefail
+          export MISE_DATA_DIR="$RUNNER_TEMP/planner-mise-data"
+          export MISE_CACHE_DIR="$RUNNER_TEMP/planner-mise-cache"
+          export MISE_STATE_DIR="$RUNNER_TEMP/planner-mise-state"
+          export MISE_CONFIG_DIR="$RUNNER_TEMP/planner-mise-config"
+          binary="$(mise which --tool "github:phosphorco/workbench-go@${PUBLISHED_VERSION}" workbench)"
+          test "$("$binary" version)" = "workbench ${PUBLISHED_VERSION} ($EXPECTED_PUBLISHED_REVISION)"
+          root="$RUNNER_TEMP/observed-binding"
+          mkdir -p "$root"
+          cat > "$root/workbench.pkl" <<'EOF'
+          amends "package://github.com/phosphorco/workbench-go/releases/download/0.10.0/workbench@0.10.0#/Repository.pkl"
+          buildables {
+            ["hello"] = new Buildable {
+              buildInputBinding = "observed-v1"
+              inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt"; "producer.sh" } }
+              buildCommand = new BuildCommand { executable = "sh"; arguments { "producer.sh" } }
+              manifest = new ManifestContract { schemaVersion = 1; kind = "hello-manifest"; contractId = "hello-v1" }
+              candidates {
+                new BuildableCandidate { root = ".local-build/hello"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild it." }
+                new BuildableCandidate { root = ".ci-build/hello"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore it." }
+              }
+              platforms {
+                ["linux-x86_64"] = new BuildablePlatformOutput { os { "linux" }; arch { "amd64" }; path = "bin/hello" }
+              }
+            }
+          }
+          EOF
+          cat > "$root/producer.sh" <<'EOF'
+          #!/bin/sh
+          set -eu
+          value=$(cat producer.txt)
+          mkdir -p "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin"
+          printf '#!/bin/sh\nprintf "%%s\n" "%s"\n' "$value" > "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin/hello"
+          chmod +x "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin/hello"
+          printf '%s\n' '{"source":{},"capabilities":[]}' > "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/.workbench-buildable-source.json"
+          EOF
+          printf 'A\n' > "$root/producer.txt"
+          git -C "$root" init -q -b main
+          git -C "$root" -c user.name=Release -c user.email=release@example.invalid add workbench.pkl producer.txt producer.sh
+          git -C "$root" -c user.name=Release -c user.email=release@example.invalid commit -qm fixture
+          (cd "$root" && "$binary" buildable build --name hello --platform linux-x86_64)
+          (cd "$root" && "$binary" buildable seal --name hello --candidate-root .local-build/hello)
+          (cd "$root" && "$binary" buildable resolve --name hello --platform linux-x86_64 --format json) > "$root/resolve.json"
+          grep -Eq '"candidate":"local"' "$root/resolve.json"
+          test "$(cd "$root" && "$binary" run hello --)" = A
+          printf 'B\n' > "$root/producer.txt"
+          if (cd "$root" && "$binary" buildable seal --name hello --candidate-root .local-build/hello) > "$root/refusal.log" 2>&1; then
+            echo "build A / seal B was accepted" >&2
+            exit 1
+          fi
+          grep -F 'different producer inputs' "$root/refusal.log"
+          if (cd "$root" && "$binary" run hello --) > "$root/run-refusal.log" 2>&1; then
+            echo "run accepted changed producer inputs" >&2
+            exit 1
+          fi
 
       - name: Resolve a cold buildable through the published 0.9.1 asset
         run: |
