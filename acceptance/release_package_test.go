@@ -53,10 +53,10 @@ func TestCandidateContractAndPublishedReleaseCoordinates(t *testing.T) {
 
 	workflow := read(filepath.Join("..", ".github", "workflows", "release.yml"))
 	for _, marker := range []string{
-		"WORKBENCH_VERSION: 0.9.1",
-		"WORKBENCH_CONTRACT_VERSION: 0.9.0",
+		"WORKBENCH_VERSION: 0.10.0",
+		"WORKBENCH_CONTRACT_VERSION: 0.10.0",
 		"\"$PKL_EXECUTABLE\" project package --skip-publish-check --output-path contracts .",
-		"contracts/workbench@0.9.0.zip",
+		"contracts/workbench@0.10.0.zip",
 		"gh release create \"${{ github.ref_name }}\" release-assets/*",
 	} {
 		if !strings.Contains(workflow, marker) {
