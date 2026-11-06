@@ -8,6 +8,26 @@ class Meta {
   goal: Text
 }
 
+class ActorAlias {
+  pattern: Text
+  replacement: String
+}
+
+class ActorInference {
+  env: String = ""
+}
+
+// Patterns use Go's RE2 syntax and always match the entire input.
+class ActorKind {
+  pattern: Text
+  infer: ActorInference = new {}
+  aliases: Listing<ActorAlias> = new {}
+}
+
+class Actors {
+  kinds: Mapping<Text, ActorKind> = new {}
+}
+
 class Mechanical {
   fixed kind: "Mechanical" = "Mechanical"
   run: Text
@@ -28,6 +48,7 @@ class Need {
 abstract class Node {
   id: NodeId
   owner: Text
+  assignable: Boolean = true
   outcome: String = ""
   needs: Listing<Need> = new {}
 }
@@ -81,4 +102,5 @@ function granted(producer: Action): Need = new {
 }
 
 meta: Meta
+actors: Actors = new {}
 nodes: Listing<Action | Guard | Selector>

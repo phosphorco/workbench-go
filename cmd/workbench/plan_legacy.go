@@ -18,6 +18,29 @@ func legacyPlanFingerprints(ctx context.Context, d plan.Definition, events []pla
 	if len(plan.LegacyDigests(events)) == 0 {
 		return d, nil
 	}
+	type input struct {
+		Parts []string `json:"parts"`
+		Sort  bool     `json:"sort"`
+	}
+	inputs := []input{}
+	needs := []plan.Need{}
+	for _, n := range d.Nodes {
+		for _, kind := range []string{"Artifact", "Evidence", "Fork"} {
+			if kind == "Fork" && n.Kind != "Selector" || kind != "Fork" && n.Kind == "Selector" {
+				continue
+			}
+			need := plan.Need{Kind: kind, Node: n.ID}
+			parts := d.FingerprintParts(need)
+			if parts == nil {
+				continue
+			} // Report unresolved actor owners through Check.
+			needs = append(needs, need)
+			inputs = append(inputs, input{Parts: parts, Sort: kind != "Evidence"})
+		}
+	}
+	if len(inputs) == 0 {
+		return d, nil
+	}
 	bun := ""
 	if version.IsDevelopment() {
 		path, err := exec.LookPath("bun")
@@ -31,22 +54,6 @@ func legacyPlanFingerprints(ctx context.Context, d plan.Definition, events []pla
 			return d, err
 		}
 		bun = toolchain.BunPath()
-	}
-	type input struct {
-		Parts []string `json:"parts"`
-		Sort  bool     `json:"sort"`
-	}
-	inputs := []input{}
-	needs := []plan.Need{}
-	for _, n := range d.Nodes {
-		for _, kind := range []string{"Artifact", "Evidence", "Fork"} {
-			if kind == "Fork" && n.Kind != "Selector" || kind != "Fork" && n.Kind == "Selector" {
-				continue
-			}
-			need := plan.Need{Kind: kind, Node: n.ID}
-			needs = append(needs, need)
-			inputs = append(inputs, input{Parts: d.FingerprintParts(need), Sort: kind != "Evidence"})
-		}
 	}
 	encoded, err := json.Marshal(inputs)
 	if err != nil {

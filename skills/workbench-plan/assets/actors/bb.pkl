@@ -1,0 +1,12 @@
+import "workbench:plan" as Plan
+
+thread = new Plan.ActorKind {
+  pattern = #"thr_[A-Za-z0-9_]+"#
+  infer { env = "BB_THREAD_ID" }
+  aliases {
+    new {
+      pattern = #"@thread:(thr_[A-Za-z0-9_]+)"#
+      replacement = "$1"
+    }
+  }
+}

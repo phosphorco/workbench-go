@@ -1,0 +1,36 @@
+amends "workbench:plan"
+
+// Run from the repository root with --module-root . for these cross-tree imports.
+
+import "../../skills/workbench-plan/assets/actors/bb.pkl" as bb
+import "../../skills/workbench-plan/assets/actors/people.pkl" as people
+import "../../skills/workbench-plan/assets/actors/services.pkl" as services
+
+meta {
+  title = "Coordinated implementation"
+  goal = "Produce an artifact and record a human review, with explicit handoffs."
+}
+
+actors {
+  kinds {
+    ["thread"] = bb.thread
+    ["user"] = people.email
+    ["external"] = services.service
+  }
+}
+
+local api = new Action {
+  id = "api"
+  owner = "implementer"
+  grant { "artifact.txt" }
+  oracle = module.mechanical("test -s artifact.txt")
+}
+
+local review = new Guard {
+  id = "review"
+  owner = "user:alex@example.com"
+  needs { module.produced(api); module.verified(api) }
+  oracle = module.adjudicated("The artifact satisfies the agreed outcome.", "user:alex@example.com")
+}
+
+nodes { api; review }

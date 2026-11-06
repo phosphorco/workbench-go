@@ -275,3 +275,62 @@ func TestSelfSkillExportUsesPublishedContractCoordinates(t *testing.T) {
 		}
 	}
 }
+
+func TestExportedPlanSkillActorImportsRun(t *testing.T) {
+	catalogRoot := t.TempDir()
+	if err := run(context.Background(), []string{"self", "skills", "export", "workbench-plan", "--skills-dir", catalogRoot}, os.Getwd, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	skillRoot := filepath.Join(catalogRoot, "workbench-plan")
+	reference, err := os.ReadFile(filepath.Join(skillRoot, "references", "authoring.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(reference), "## Import actor kinds")
+	if !ok {
+		t.Fatal("missing actor import example")
+	}
+	_, code, ok := strings.Cut(section, "```pkl\n")
+	if !ok {
+		t.Fatal("missing import block")
+	}
+	imports, _, ok := strings.Cut(code, "\n```")
+	if !ok {
+		t.Fatal("unclosed import block")
+	}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "actors"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bb.pkl", "codex.pkl", "people.pkl", "services.pkl"} {
+		data, err := os.ReadFile(filepath.Join(skillRoot, "assets", "actors", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writePlanFixture(t, root, filepath.Join("actors", name), string(data))
+	}
+	path := writePlanFixture(t, root, "feature.plan.pkl", `amends "workbench:plan"
+`+imports+`
+meta { title = "Exported convenience"; goal = "Use actor imports without authoring recognition rules." }
+nodes { new Guard { id = "api"; owner = "implementer"; oracle = module.mechanical("true") } }
+`)
+	result, output, _, err := invokePlan(t, root, "update", path, "--node", "api", "--by", "user:alex@example.com", "--assignee", "@me", "--status", "in-progress")
+	if err != nil {
+		t.Fatalf("exported imports: %v\n%s", err, output)
+	}
+	event := result["event"].(map[string]any)
+	if event["assignee"].(map[string]any)["id"] != "alex@example.com" {
+		t.Fatalf("@me mismatch: %v", event)
+	}
+	report, _, _, err := invokePlan(t, root, "tick", path)
+	if err != nil || report["counts"].(map[string]any)["complete"] != float64(0) {
+		t.Fatalf("assignment changed acceptance: %v %v", report, err)
+	}
+	if _, _, _, err := invokePlan(t, root, "verify", path, "--by", "user:alex@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	report, _, _, err = invokePlan(t, root, "recall", path)
+	if err != nil || report["complete"].([]any)[0].(map[string]any)["work"].(map[string]any)["status"] != "in-progress" {
+		t.Fatalf("proof changed work status: %v %v", report, err)
+	}
+}

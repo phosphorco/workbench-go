@@ -8,20 +8,27 @@ import (
 )
 
 type NodeView struct {
-	Kind           string   `json:"kind"`
-	ID             string   `json:"id"`
-	Owner          string   `json:"owner"`
-	Outcome        string   `json:"outcome,omitempty"`
-	Needs          []string `json:"needs"`
-	Grant          []string `json:"grant,omitempty"`
-	EffectiveGrant []string `json:"effectiveGrant,omitempty"`
-	Observes       []string `json:"observes,omitempty"`
-	Oracle         *Oracle  `json:"oracle,omitempty"`
-	Question       string   `json:"question,omitempty"`
-	Options        []string `json:"options,omitempty"`
-	Probe          string   `json:"probe,omitempty"`
-	Missing        []string `json:"missing,omitempty"`
-	Stale          []string `json:"stale,omitempty"`
+	Kind           string    `json:"kind"`
+	ID             string    `json:"id"`
+	Owner          string    `json:"owner"`
+	Assignable     bool      `json:"assignable"`
+	Work           WorkState `json:"work"`
+	Outcome        string    `json:"outcome,omitempty"`
+	Needs          []string  `json:"needs"`
+	Grant          []string  `json:"grant,omitempty"`
+	EffectiveGrant []string  `json:"effectiveGrant,omitempty"`
+	Observes       []string  `json:"observes,omitempty"`
+	Oracle         *Oracle   `json:"oracle,omitempty"`
+	Question       string    `json:"question,omitempty"`
+	Options        []string  `json:"options,omitempty"`
+	Probe          string    `json:"probe,omitempty"`
+	Missing        []string  `json:"missing,omitempty"`
+	Stale          []string  `json:"stale,omitempty"`
+}
+
+type WorkView struct {
+	ID   string    `json:"id"`
+	Work WorkState `json:"work"`
 }
 
 type Counts struct {
@@ -36,6 +43,8 @@ type Report struct {
 	Plan          string       `json:"plan"`
 	Ledger        string       `json:"ledger"`
 	Meta          Meta         `json:"meta"`
+	Actors        Actors       `json:"actors"`
+	Work          []WorkView   `json:"work,omitempty"`
 	Counts        Counts       `json:"counts"`
 	Ready         []NodeView   `json:"ready"`
 	Blocked       []NodeView   `json:"blocked"`
@@ -48,9 +57,23 @@ type Report struct {
 
 func Tick(d Definition, events []Event, full bool) Report {
 	s := Fold(events)
-	r := Report{Meta: d.Meta, Ready: []NodeView{}, Blocked: []NodeView{}, CriticalPath: d.CriticalPath(), Diagnostics: Check(d, s), LegacyDigests: LegacyDigests(events)}
+	r := Report{Meta: d.Meta, Actors: d.Actors, Ready: []NodeView{}, Blocked: []NodeView{}, CriticalPath: d.CriticalPath(), Diagnostics: Check(d, s), LegacyDigests: LegacyDigests(events)}
 	for _, n := range d.Nodes {
 		v := NodeView{Kind: n.Kind, ID: n.ID, Owner: n.Owner, Outcome: n.Outcome, Needs: []string{}, Grant: n.Grant, Observes: n.Observes, Oracle: n.Oracle, Question: n.Question, Options: n.Options}
+		v.Assignable = n.IsAssignable()
+		v.Work = s.Work(n.ID)
+		if v.Work.Stall != nil && v.Work.Stall.WaitingOnNeed != nil {
+			if err := d.ValidateNeed(*v.Work.Stall.WaitingOnNeed); err != nil {
+				v.Work.WaitingOnNeedError = err.Error()
+			} else {
+				satisfied := s.Satisfies(d, *v.Work.Stall.WaitingOnNeed)
+				v.Work.WaitingOnNeedSatisfied = &satisfied
+			}
+		}
+		// Keep reported work visible even when proof completion hides the node in tick.
+		if v.Work.UpdatedAt != "" {
+			r.Work = append(r.Work, WorkView{ID: n.ID, Work: v.Work})
+		}
 		if n.Probe != nil {
 			v.Probe = n.Probe.ID
 		}

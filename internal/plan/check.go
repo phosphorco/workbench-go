@@ -21,6 +21,19 @@ func Check(d Definition, s State) []Diagnostic {
 			diagnostics = append(diagnostics, Diagnostic{Code: "DuplicateNodeId", Node: n.ID, Message: "Use one unique id per node."})
 		}
 		seen[n.ID] = true
+		if len(d.Actors.Kinds) > 0 {
+			owner := ""
+			if n.Kind == "Selector" {
+				owner = n.Owner
+			} else if n.Oracle != nil && n.Oracle.Kind == "Adjudicated" {
+				owner = n.Oracle.Owner
+			}
+			if owner != "" {
+				if _, err := d.Actors.Resolve(owner); err != nil {
+					diagnostics = append(diagnostics, Diagnostic{Code: "InvalidActorOwner", Node: n.ID, Message: fmt.Sprintf("owner %q: %v", owner, err)})
+				}
+			}
+		}
 		if n.Kind == "Selector" && (len(n.Options) < 2 || len(unique(n.Options)) != len(n.Options)) {
 			diagnostics = append(diagnostics, Diagnostic{Code: "DegenerateSelector", Node: n.ID, Message: "Provide at least two distinct options."})
 		}

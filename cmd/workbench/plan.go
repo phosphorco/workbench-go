@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,14 +32,19 @@ Read (never runs oracles or writes the ledger):
   export      Complete snapshot as JSON by default; redirect stdout to save it.
   schema      Print the bundled Pkl contract; plans may amend "workbench:plan".
 
-Write (append evidence or decisions to the sibling .ledger.jsonl):
+Write (append evidence, decisions, or reported work to the sibling .ledger.jsonl):
   verify      Run --node's Mechanical oracle; omitted: all ready Guards.
-  adjudicate  --node ID --result pass|fail --by OWNER --reason TEXT
-  rule        --node ID --choice OPTION --by OWNER
+  adjudicate  --node ID --result pass|fail --reason TEXT [--by OWNER]
+  rule        --node ID --choice OPTION [--by OWNER]
   land        --node ID: record an artifact, independently of verification.
   grant       --node ID --paths PATH,PATH --reason TEXT
   revoke      --node ID --paths PATH,PATH --reason TEXT
-  note        --text TEXT --by AUTHOR [--node ID]
+  note        --text TEXT [--by AUTHOR] [--node ID]
+  update      --node ID [--assignee ACTOR | --unassign] [--reassign]
+              [--status unstarted|in-progress|paused|stalled] [--text TEXT]
+              [--expect-revision N] (from the node's work.revision)
+              stalled: --reason TEXT --resume-when TEXT
+              [--waiting-on-actor ACTOR] [--waiting-on-need 'verified(ID)']
 
 Common flags:
   --plan FILE         Explicit alternative to the positional plan file.
@@ -47,7 +53,9 @@ Common flags:
   --cwd DIR           Mechanical oracle working directory (default: caller cwd).
   --timeout DURATION  Evaluation/command time budget (default: 30s).
   --node ID           Select one verification target, or name a write target.
-  --by AUTHOR         Optional attribution for verify; required for rule/note/judgment.
+  --by ACTOR          Explicit attribution, otherwise inferred from actors.kinds.
+                      Required for update/note/rule/judgment without inference.
+                      @me uses inference; --assignee @me uses the resolved caller.
   --format agent|json Agent context (default); export defaults to JSON.
   --help              Show this guide without loading a plan.
 
@@ -59,6 +67,11 @@ Exit 0: successful command, including no ready work. Nonzero: invalid invocation
 invalid plan, unavailable tool, refused write, or a failed verification.
 Read the result diagnostics and stderr to distinguish those outcomes.
 Ready work is not assigned work; readiness never grants scope.
+Assignment and reported work status never discharge acceptance dependencies.
+Actor forms: canonical ID, configured alias, or KIND:ID to disambiguate.
+Actor inference reads only configured variables in the CLI, never in Pkl.
+Paused requires --text. Stalled requires --reason and --resume-when.
+Replacing another assignee requires --reassign; it does not dispatch a worker.
 Pkl imports can read .pkl modules under --module-root; resources/env/network are denied.
 Grants document task ownership; they do not sandbox the shell run by verify.
 
@@ -73,9 +86,13 @@ type planInvocation struct {
 	verb, file, ledger, moduleRoot, cwd, node, by, choice, result, reason, text, format string
 	paths                                                                               []string
 	timeout                                                                             time.Duration
+	assignee, status, resumeWhen, waitingActor, waitingNeed                             string
+	unassign, reassign                                                                  bool
+	actor                                                                               *plan.Actor
+	expectRevision                                                                      *uint64
 }
 
-var planVerbs = []string{"check", "tick", "recall", "export", "verify", "adjudicate", "rule", "land", "grant", "revoke", "note"}
+var planVerbs = []string{"check", "tick", "recall", "export", "verify", "adjudicate", "rule", "land", "grant", "revoke", "note", "update"}
 
 func parsePlan(arguments []string) (planInvocation, error) {
 	p := planInvocation{format: planOutputFormat(arguments)}
@@ -88,7 +105,8 @@ func parsePlan(arguments []string) (planInvocation, error) {
 	allowed := map[string]bool{"plan": true, "ledger": true, "module-root": true, "timeout": true, "format": true}
 	for _, key := range map[string][]string{
 		"verify": {"node", "by", "cwd"}, "adjudicate": {"node", "result", "by", "reason"}, "rule": {"node", "choice", "by"},
-		"land": {"node"}, "grant": {"node", "paths", "reason"}, "revoke": {"node", "paths", "reason"}, "note": {"node", "text", "by"},
+		"land": {"node", "by"}, "grant": {"node", "paths", "reason", "by"}, "revoke": {"node", "paths", "reason", "by"}, "note": {"node", "text", "by"},
+		"update": {"node", "by", "assignee", "unassign", "reassign", "status", "text", "reason", "resume-when", "waiting-on-actor", "waiting-on-need", "expect-revision"},
 	}[p.verb] {
 		allowed[key] = true
 	}
@@ -106,6 +124,13 @@ func parsePlan(arguments []string) (planInvocation, error) {
 			}
 			if _, seen := values[name]; seen {
 				return p, fmt.Errorf("--%s was supplied twice; provide one explicit value", name)
+			}
+			if name == "unassign" || name == "reassign" {
+				if inline {
+					return p, fmt.Errorf("--%s takes no value", name)
+				}
+				values[name] = "true"
+				continue
 			}
 			if !inline {
 				i++
@@ -149,6 +174,13 @@ func parsePlan(arguments []string) (planInvocation, error) {
 	p.result = values["result"]
 	p.reason = values["reason"]
 	p.text = values["text"]
+	p.assignee = values["assignee"]
+	p.status = values["status"]
+	p.resumeWhen = values["resume-when"]
+	p.waitingActor = values["waiting-on-actor"]
+	p.waitingNeed = values["waiting-on-need"]
+	p.unassign = values["unassign"] != ""
+	p.reassign = values["reassign"] != ""
 	if value := values["timeout"]; value != "" {
 		duration, err := time.ParseDuration(value)
 		if err != nil || duration <= 0 {
@@ -164,7 +196,7 @@ func parsePlan(arguments []string) (planInvocation, error) {
 			}
 		}
 	}
-	required := map[string][]string{"adjudicate": {"node", "result", "by", "reason"}, "rule": {"node", "choice", "by"}, "land": {"node"}, "grant": {"node", "paths", "reason"}, "revoke": {"node", "paths", "reason"}, "note": {"text", "by"}}
+	required := map[string][]string{"adjudicate": {"node", "result", "reason"}, "rule": {"node", "choice"}, "land": {"node"}, "grant": {"node", "paths", "reason"}, "revoke": {"node", "paths", "reason"}, "note": {"text"}, "update": {"node"}}
 	for _, key := range required[p.verb] {
 		if strings.TrimSpace(values[key]) == "" {
 			return p, fmt.Errorf("plan %s requires --%s; run workbench plan %s --help", p.verb, key, p.verb)
@@ -172,6 +204,40 @@ func parsePlan(arguments []string) (planInvocation, error) {
 	}
 	if p.verb == "adjudicate" && p.result != "pass" && p.result != "fail" {
 		return p, fmt.Errorf("--result must be pass or fail")
+	}
+	if p.verb == "update" {
+		if value, present := values["expect-revision"]; present {
+			revision, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return p, fmt.Errorf("--expect-revision requires a nonnegative integer")
+			}
+			p.expectRevision = &revision
+		}
+		if p.assignee == "" && !p.unassign && p.status == "" {
+			return p, fmt.Errorf("update requires --assignee, --unassign, or --status")
+		}
+		if p.unassign && p.assignee != "" {
+			return p, fmt.Errorf("--assignee and --unassign cannot be combined")
+		}
+		if p.reassign && p.assignee == "" {
+			return p, fmt.Errorf("--reassign requires --assignee")
+		}
+		if p.status != "" && !plan.ValidWorkStatus(p.status) {
+			return p, fmt.Errorf("invalid work status %q; completion requires acceptance evidence", p.status)
+		}
+		if p.status == "paused" && strings.TrimSpace(p.text) == "" {
+			return p, fmt.Errorf("paused requires --text")
+		}
+		if p.status == "stalled" {
+			if strings.TrimSpace(p.reason) == "" || strings.TrimSpace(p.resumeWhen) == "" {
+				return p, fmt.Errorf("stalled requires --reason and --resume-when")
+			}
+		} else if p.reason != "" || p.resumeWhen != "" || p.waitingActor != "" || p.waitingNeed != "" {
+			return p, fmt.Errorf("stall fields require --status stalled")
+		}
+		if p.status == "" && p.text != "" {
+			return p, fmt.Errorf("--text requires --status; use note for assignment context")
+		}
 	}
 	return p, nil
 }
@@ -248,7 +314,7 @@ func runPlanCommand(ctx context.Context, arguments []string, workingDirectory fu
 	report := plan.Tick(definition, events, p.verb == "recall" || p.verb == "export")
 	report.Plan = p.file
 	report.Ledger = p.ledger
-	if len(report.Diagnostics) > 0 && p.verb != "revoke" && p.verb != "note" {
+	if len(report.Diagnostics) > 0 && p.verb != "revoke" && p.verb != "note" && p.verb != "update" {
 		if err := writePlanReport(output, p, report); err != nil {
 			return err
 		}
@@ -256,6 +322,9 @@ func runPlanCommand(ctx context.Context, arguments []string, workingDirectory fu
 	}
 	if !isPlanWrite(p.verb) {
 		return writePlanReport(output, p, report)
+	}
+	if err := resolvePlanActor(&p, definition.Actors); err != nil {
+		return writePlanError(output, p.format, "Actor", err)
 	}
 	if p.verb == "verify" {
 		return verifyPlan(ctx, p, definition, events, output, diagnostics)
@@ -274,7 +343,12 @@ func runPlanCommand(ctx context.Context, arguments []string, workingDirectory fu
 	if err != nil {
 		return writePlanError(output, p.format, "Ledger", err)
 	}
-	return writePlanRecorded(output, p.format, planRecorded{p.file, p.ledger, event})
+	recorded := planRecorded{Plan: p.file, Ledger: p.ledger, Event: event}
+	if event.Kind == "NodeUpdated" {
+		revision := plan.Fold(events).Work(event.Node).Revision + 1
+		recorded.Revision = &revision
+	}
+	return writePlanRecorded(output, p.format, recorded)
 }
 
 func planEvaluator() (evaluate.Evaluator, error) {
@@ -342,10 +416,10 @@ func lockPlanLedger(path string) (func(), error) {
 }
 
 func appendPlanEvent(path string, event plan.Event) (plan.Event, error) {
+	event.At = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := event.Validate(); err != nil {
 		return plan.Event{}, err
 	}
-	event.At = time.Now().UTC().Format(time.RFC3339Nano)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
 	if err != nil {
 		return plan.Event{}, err
@@ -374,13 +448,15 @@ func appendPlanEvent(path string, event plan.Event) (plan.Event, error) {
 }
 
 func planEvent(p planInvocation, d plan.Definition, events []plan.Event) (plan.Event, error) {
-	e := plan.Event{Node: p.node, By: p.by, Reason: p.reason}
+	e := plan.Event{Node: p.node, By: p.by, Actor: p.actor, Reason: p.reason}
 	n, found := d.Find(p.node)
 	if p.node != "" && !found {
 		return e, fmt.Errorf("node %q is absent; inspect ids with workbench plan recall %q", p.node, p.file)
 	}
 	s := plan.Fold(events)
 	switch p.verb {
+	case "update":
+		return planWorkEvent(p, d, s, n)
 	case "note":
 		e.Kind = "Note"
 		e.Text = p.text
@@ -403,7 +479,7 @@ func planEvent(p planInvocation, d plan.Definition, events []plan.Event) (plan.E
 		if n.Kind != "Selector" {
 			return e, fmt.Errorf("%s is not a Selector", n.ID)
 		}
-		if p.by != n.Owner {
+		if !planActorOwns(p, d.Actors, n.Owner) {
 			return e, fmt.Errorf("%s is decided by %q; record their decision with --by %q", n.ID, n.Owner, n.Owner)
 		}
 		if !slices.Contains(n.Options, p.choice) {
@@ -419,7 +495,7 @@ func planEvent(p planInvocation, d plan.Definition, events []plan.Event) (plan.E
 		if n.Oracle == nil || n.Oracle.Kind != "Adjudicated" {
 			return e, fmt.Errorf("%s needs Mechanical verification; run workbench plan verify %q --node %q", n.ID, p.file, n.ID)
 		}
-		if p.by != n.Oracle.Owner {
+		if !planActorOwns(p, d.Actors, n.Oracle.Owner) {
 			return e, fmt.Errorf("%s is adjudicated by %q; record their judgment with --by %q", n.ID, n.Oracle.Owner, n.Oracle.Owner)
 		}
 		if err := requirePlanDependencies(d, s, n); err != nil {
@@ -512,7 +588,7 @@ func verifyPlan(ctx context.Context, p planInvocation, d plan.Definition, events
 		if by == "" {
 			by = "workbench"
 		}
-		event, appendErr := appendPlanEvent(p.ledger, plan.Event{Kind: "Evidence", Node: n.ID, Result: result, By: by, Digest: d.Fingerprint(n.Self())})
+		event, appendErr := appendPlanEvent(p.ledger, plan.Event{Kind: "Evidence", Node: n.ID, Result: result, By: by, Actor: p.actor, Digest: d.Fingerprint(n.Self())})
 		if appendErr != nil {
 			failure = errors.Join(failure, appendErr)
 			break

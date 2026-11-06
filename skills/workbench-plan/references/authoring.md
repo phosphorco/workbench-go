@@ -49,6 +49,28 @@ plan needs a wider local Pkl tree. Supply dynamic discovery as explicit Pkl
 inputs; evaluation cannot access environment resources, networks, or arbitrary
 repository files. Task planning does not require a Workbench Subject or setup.
 
+## Import actor kinds
+
+Copy the supplied [actor files](../assets/actors/) beside the plan into `actors/`,
+then import the kinds you need:
+
+```pkl
+import "actors/codex.pkl" as codex
+import "actors/people.pkl" as people
+
+actors {
+  kinds {
+    ["codex"] = codex.thread
+    ["user"] = people.email
+  }
+}
+```
+
+[BB threads](../assets/actors/bb.pkl) and
+[services](../assets/actors/services.pkl) are also supplied. The CLI infers the
+caller from the configured environment variable; `@me` uses that same identity.
+Read [work coordination](coordination.md) for commands, overrides, or custom kinds.
+
 ## Release contract reference
 
 The configured publication target is `{{.PklPackageURI}}#/Plan.pkl`.

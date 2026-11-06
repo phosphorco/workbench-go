@@ -2,8 +2,8 @@
 
 `workbench plan` operates a local task dependency graph. A Pkl definition owns
 the intended work; its sibling JSONL ledger owns recorded evidence, decisions,
-and grant changes. Readiness is derived from those two inputs. The command
-does not assign or dispatch agents.
+grant changes, and reported work. Readiness is derived from those two inputs.
+The command records assignments but does not dispatch agents.
 
 This task graph is distinct from Workbench's proposed **reconciliation plan**,
 which describes environment changes derived from a Subject and observations.
@@ -78,12 +78,13 @@ startup handshake finishes before cancellation is observed.
 | `recall` | None | Include completed nodes and all chronological ledger events. |
 | `export` | None | Write the complete snapshot to stdout, JSON by default. |
 | `verify` | `--node ID`, `--by AUTHOR`, `--cwd DIR` | Execute a Mechanical oracle; without a node, run initially ready Mechanical Guards. |
-| `adjudicate` | `--node ID --result RESULT --by OWNER --reason TEXT` | Record the named oracle owner's judgment (`pass` or `fail`). |
-| `rule` | `--node ID --choice OPTION --by OWNER` | Record the Selector owner's choice. |
+| `adjudicate` | `--node ID --result RESULT --reason TEXT`, optional `--by OWNER` | Record the named oracle owner's judgment (`pass` or `fail`). |
+| `rule` | `--node ID --choice OPTION`, optional `--by OWNER` | Record the Selector owner's choice. |
 | `land` | `--node ID` | Record artifact availability separately from verification. |
 | `grant` | `--node ID --paths PATH,PATH --reason TEXT` | Add authority paths to an Action after collision checks. |
 | `revoke` | `--node ID --paths PATH,PATH --reason TEXT` | Withdraw paths introduced by ledger grants. |
-| `note` | `--text TEXT --by AUTHOR`, optional `--node ID` | Record context that discharges no dependency. |
+| `note` | `--text TEXT`, optional `--by ACTOR --node ID` | Record context that discharges no dependency. |
+| `update` | `--node ID`, assignment/status flags below, optional `--by ACTOR` | Atomically record assignment and reported work, independently of acceptance. |
 
 Read verbs never execute oracles or write the ledger. Exit zero means the
 command succeeded, including when no work is ready; nonzero can mean invalid
@@ -141,7 +142,8 @@ Without `--node`, verification runs the initially ready Mechanical Guards.
 
 An Adjudicated oracle requires its named owner's recorded judgment. A Selector
 requires its named owner's recorded choice after probe/dependency evidence
-exists. `--by` is attribution supplied by the caller, not authenticated identity.
+exists. `--by` (or inferred actor identity) supplies attribution, not authenticated
+identity.
 `ruled(selector)` waits for a current ruling; it does not automatically select
 different subgraphs by choice. Express that subsequent plan revision explicitly.
 
@@ -159,11 +161,165 @@ option or footprint set is not a semantic change.
 
 Grant events add paths to an Action's initial grant. Revocation withdraws paths
 introduced by grant events; change the definition to alter its initial grant.
-New grants are checked before append. Revocation and notes remain available
-when a definition edit has created a graph violation, allowing recovery.
+New grants are checked before append. Revocation, notes, and work updates remain
+available when a definition edit has created a graph violation, allowing recovery.
 These ownership declarations do not sandbox verification processes.
 
+## Actors, assignment, and reported work
+
+Assignment and reported activity are separate from acceptance. They never
+satisfy dependencies, retract proof, change `owner`, or dispatch workers.
+A node can be acceptance-complete and still report a stall. `tick`, `recall`,
+and `export` expose each node's `work`; the top-level `work` array also keeps
+reported work on completed nodes visible in compact reads.
+
+### Import actor kinds
+
+The exported planning skill supplies reusable [BB threads](../skills/workbench-plan/assets/actors/bb.pkl),
+[Codex-style threads](../skills/workbench-plan/assets/actors/codex.pkl),
+[email users](../skills/workbench-plan/assets/actors/people.pkl), and
+[services](../skills/workbench-plan/assets/actors/services.pkl) under `assets/actors/`.
+Copy the kinds you need beside your plan into `actors/`, then combine them:
+
+```pkl
+amends "workbench:plan"
+import "actors/bb.pkl" as bb
+import "actors/people.pkl" as people
+
+actors {
+  kinds {
+    ["thread"] = bb.thread
+    ["user"] = people.email
+  }
+}
+// Supply meta and nodes as usual.
+```
+
+Amend imported values to customize them, for example:
+
+```pkl
+["thread"] = (bb.thread) { infer { env = "OUR_THREAD_ID" } }
+```
+
+The [repository example](../examples/planning/coordination.plan.pkl) imports the
+same authoritative assets across the tree. From the repository root, run:
+
+```sh
+workbench plan check examples/planning/coordination.plan.pkl --module-root .
+```
+
+Keep `--module-root .` on subsequent commands for that example. Ordinary plans
+with copied local actor files need no wider import boundary. These convenience
+definitions are examples; adapt their patterns and variables to the harness.
+For custom kinds, see the skill's [coordination reference](../skills/workbench-plan/references/coordination.md).
+
+### Recognize and infer identity
+
+Kind names match `[A-Za-z][A-Za-z0-9_-]*`. Each kind declares a canonical
+`pattern`, optional `infer.env`, and optional `aliases` with `pattern` and
+`replacement`. Patterns use Go's RE2 syntax and match the entire input.
+Recognition validates shape, not existence, authentication, or authorization.
+
+Unqualified input contributes canonical and alias matches from every kind.
+Aliases normalize once into IDs that must match the canonical pattern. Equal
+`(kind, id)` candidates deduplicate; conflicting identities are ambiguous, even
+within one kind. No declaration order wins. A known `KIND:` prefix selects one
+kind: a canonical ID then bypasses aliases for reliable round trips; a
+noncanonical spelling still uses that kind's aliases. Thus `thread:thr_api`
+always identifies the canonical `thr_api`, while `thread:@thread:thr_api` can
+use the BB alias. Bare-input ambiguity rules remain unchanged.
+
+Replacement references follow Go's Unicode-aware name boundaries. Unknown
+captures are definition errors. Use braces to separate a capture from adjacent
+name characters: `${1}é` means capture 1 followed by `é`; `$1é` names an unknown
+capture. `$1`, `${name}`, and `$$` are also supported.
+
+All writes accept `--by`. Explicit `--by ACTOR` wins over inference, even when
+ambient variables are invalid. Otherwise the CLI recognizes configured nonempty
+environment values within their kinds. Unset or empty variables contribute
+nothing; nonempty invalid values and multiple inferred identities are errors.
+An empty `infer.env` disables inference. Pkl never reads these variables, and
+read commands do not need identity.
+
+`--by @me` requests inference. Elsewhere, `@me` means the resolved command actor,
+including an explicit `--by` override. Events store the resolved `actor` pair and
+its qualified `by` string. Historical identities never change with policy edits.
+With actor policies configured, judgments and Selector rulings fingerprint the
+resolved owner; changing what an owner alias means can stale acceptance evidence
+without rewriting history. Assignees never acquire an owner's authority.
+Digest-free historical evidence retains its presence-only behavior.
+
+Without actor kinds, explicit identities remain untyped (`kind: ""`); `note`,
+`rule`, `adjudicate`, and `update` require `--by`. Other commands retain legacy
+optional attribution, with `verify` defaulting to `workbench`.
+
+### Assign and report activity
+
+```sh
+workbench plan update feature.plan.pkl --node api --assignee @me --status in-progress
+workbench plan update feature.plan.pkl --node api --assignee user:alex@example.com --reassign
+workbench plan update feature.plan.pkl --node api --status paused --text 'Awaiting acceptance.'
+workbench plan update feature.plan.pkl --node api --unassign --expect-revision 3
+```
+
+Nodes are assignable by default; `assignable = false` refuses new assignments.
+Unassignment remains possible after that policy changes. There is one assignee;
+replacing a different one requires `--reassign`. Assignment, unassignment, and
+status are independent; omitted assignment/status fields remain unchanged.
+`--reassign` requires `--assignee` and cannot combine with `--unassign`.
+
+For updates based on a prior read, supply `--expect-revision N` from
+`work.revision`. It counts recorded `NodeUpdated` events for that node, starting
+at zero. The CLI checks the revision and appends under the same ledger lock;
+a mismatch refuses the entire update. Omitting the flag means an intentional
+setter against current state. The lock serializes writes; it is not a worker
+lease or cross-machine synchronization.
+
+Statuses are `unstarted` (default), `in-progress`, `paused`, and `stalled`.
+`paused` covers deliberate stopping, including awaiting acceptance, and requires
+`--text`. `stalled` requires the structured fields below. There is no writable
+`completed` status: use `verify`, `adjudicate`, or `rule` for acceptance.
+Work updates remain available despite graph blockers or diagnostics.
+
+Each update records one timestamped `NodeUpdated` event. New events require a
+valid RFC3339Nano timestamp; the CLI supplies UTC. `work.statusSince` changes on
+actual status transitions, while `updatedAt` and `updatedBy` track every work
+update. These are reported intervals, not measured execution time or liveness.
+`--text` belongs to a status update; use `note` for other context. Verification
+does not implicitly start, stop, or resume work.
+
+### Record an actionable stall
+
+```sh
+workbench plan update feature.plan.pkl --node api --status stalled \
+  --reason 'Integration credentials are unavailable.' \
+  --resume-when 'Sandbox credentials have been provisioned.' \
+  --waiting-on-actor alex@example.com \
+  --waiting-on-need 'verified(credentials)'
+```
+
+One current stall contains a required reason and release condition, plus an
+optional actor and/or plan need. `--waiting-on-need` accepts `produced(ID)`,
+`verified(ID)`, `ruled(ID)`, or `granted(ID)` with an existing, compatible
+producer. This annotates waiting; use `needs` for actual graph prerequisites.
+Waiting on an actor neither assigns them work nor creates a graph edge.
+
+Notes, reassignment, and verification preserve the stall. Re-reporting `stalled`
+replaces its details while preserving `stallRaisedAt` and `stallRaisedBy` for
+the interval. Changing to another work status clears it and retains history.
+For a valid referenced need, `work.waitingOnNeedSatisfied` reflects current
+proof; satisfaction prompts explicit resume. If a plan edit removes or changes
+the producer incompatibly, `work.waitingOnNeedError` explains the broken
+reference and satisfaction is omitted. This warning does not invalidate the
+dependency graph or add an edge. Free-text conditions and actor availability
+are not evaluated automatically.
+
 ## Compatibility and local ownership
+
+New `NodeUpdated` events require a reader with coordination support. Older Go
+or TypeScript readers may reject the new event tag; preserve an original or
+copied ledger when comparing versions. Historical untyped events need no rewrite;
+their tags retain permissive timestamp handling.
 
 Equivalent definitions can read existing TypeScript JSONL ledgers without
 rewriting them. New evidence uses tagged SHA-256 fingerprints. Historical
@@ -215,6 +371,18 @@ plans amend `workbench:plan`; release URLs do not enable network imports.
 go test ./internal/plan ./internal/evaluate ./cmd/workbench
 go test ./...
 go vet ./...
+```
+
+The coordination end-to-end test builds the executable and runs independent CLI
+processes through import composition, inferred attribution, assignment, structured
+stalls, proof completion, and explicit resume. Generated CLI sequences check
+acceptance independence; Go fuzz properties check JSONL replay, interval tracking,
+alias normalization, and ambiguity. Run them with:
+
+```sh
+go test ./cmd/workbench -run 'TestPlan' -count=1
+go test ./internal/plan -run '^$' -fuzz FuzzCoordinationLedgerProjection -fuzztime 10s
+go test ./internal/plan -run '^$' -fuzz FuzzActorRecognition -fuzztime 10s
 ```
 
 The plan tests compare frontier categories and dependency expressions against

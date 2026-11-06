@@ -493,7 +493,7 @@ func TestPlanFormatErrorsAreReadOnlyAndRespectLiterals(t *testing.T) {
 		{[]string{"plan", "tikk", "x.plan.pkl", "--format", "json"}, true},
 		{[]string{"plan", "tick", "x.plan.pkl", "--format", "xml"}, false},
 		{[]string{"plan", "export", "x.plan.pkl", "--timeout", "bad"}, true},
-		{[]string{"plan", "note", "x.plan.pkl", "--text", "--format=json"}, false},
+		{[]string{"plan", "note", "x.plan.pkl", "--text", "--format=json", "--format", "xml"}, false},
 	} {
 		var output bytes.Buffer
 		err := run(context.Background(), test.args, func() (string, error) { t.Fatal("invalid invocation observed cwd"); return "", nil }, &output, &bytes.Buffer{})

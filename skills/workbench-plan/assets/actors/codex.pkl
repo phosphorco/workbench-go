@@ -1,0 +1,14 @@
+import "workbench:plan" as Plan
+
+// Example for a harness that exports CODEX_THREAD_ID. Adapt the pattern and
+// environment variable to the harness contract; the ID is otherwise opaque.
+thread = new Plan.ActorKind {
+  pattern = #"[A-Za-z0-9][A-Za-z0-9_-]*"#
+  infer { env = "CODEX_THREAD_ID" }
+  aliases {
+    new {
+      pattern = #"@codex:([A-Za-z0-9][A-Za-z0-9_-]*)"#
+      replacement = "$1"
+    }
+  }
+}

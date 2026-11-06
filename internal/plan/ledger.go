@@ -6,20 +6,26 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Event retains the TypeScript ledger's tags and optional historical fields.
 type Event struct {
-	Kind   string   `json:"_tag"`
-	Node   string   `json:"node,omitempty"`
-	Result string   `json:"result,omitempty"`
-	By     string   `json:"by,omitempty"`
-	Digest string   `json:"digest,omitempty"`
-	Choice string   `json:"choice,omitempty"`
-	Paths  []string `json:"paths,omitempty"`
-	Reason string   `json:"reason,omitempty"`
-	Text   string   `json:"text,omitempty"`
-	At     string   `json:"at,omitempty"`
+	Kind     string   `json:"_tag"`
+	Node     string   `json:"node,omitempty"`
+	Result   string   `json:"result,omitempty"`
+	By       string   `json:"by,omitempty"`
+	Digest   string   `json:"digest,omitempty"`
+	Choice   string   `json:"choice,omitempty"`
+	Paths    []string `json:"paths,omitempty"`
+	Reason   string   `json:"reason,omitempty"`
+	Text     string   `json:"text,omitempty"`
+	At       string   `json:"at,omitempty"`
+	Actor    *Actor   `json:"actor,omitempty"`
+	Assignee *Actor   `json:"assignee,omitempty"`
+	Unassign bool     `json:"unassign,omitempty"`
+	Status   string   `json:"status,omitempty"`
+	Stall    *Stall   `json:"stall,omitempty"`
 }
 
 func DecodeLedger(data []byte) ([]Event, error) {
@@ -45,7 +51,49 @@ func (e Event) Validate() error {
 	if e.Kind != "Note" && e.Node == "" {
 		return fmt.Errorf("%s event requires node", e.Kind)
 	}
+	if e.Actor != nil {
+		if err := e.Actor.Validate(); err != nil {
+			return err
+		}
+		if e.By != e.Actor.String() {
+			return fmt.Errorf("by must match resolved actor")
+		}
+	}
 	switch e.Kind {
+	case "NodeUpdated":
+		if _, err := time.Parse(time.RFC3339Nano, e.At); err != nil {
+			return fmt.Errorf("NodeUpdated requires an RFC3339 timestamp: %w", err)
+		}
+		if e.Actor == nil || e.By == "" {
+			return fmt.Errorf("NodeUpdated requires actor attribution")
+		}
+		if e.Assignee == nil && !e.Unassign && e.Status == "" {
+			return fmt.Errorf("NodeUpdated requires an assignment or status change")
+		}
+		if e.Assignee != nil {
+			if e.Unassign {
+				return fmt.Errorf("cannot assign and unassign together")
+			}
+			if err := e.Assignee.Validate(); err != nil {
+				return err
+			}
+		}
+		if e.Status != "" && !ValidWorkStatus(e.Status) {
+			return fmt.Errorf("invalid work status %q", e.Status)
+		}
+		if e.Status == "paused" && strings.TrimSpace(e.Text) == "" {
+			return fmt.Errorf("paused requires --text")
+		}
+		if e.Status == "stalled" {
+			if e.Stall == nil {
+				return fmt.Errorf("stalled requires a structured stall")
+			}
+			if err := e.Stall.Validate(); err != nil {
+				return err
+			}
+		} else if e.Stall != nil {
+			return fmt.Errorf("stall fields require stalled status")
+		}
 	case "Artifact":
 	case "Evidence":
 		if (e.Result != "pass" && e.Result != "fail") || e.By == "" {
@@ -74,12 +122,15 @@ type State struct {
 	evidence  map[string]Event
 	forks     map[string]Event
 	grants    map[string][]string
+	work      map[string]WorkState
 }
 
 func Fold(events []Event) State {
-	s := State{map[string]Event{}, map[string]Event{}, map[string]Event{}, map[string][]string{}}
+	s := State{artifacts: map[string]Event{}, evidence: map[string]Event{}, forks: map[string]Event{}, grants: map[string][]string{}, work: map[string]WorkState{}}
 	for _, e := range events {
 		switch e.Kind {
+		case "NodeUpdated":
+			s.work[e.Node] = applyWorkUpdate(s.Work(e.Node), e)
 		case "Artifact":
 			s.artifacts[e.Node] = e
 		case "Evidence":

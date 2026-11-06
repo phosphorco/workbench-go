@@ -1,7 +1,7 @@
 # Workbench
 
-For local task dependency graphs, Pkl definitions, compact agent-readable ticks, and
-evidence recording, see [Task plans](docs/task-plans.md) and
+For local task dependency graphs, Pkl definitions, compact agent-readable ticks,
+evidence recording, actor identification, assignment, and structured stalls, see [Task plans](docs/task-plans.md) and
 `workbench plan --help`.
 
 Two independent agent skills ship with the binary: export environment guidance

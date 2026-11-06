@@ -1,0 +1,5 @@
+import "workbench:plan" as Plan
+
+service = new Plan.ActorKind {
+  pattern = #"service/[A-Za-z0-9_-]+"#
+}

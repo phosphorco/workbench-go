@@ -1,0 +1,12 @@
+import "workbench:plan" as Plan
+
+// Practical recognition rule, not full email validation or authentication.
+email = new Plan.ActorKind {
+  pattern = #"[^@<>\s]+@[^@<>\s]+\.[^@<>\s]+"#
+  aliases {
+    new {
+      pattern = #"<([^<>\s]+@[^<>\s]+)>"#
+      replacement = "$1"
+    }
+  }
+}

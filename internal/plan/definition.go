@@ -37,24 +37,26 @@ func (n Need) String() string {
 }
 
 type Node struct {
-	Kind     string   `json:"kind"`
-	ID       string   `json:"id"`
-	Owner    string   `json:"owner"`
-	Outcome  string   `json:"outcome,omitempty"`
-	Needs    []Need   `json:"needs"`
-	Grant    []string `json:"grant,omitempty"`
-	Observes []string `json:"observes,omitempty"`
-	Oracle   *Oracle  `json:"oracle,omitempty"`
-	Question string   `json:"question,omitempty"`
-	Options  []string `json:"options,omitempty"`
-	Probe    *Node    `json:"probe,omitempty"`
+	Kind       string   `json:"kind"`
+	ID         string   `json:"id"`
+	Owner      string   `json:"owner"`
+	Assignable *bool    `json:"assignable,omitempty"`
+	Outcome    string   `json:"outcome,omitempty"`
+	Needs      []Need   `json:"needs"`
+	Grant      []string `json:"grant,omitempty"`
+	Observes   []string `json:"observes,omitempty"`
+	Oracle     *Oracle  `json:"oracle,omitempty"`
+	Question   string   `json:"question,omitempty"`
+	Options    []string `json:"options,omitempty"`
+	Probe      *Node    `json:"probe,omitempty"`
 }
 
 type Definition struct {
 	legacy map[Need]string
 
-	Meta  Meta   `json:"meta"`
-	Nodes []Node `json:"nodes"`
+	Meta   Meta   `json:"meta"`
+	Actors Actors `json:"actors"`
+	Nodes  []Node `json:"nodes"`
 }
 
 var nodeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_./-]*$`)
@@ -74,6 +76,9 @@ func Decode(data []byte) (Definition, error) {
 	}
 	if definition.Nodes == nil {
 		return Definition{}, fmt.Errorf("plan.nodes must be a listing")
+	}
+	if err := definition.Actors.Validate(); err != nil {
+		return Definition{}, fmt.Errorf("plan.actors: %w", err)
 	}
 	for _, n := range definition.Nodes {
 		if !nodeID.MatchString(n.ID) || strings.TrimSpace(n.Owner) == "" {
@@ -154,6 +159,13 @@ func (d Definition) FingerprintParts(need Need) []string {
 	case "Fork":
 		parts = slices.Clone(n.Options)
 		slices.Sort(parts)
+		if len(d.Actors.Kinds) > 0 {
+			owner, err := d.Actors.Resolve(n.Owner)
+			if err != nil {
+				return nil
+			}
+			parts = append([]string{"Selector", owner.String()}, parts...)
+		}
 	case "Evidence":
 		if n.Oracle == nil {
 			return nil
@@ -161,7 +173,15 @@ func (d Definition) FingerprintParts(need Need) []string {
 		if n.Oracle.Kind == "Mechanical" {
 			parts = []string{"Mechanical", n.Oracle.Run}
 		} else {
-			parts = []string{"Adjudicated", n.Oracle.Rubric, n.Oracle.Owner}
+			owner := n.Oracle.Owner
+			if len(d.Actors.Kinds) > 0 {
+				actor, err := d.Actors.Resolve(owner)
+				if err != nil {
+					return nil
+				}
+				owner = actor.String()
+			}
+			parts = []string{"Adjudicated", n.Oracle.Rubric, owner}
 		}
 	default:
 		return nil

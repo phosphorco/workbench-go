@@ -25,6 +25,9 @@ func planOutputFormat(arguments []string) string {
 			continue
 		}
 		name, value, inline := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		if name == "unassign" || name == "reassign" {
+			continue
+		}
 		if !inline {
 			i++
 			if i >= len(arguments) {
@@ -92,6 +95,7 @@ func writePlanReport(output io.Writer, p planInvocation, report plan.Report) err
 		}
 		fmt.Fprintf(&body, ": %s\n", planLiteral(d.Message))
 	}
+	writePlanWork(&body, report.Work)
 	writePlanNodes(&body, "Ready", report.Ready)
 	writePlanNodes(&body, "Blocked", report.Blocked)
 	if p.verb == "recall" || p.verb == "export" {
@@ -184,9 +188,10 @@ func writePlanNodes(body *strings.Builder, label string, nodes []plan.NodeView) 
 }
 
 type planRecorded struct {
-	Plan   string     `json:"plan"`
-	Ledger string     `json:"ledger"`
-	Event  plan.Event `json:"event"`
+	Plan     string     `json:"plan"`
+	Ledger   string     `json:"ledger"`
+	Event    plan.Event `json:"event"`
+	Revision *uint64    `json:"revision,omitempty"`
 }
 
 func writePlanRecorded(output io.Writer, format string, report planRecorded) error {
@@ -197,6 +202,9 @@ func writePlanRecorded(output io.Writer, format string, report planRecorded) err
 	planScope(&body, report.Plan, report.Ledger)
 	body.WriteString("\n**Recorded**\n")
 	writePlanEvent(&body, report.Event)
+	if report.Revision != nil {
+		fmt.Fprintf(&body, "Work revision: %d\n", *report.Revision)
+	}
 	return writePlanAgent(output, body.String())
 }
 
@@ -229,11 +237,26 @@ func writePlanEvent(body *strings.Builder, event plan.Event) {
 	fmt.Fprintf(body, "- **%s**", event.Kind)
 	for _, field := range []struct{ label, value string }{
 		{"node", event.Node}, {"result", event.Result}, {"by", event.By},
-		{"choice", event.Choice}, {"paths", strings.Join(event.Paths, ", ")},
+		{"status", event.Status}, {"choice", event.Choice}, {"paths", strings.Join(event.Paths, ", ")},
 		{"reason", event.Reason}, {"text", event.Text}, {"at", event.At}, {"digest", event.Digest},
 	} {
 		if field.value != "" {
 			fmt.Fprintf(body, " · %s %s", field.label, planLiteral(field.value))
+		}
+	}
+	if event.Assignee != nil {
+		fmt.Fprintf(body, " · assignee %s", planLiteral(event.Assignee.String()))
+	}
+	if event.Unassign {
+		body.WriteString(" · unassign")
+	}
+	if event.Stall != nil {
+		fmt.Fprintf(body, " · reason %s · resume when %s", planLiteral(event.Stall.Reason), planLiteral(event.Stall.ResumeWhen))
+		if event.Stall.WaitingOnActor != nil {
+			fmt.Fprintf(body, " · waiting on actor %s", planLiteral(event.Stall.WaitingOnActor.String()))
+		}
+		if event.Stall.WaitingOnNeed != nil {
+			fmt.Fprintf(body, " · waiting on need %s", planLiteral(event.Stall.WaitingOnNeed.String()))
 		}
 	}
 	body.WriteByte('\n')

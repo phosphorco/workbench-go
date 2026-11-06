@@ -94,7 +94,7 @@ concrete rubric. Do not turn an unresolved judgment into an always-passing test.
 ## Author a definition
 
 When creating or composing a plan, read [Pkl authoring](references/authoring.md)
-for the executable example, import boundary, helper syntax, and release
+for a task example, ready-made actor imports, helper syntax, and release
 contract reference. Keep the main skill focused on operating the graph.
 
 ## Work from the frontier
@@ -114,21 +114,23 @@ contract reference. Keep the main skill focused on operating the graph.
    oracles run in the caller's directory. Omitting `--node` verifies only the
    initially ready Mechanical Guards.
 5. Record a real owner's judgment with `workbench plan adjudicate FILE.plan.pkl`:
-   supply `--node ID`, `--result pass` or `--result fail`, `--by OWNER`, and
-   `--reason TEXT`. For a choice, use `workbench plan rule FILE.plan.pkl` with
+   supply `--node ID`, `--result pass` or `--result fail`, the owner's attribution
+   (explicit `--by OWNER` or configured inference), and `--reason TEXT`. For a choice, use `workbench plan rule FILE.plan.pkl` with
    `--node ID`, `--choice OPTION`, and `--by OWNER`.
    `--by` records attribution; it does not authenticate or obtain that judgment.
 6. Re-tick after evidence, rulings, grants, or definition edits. Select work by
    dependencies, uncertainty, and available capacity. A blocked decision holds
    its dependent subtree; keep independent authorized work moving.
 
+Track responsibility with `workbench plan update FILE.plan.pkl --node ID
+--assignee @me --status in-progress`. Identity is inferred from the plan's actor
+imports; explicit `--by ACTOR` overrides it. Assignment records responsibility;
+the harness dispatches workers. Completion still requires acceptance evidence.
+For actor imports, stalls, and handoffs, read [work coordination](references/coordination.md).
+
 When delegating, read the [delegation example](references/planning-tactics.md#delegate-a-bounded-node).
-Pass the exact plan, ledger, node ID, footprint, accepted contract, and oracle.
-Confirm that the recipient started; an assignment is not active work. Inspect
-the returned artifact and independently run its acceptance checks before
-accepting it. Use the harness's real assignment mechanism to avoid duplicate
-work: `tick` reports readiness, not worker claims, and a ledger write lock does
-not reserve a node. The CLI does not dispatch agents or synchronize machines.
+Pass the plan, ledger, node ID, footprint, contract, and oracle. Confirm actual
+activity and independently check the returned artifact.
 
 ## Revise when reality changes
 
@@ -165,7 +167,8 @@ failed observations or weaken proof to make the frontier advance.
 - Keep the sibling `.ledger.jsonl`, or pass the same explicit `--ledger FILE`
   to every command. Use CLI writes; a competing writer's lock refusal means
   reread and retry after it finishes. Do not replace a malformed ledger with
-  empty state. Record useful handoff context with `note --text TEXT --by AUTHOR`.
+  empty state. Use `note --text TEXT` for learnings and handoff context; supply
+  `--by ACTOR` when inference is unavailable.
 - Existing TypeScript ledger fingerprints can be read through Bun compatibility.
   New Go evidence uses SHA-256 that the old reader does not recognize; copy the
   ledger when comparing runtimes. Review a Go plan with `recall` or the JSON from

@@ -147,8 +147,10 @@ If the contract or tests need revision, surface the specific need before writing
 outside this footprint.
 </assignment>
 
-The host's assignment mechanism records who is working. A `grant` is a write
-footprint declaration, not a claim or a shell sandbox. Confirm actual activity;
+Record responsibility with `workbench plan update export.plan.pkl --node writer
+--assignee ACTOR` and report actual activity separately with `--status in-progress`.
+The host's dispatch mechanism starts the worker. A `grant` is a write footprint
+declaration, not a claim or a shell sandbox. Confirm actual activity;
 do not report a queued brief as work underway. When the worker returns, inspect
 the diff and independently run the acceptance command against the returned
 revision. Passes from an earlier revision do not prove the current artifact.
