@@ -8,7 +8,7 @@ import (
 	"syscall"
 )
 
-func openRegularDescriptor(path string) (*os.File, error) {
+func openRegularFile(path string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
@@ -19,7 +19,7 @@ func openRegularDescriptor(path string) (*os.File, error) {
 		if err != nil {
 			return nil, err
 		}
-		return nil, errors.New("source descriptor is not a regular file")
+		return nil, errors.New("file is not a regular file")
 	}
 	return file, nil
 }

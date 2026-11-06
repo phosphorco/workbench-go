@@ -145,6 +145,107 @@ func TestHostLocalRejectsDescriptorFIFOWithoutBlocking(t *testing.T) {
 	}
 }
 
+func TestOutputFIFORefusesWithoutBlocking(t *testing.T) {
+	if root := os.Getenv("WORKBENCH_OUTPUT_FIFO_ROOT"); root != "" {
+		var declaration buildable.Buildable
+		if err := json.Unmarshal([]byte(os.Getenv("WORKBENCH_OUTPUT_FIFO_DECLARATION")), &declaration); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintln(os.Stdout, "output-fifo-admission-started")
+		var err error
+		if os.Getenv("WORKBENCH_OUTPUT_FIFO_MODE") != "legacy" {
+			_, err = buildable.ResolveDeclaredPlatform(context.Background(), root, "hello", declaration, "linux-x86_64")
+		} else {
+			err = buildable.SealDeclared(context.Background(), root, "hello", declaration, ".local-build/hello")
+		}
+		var refusal *buildable.Refusal
+		if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid || !strings.Contains(refusal.Reason, "regular file") {
+			t.Fatalf("output FIFO refusal = %v", err)
+		}
+		return
+	}
+	mkfifo, err := exec.LookPath("mkfifo")
+	if err != nil {
+		t.Skip("mkfifo unavailable")
+	}
+	for _, mode := range []string{"host", "legacy", "sealed"} {
+		t.Run(mode, func(t *testing.T) {
+			var root string
+			var declaration buildable.Buildable
+			if mode == "host" {
+				root, declaration = hostLocalFixture(t)
+				hostResolve(t, root, declaration)
+			} else {
+				_, root = fixtureRepository(t)
+				declaration = helloDeclaration()
+				declaration.BuildCommand = buildable.BuildCommand{Executable: "true"}
+				writeUnsealedCandidate(t, root, ".local-build/hello", "legacy")
+				if err := buildable.BuildDeclared(context.Background(), root, "hello", declaration, "linux-x86_64"); err != nil {
+					t.Fatalf("valid legacy build: %v", err)
+				}
+				if err := buildable.SealDeclared(context.Background(), root, "hello", declaration, ".local-build/hello"); err != nil {
+					t.Fatalf("valid legacy seal: %v", err)
+				}
+			}
+			candidate := filepath.Join(root, ".local-build/hello")
+			protected := []string{filepath.Join(root, "producer.txt"), filepath.Join(candidate, buildable.SourceDescriptorFilename)}
+			if mode == "host" {
+				digest := sha256.Sum256([]byte("linux-x86_64"))
+				protected = append(protected, filepath.Join(candidate, ".workbench-build-inputs", hex.EncodeToString(digest[:])+".json"))
+			} else {
+				protected = append(protected, filepath.Join(candidate, "manifest.json"))
+			}
+			before := make(map[string][32]byte, len(protected))
+			for _, path := range protected {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before[path] = sha256.Sum256(data)
+			}
+			outputPath := filepath.Join(candidate, "bin/hello")
+			if err := os.Remove(outputPath); err != nil {
+				t.Fatal(err)
+			}
+			if output, err := exec.Command(mkfifo, outputPath).CombinedOutput(); err != nil {
+				t.Fatalf("create output FIFO: %s: %v", output, err)
+			}
+			info, err := os.Lstat(outputPath)
+			if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+				t.Fatalf("output is not a FIFO: %v, %v", info, err)
+			}
+			encoded, err := json.Marshal(declaration)
+			if err != nil {
+				t.Fatal(err)
+			}
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, executable, "-test.run=^TestOutputFIFORefusesWithoutBlocking$")
+			command.Env = append(os.Environ(), "WORKBENCH_OUTPUT_FIFO_ROOT="+root, "WORKBENCH_OUTPUT_FIFO_DECLARATION="+string(encoded), "WORKBENCH_OUTPUT_FIFO_MODE="+mode)
+			output, err := command.CombinedOutput()
+			if !strings.Contains(string(output), "output-fifo-admission-started") {
+				t.Fatalf("child did not reach output admission: %q, %v", output, err)
+			}
+			for _, path := range protected {
+				data, readErr := os.ReadFile(path)
+				if readErr != nil || sha256.Sum256(data) != before[path] {
+					t.Fatalf("protected premise changed %q: %v", path, readErr)
+				}
+			}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				t.Fatalf("output FIFO admission blocked until child timeout: %q", output)
+			}
+			if err != nil {
+				t.Fatalf("output FIFO did not refuse correctly: %q, %v", output, err)
+			}
+		})
+	}
+}
+
 func TestDescriptorSymlinkCompatibility(t *testing.T) {
 	t.Run("legacy confined descriptor remains valid", func(t *testing.T) {
 		_, root := fixtureRepository(t)

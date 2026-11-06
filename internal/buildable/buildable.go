@@ -1510,9 +1510,14 @@ func gitHeadTreeDigest(ctx context.Context, root string, paths []string) (string
 }
 
 func verifyOutput(path string, output artifactOutput) error {
-	file, err := os.Open(path)
+	file, err := openRegularFile(path)
 	if err != nil {
-		return errors.New("read output bytes")
+		return fmt.Errorf("read output bytes: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return errors.New("inspect output mode")
 	}
 	hash := sha256.New()
 	size, copyErr := io.Copy(hash, file)
@@ -1529,10 +1534,6 @@ func verifyOutput(path string, output artifactOutput) error {
 	}
 	if size != output.Size {
 		return fmt.Errorf("size mismatch: expected %d, found %d", output.Size, size)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return errors.New("inspect output mode")
 	}
 	if output.Executable && info.Mode().Perm()&0o111 == 0 {
 		return errors.New("executable mode is absent")

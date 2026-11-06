@@ -734,7 +734,7 @@ func readSourceDescriptor(candidateRoot string, declaration Buildable) (sourceDe
 	if err != nil {
 		return sourceDescriptor{}, fmt.Errorf("source descriptor %q is missing or escapes the candidate: %w", SourceDescriptorFilename, err)
 	}
-	file, err := openRegularDescriptor(path)
+	file, err := openRegularFile(path)
 	if err != nil {
 		return sourceDescriptor{}, fmt.Errorf("read source descriptor: %w", err)
 	}
@@ -779,9 +779,14 @@ func readSourceDescriptor(candidateRoot string, declaration Buildable) (sourceDe
 }
 
 func inspectOutput(path, platformName string, output Output) (artifactOutput, error) {
-	file, err := os.Open(path)
+	file, err := openRegularFile(path)
 	if err != nil {
 		return artifactOutput{}, fmt.Errorf("read platform %q output: %w", platformName, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return artifactOutput{}, fmt.Errorf("inspect platform %q output: %w", platformName, err)
 	}
 	digest := sha256.New()
 	size, copyErr := io.Copy(digest, file)
@@ -791,10 +796,6 @@ func inspectOutput(path, platformName string, output Output) (artifactOutput, er
 	}
 	if closeErr != nil {
 		return artifactOutput{}, fmt.Errorf("close platform %q output: %w", platformName, closeErr)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return artifactOutput{}, fmt.Errorf("inspect platform %q output: %w", platformName, err)
 	}
 	if !info.Mode().IsRegular() || size <= 0 || output.Executable && info.Mode().Perm()&0o111 == 0 {
 		return artifactOutput{}, fmt.Errorf("platform %q output %q is not a non-empty regular file", platformName, output.Path)

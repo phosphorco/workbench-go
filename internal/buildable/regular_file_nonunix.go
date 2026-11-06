@@ -7,13 +7,13 @@ import (
 	"os"
 )
 
-func openRegularDescriptor(path string) (*os.File, error) {
+func openRegularFile(path string) (*os.File, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, errors.New("source descriptor is not a regular file")
+		return nil, errors.New("file is not a regular file")
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -25,7 +25,7 @@ func openRegularDescriptor(path string) (*os.File, error) {
 		if err != nil {
 			return nil, err
 		}
-		return nil, errors.New("source descriptor is not a regular file")
+		return nil, errors.New("file is not a regular file")
 	}
 	return file, nil
 }
