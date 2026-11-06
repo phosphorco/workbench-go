@@ -13,3 +13,9 @@ var historicalVerifier090 string
 
 //go:embed historical/0.9.0/Focus.pkl
 var historicalFocus090 string
+
+//go:embed historical/0.10.0/Repository.pkl
+var historicalRepository0100 string
+
+//go:embed historical/0.10.0/PackageScopeRepository.pkl
+var historicalPackageScope0100 string

@@ -76,7 +76,7 @@ func MaterializeDeclared(ctx context.Context, ownerRoot, name string, declaratio
 			Remedy: "Choose one of the platform names declared by the owning workbench.pkl.",
 		}
 	}
-	candidate, verified, err := resolveCandidate(ctx, ownerRoot, name, declaration, platformName)
+	candidate, verified, err := resolveCandidate(ctx, ownerRoot, name, declaration, platformName, false)
 	if err != nil {
 		return MaterializeReceipt{}, err
 	}
@@ -369,6 +369,12 @@ func BuildDeclared(ctx context.Context, ownerRoot, name string, declaration Buil
 		}
 	}
 	binding := platformBuildBinding{Platform: platformName, DeclarationIdentity: mustDeclarationIdentity(name, declaration), ProducerDigest: before}
+	if declaration.LocalExecution != nil {
+		binding.SourceDigest, err = sourceDescriptorDigest(candidateRoot)
+		if err != nil {
+			return fmt.Errorf("fingerprint source descriptor: %w", err)
+		}
+	}
 	for _, output := range outputs {
 		outputPath, err := existingPathWithin(candidateRoot, output.Path)
 		if err != nil {

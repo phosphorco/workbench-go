@@ -24,8 +24,8 @@ const (
 	v020ReleasePackageZIP    = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
 	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.9.0/workbench@0.9.0"
 	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.9.0/workbench@0.9.0.zip"
-	candidatePackageURI      = "package://github.com/phosphorco/workbench-go/releases/download/0.10.0/workbench@0.10.0"
-	candidatePackageZIP      = "https://github.com/phosphorco/workbench-go/releases/download/0.10.0/workbench@0.10.0.zip"
+	candidatePackageURI      = "package://github.com/phosphorco/workbench-go/releases/download/0.11.0/workbench@0.11.0"
+	candidatePackageZIP      = "https://github.com/phosphorco/workbench-go/releases/download/0.11.0/workbench@0.11.0.zip"
 )
 
 func TestCandidateContractAndPublishedReleaseCoordinates(t *testing.T) {
@@ -38,9 +38,9 @@ func TestCandidateContractAndPublishedReleaseCoordinates(t *testing.T) {
 	}
 	project := read(filepath.Join("..", "PklProject"))
 	for _, marker := range []string{
-		`local releaseCoordinate = "0.10.0"`,
+		`local releaseCoordinate = "0.11.0"`,
 		`baseUri = "package://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench"`,
-		`version = "0.10.0"`,
+		`version = "0.11.0"`,
 		`"https://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench@\(version).zip"`,
 	} {
 		if !strings.Contains(project, marker) {
@@ -69,6 +69,9 @@ func TestCandidateContractAndPublishedReleaseCoordinates(t *testing.T) {
 	acceptance := read(filepath.Join("..", ".github", "workflows", "release-acceptance.yml"))
 	if !strings.Contains(acceptance, currentReleasePackageURI+"#/Repository.pkl") {
 		t.Fatal("release acceptance does not amend the package asset produced under release 0.9.0")
+	}
+	if !strings.Contains(acceptance, "releases/download/0.10.0/workbench@0.10.0#/Repository.pkl") {
+		t.Fatal("release acceptance lost published 0.10 contract")
 	}
 	if strings.Contains(acceptance, "releases/download/0.6.1/workbench@0.6.1") {
 		t.Fatal("release acceptance points at nonexistent release coordinate 0.6.1 for contract package 0.6.1")
@@ -111,7 +114,7 @@ func TestReleasePackageCandidate(t *testing.T) {
 	outputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, outputRoot)
 
-	metadataPath := filepath.Join(outputRoot, "workbench@0.10.0")
+	metadataPath := filepath.Join(outputRoot, "workbench@0.11.0")
 	archivePath := metadataPath + ".zip"
 	metadata := readReleaseMetadata(t, metadataPath)
 	if metadata.Name != "workbench" {
@@ -120,8 +123,8 @@ func TestReleasePackageCandidate(t *testing.T) {
 	if metadata.PackageURI != candidatePackageURI {
 		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, candidatePackageURI)
 	}
-	if metadata.Version != "0.10.0" {
-		t.Errorf("metadata version = %q, want 0.10.0", metadata.Version)
+	if metadata.Version != "0.11.0" {
+		t.Errorf("metadata version = %q, want 0.11.0", metadata.Version)
 	}
 	if metadata.Version != contracts.PackageVersion {
 		t.Fatalf("bundled skill Pkl version %q differs from packaged contract %q", contracts.PackageVersion, metadata.Version)
@@ -180,10 +183,10 @@ func TestReleasePackageCandidate(t *testing.T) {
 	secondOutputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, secondOutputRoot)
 	for _, name := range []string{
-		"workbench@0.10.0",
-		"workbench@0.10.0.sha256",
-		"workbench@0.10.0.zip",
-		"workbench@0.10.0.zip.sha256",
+		"workbench@0.11.0",
+		"workbench@0.11.0.sha256",
+		"workbench@0.11.0.zip",
+		"workbench@0.11.0.zip.sha256",
 	} {
 		first, err := os.ReadFile(filepath.Join(outputRoot, name))
 		if err != nil {

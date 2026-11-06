@@ -727,7 +727,32 @@ The declared build receives `WORKBENCH_BUILDABLE_NAME`,
 `WORKBENCH_BUILDABLE_PLATFORM`, and `WORKBENCH_BUILDABLE_CANDIDATE_ROOT`.
 Declared verification receives the name and candidate root. A dirty local
 producer is usable after sealing because `gitWorktree` fingerprints its actual
-input contents, but it cannot pass a committed-revision freshness proof.
+input contents, but it cannot pass a committed-revision freshness proof. The
+host-local opt-in below also allows a validated unsealed local build.
+
+The **0.11.0 source candidate is unpublished**. Its buildable declaration can
+opt into current-host local execution with both fields:
+
+```pkl
+buildInputBinding = "observed-v1"
+localExecution = "host-observed-v1"
+```
+
+After `workbench buildable build --name <name> --platform <host-platform>`,
+`check`, `resolve`, and `run` can admit the unsealed preferred local candidate
+for the actual host platform. The build records the declaration, observed
+producer inputs, source descriptor and platform output bytes; admission checks
+them again. JSON reports `localExecution: "host-observed-v1"` for this limited
+scope. This detects observed changes, but does not provide an immutable source
+snapshot or protect against changes that are made and reversed between checks.
+Ignored or undeclared inputs are outside the declared input fingerprint.
+
+Full sealing and promotion still require every declared platform, and
+`materialize` still requires a complete sealed candidate. A present invalid
+local candidate refuses before the committed candidate is considered. To use
+the committed candidate, explicitly move the local candidate to a unique
+location outside both candidate roots; restore it from there when needed. The
+committed candidate must independently pass its normal validation.
 
 ## Skills follow the repository closure
 

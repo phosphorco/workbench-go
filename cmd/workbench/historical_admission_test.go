@@ -43,3 +43,28 @@ func TestHistorical090LifecycleAdmission(t *testing.T) {
 		}
 	})
 }
+
+func TestHistorical010LifecycleAdmission(t *testing.T) {
+	const version = "0.10.0"
+	const prefix = "package://github.com/phosphorco/workbench-go/releases/download/0.10.0/workbench@0.10.0#/"
+	t.Run("commit plan", func(t *testing.T) {
+		if _, err := releasedCommitPlanContract([]byte("amends \""+prefix+"WorkbenchCommitPlan.pkl\"\n"), version); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("snapshot", func(t *testing.T) {
+		if _, kind, err := releasedSnapshotContractFromSource([]byte("amends \"" + prefix + "WorkbenchSnapshot.pkl\"\n")); err != nil || kind != currentSnapshotContract {
+			t.Fatalf("kind=%v err=%v", kind, err)
+		}
+	})
+	t.Run("subject", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "workbench-subject.pkl"), []byte("amends \""+prefix+"WorkbenchSubject.pkl\"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := evaluateSubject(context.Background(), root, evaluate.Evaluator{}, version)
+		if err == nil || !strings.Contains(err.Error(), "evaluator is uninitialized") {
+			t.Fatalf("historical subject admission: %v", err)
+		}
+	})
+}

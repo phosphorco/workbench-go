@@ -9,7 +9,7 @@ import (
 )
 
 func TestHistoricalAndCandidateRepositoryPackageTransportsStaySeparate(t *testing.T) {
-	for _, version := range []string{"0.9.0", "0.10.0"} {
+	for _, version := range []string{"0.9.0", "0.10.0", "0.11.0"} {
 		module := "package://github.com/phosphorco/workbench-go/releases/download/" + version + "/workbench@" + version + "#/Repository.pkl"
 		contract, err := ReleasedContract(module)
 		if err != nil {
@@ -20,12 +20,10 @@ func TestHistoricalAndCandidateRepositoryPackageTransportsStaySeparate(t *testin
 		if !matchesAny(patterns, want) {
 			t.Fatalf("missing exact transport %s", want)
 		}
-		other := "0.9.0"
-		if version == other {
-			other = "0.10.0"
-		}
-		if matchesAny(patterns, "https://github.com/phosphorco/workbench-go/releases/download/"+other+"/workbench@"+other+".zip") {
-			t.Fatal("transport granted another release")
+		for _, other := range []string{"0.9.0", "0.10.0", "0.11.0"} {
+			if other != version && matchesAny(patterns, "https://github.com/phosphorco/workbench-go/releases/download/"+other+"/workbench@"+other+".zip") {
+				t.Fatal("transport granted another release")
+			}
 		}
 	}
 }
