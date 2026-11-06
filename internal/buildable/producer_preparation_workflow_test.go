@@ -102,25 +102,84 @@ func TestProducerPreparationWorkflowExecutesConfinedScript(t *testing.T) {
 	if _, err := invoke("python3", "failure.py"); err == nil {
 		t.Fatal("failed preparation was accepted")
 	}
-	if err := os.Symlink(filepath.Join(root, "failure.py"), filepath.Join(root, "link.py")); err != nil {
+	marker := filepath.Join(root, "forbidden-marker")
+	pythonPayload := "open('forbidden-marker', 'w').write('executed')\n"
+	if err := os.WriteFile(filepath.Join(root, "payload.py"), []byte(pythonPayload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "payload.sh"), []byte("printf executed > forbidden-marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "payload.py"), filepath.Join(root, "link.py")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(root, "real"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "real", "ok.py"), []byte("pass\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "real", "ok.py"), []byte(pythonPayload), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "linkdir")); err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct{ interpreter, script string }{
-		{"", ""}, {"python3", ""}, {"", "failure.py"}, {"sh", "failure.py"},
-		{"python3", filepath.Join(root, "failure.py")}, {"python3", "../outside.py"},
-		{"python3", "link.py"}, {"python3", "linkdir/ok.py"},
+	outside := filepath.Join(filepath.Dir(root), "outside-"+filepath.Base(root)+".py")
+	if err := os.WriteFile(outside, []byte(pythonPayload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(outside) })
+	for _, tc := range []struct{ interpreter, script, diagnostic string }{
+		{"", "", "invalid producer preparation command"},
+		{"python3", "", "invalid producer preparation command"},
+		{"", "payload.py", "invalid producer preparation command"},
+		{"sh", "payload.sh", "invalid producer preparation command"},
+		{"python3", filepath.Join(root, "payload.py"), "invalid producer preparation command"},
+		{"python3", filepath.Join("..", filepath.Base(outside)), "invalid producer preparation command"},
+		{"python3", "link.py", "producer preparation script must be a regular checkout file without symlinks"},
+		{"python3", "linkdir/ok.py", "producer preparation script must be a regular checkout file without symlinks"},
 	} {
-		if output, err := invoke(tc.interpreter, tc.script); err == nil {
-			t.Errorf("accepted %q %q: %s", tc.interpreter, tc.script, strings.TrimSpace(output))
+		_ = os.Remove(marker)
+		output, err := invoke(tc.interpreter, tc.script)
+		if err == nil || !strings.Contains(output, tc.diagnostic) {
+			t.Errorf("refusal %q %q: %v %s", tc.interpreter, tc.script, err, strings.TrimSpace(output))
 		}
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Errorf("forbidden payload executed for %q %q", tc.interpreter, tc.script)
+		}
+	}
+}
+
+func TestProducerPreparationWorkflowIsolatesValidatorImports(t *testing.T) {
+	run, _ := preparationWorkflow(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "subprocess.py"), []byte("raise SystemExit(0)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "selected.py"), []byte("open('selected-marker', 'w').write('executed')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	invoke := func(script string) (string, error) {
+		cmd := exec.Command("bash", "-e", "-c", run)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GITHUB_WORKSPACE="+root, "PREPARE_INTERPRETER=python3", "PREPARE_SCRIPT="+script)
+		output, err := cmd.CombinedOutput()
+		return string(output), err
+	}
+	if output, err := invoke("selected.py"); err != nil {
+		t.Fatalf("selected preparation: %v %s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(root, "selected-marker")); err != nil {
+		t.Fatal("selected preparation silently skipped")
+	}
+	outside := filepath.Join(filepath.Dir(root), "outside-shadow-"+filepath.Base(root)+".py")
+	if err := os.WriteFile(outside, []byte("open('forbidden-marker', 'w').write('executed')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(outside) })
+	output, err := invoke(filepath.Join("..", filepath.Base(outside)))
+	if err == nil || !strings.Contains(output, "invalid producer preparation command") {
+		t.Fatalf("invalid input did not reach validation: %v %s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(root, "forbidden-marker")); !os.IsNotExist(err) {
+		t.Fatal("outside preparation executed")
 	}
 }
