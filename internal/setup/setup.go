@@ -52,6 +52,8 @@ const (
 	localV061PackageScopeURI      = "workbench-contract:/0.6.1/PackageScopeRepository.pkl"
 	localV061RepositoryURI        = "workbench-contract:/0.6.1/Repository.pkl"
 	localV061AgentInstructionsURI = "workbench-contract:/0.6.1/AgentInstructions.pkl"
+	localV0100PackageScopeURI     = "workbench-contract:/0.10.0/PackageScopeRepository.pkl"
+	localV0100RepositoryURI       = "workbench-contract:/0.10.0/Repository.pkl"
 )
 
 var (
@@ -226,8 +228,8 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 		return Result{}, err
 	}
 	projection, err := workspace.BuildWithOptions(packages, workspace.BuildOptions{
-		ReassembleRootDependencies: version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == workbenchversion.CurrentContractVersion,
-		ProductionTypeScript:       version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == workbenchversion.CurrentContractVersion,
+		ReassembleRootDependencies: version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == workbenchversion.CurrentContractVersion,
+		ProductionTypeScript:       version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == workbenchversion.CurrentContractVersion,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("build workspace projection: %w", err)
@@ -346,7 +348,7 @@ func discoverResources(subject contract.Subject, source *discoverySource, versio
 }
 
 func isVersionedContract(version string) bool {
-	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == workbenchversion.CurrentContractVersion
+	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == workbenchversion.CurrentContractVersion
 }
 
 func reconcileDependencies(ctx context.Context, root, bun string) error {
@@ -585,7 +587,7 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	}
 	var declaration contract.Declaration
 	if filename == "PackageScopeRepository.pkl" {
-		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == workbenchversion.CurrentContractVersion {
+		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == workbenchversion.CurrentContractVersion {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclarationV030(source.ctx, encoded, schema)
 		} else {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclaration(source.ctx, encoded, schema)
@@ -724,10 +726,10 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 		value, err := evaluate.LocalContract(uri, localSubjectContract)
 		return value, "0.6.0", err
 	case localV060PackageScopeURI:
-		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		value, err := evaluate.LocalContract(uri, historicalPackageScope090)
 		return value, "0.6.0", err
 	case localV060RepositoryURI:
-		value, err := localRepositoryDeclarationSchema(uri)
+		value, err := historicalRepositoryDeclarationSchema(uri)
 		return value, "0.6.0", err
 	case localV060AgentInstructionsURI:
 		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
@@ -736,14 +738,20 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 		value, err := evaluate.LocalContract(uri, localSubjectContract)
 		return value, "0.6.1", err
 	case localV061PackageScopeURI:
-		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		value, err := evaluate.LocalContract(uri, historicalPackageScope090)
 		return value, "0.6.1", err
 	case localV061RepositoryURI:
-		value, err := localRepositoryDeclarationSchema(uri)
+		value, err := historicalRepositoryDeclarationSchema(uri)
 		return value, "0.6.1", err
 	case localV061AgentInstructionsURI:
 		value, err := evaluate.LocalContract(uri, localAgentInstructionsContract)
 		return value, "0.6.1", err
+	case localV0100PackageScopeURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		return value, "0.10.0", err
+	case localV0100RepositoryURI:
+		value, err := localRepositoryDeclarationSchema(uri)
+		return value, "0.10.0", err
 	default:
 		version := ""
 		for _, candidate := range []struct {
@@ -759,6 +767,7 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 			{coordinate: "0.6.2", version: "0.6.1"},
 			{coordinate: "0.7.0", version: "0.7.0"},
 			{coordinate: "0.8.0", version: "0.8.0"},
+			{coordinate: "0.9.0", version: "0.9.0"},
 			{coordinate: workbenchversion.ReleaseCoordinate, version: workbenchversion.CurrentContractVersion},
 		} {
 			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate.coordinate + "/workbench@" + candidate.version + "#/" + filename
@@ -793,8 +802,8 @@ func EvaluateCurrentDeclaration(ctx context.Context, evaluator evaluate.Evaluato
 	if err != nil {
 		return contract.Declaration{}, err
 	}
-	if version != "0.6.0" && version != "0.6.1" && version != "0.7.0" && version != "0.8.0" && version != workbenchversion.CurrentContractVersion {
-		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, or 0.9.0 declaration, got %s", version)
+	if version != "0.6.0" && version != "0.6.1" && version != "0.7.0" && version != "0.8.0" && version != "0.9.0" && version != workbenchversion.CurrentContractVersion {
+		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, or 0.10.0 declaration, got %s", version)
 	}
 	if filename == "PackageScopeRepository.pkl" {
 		return evaluator.EvaluatePackageScopeDeclarationV030(ctx, source, schema)
@@ -855,7 +864,7 @@ func observePackagesAt(ctx context.Context, resources []Resource, contractVersio
 }
 
 func locatePackage(resourceRoot string, resource Resource, name, contractVersion string, allowRoot bool) (string, error) {
-	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0" || contractVersion == "0.6.1" || contractVersion == "0.7.0" || contractVersion == "0.8.0" || contractVersion == workbenchversion.CurrentContractVersion) && resource.Shape.Kind == contract.PackageScopeShape {
+	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0" || contractVersion == "0.6.1" || contractVersion == "0.7.0" || contractVersion == "0.8.0" || contractVersion == "0.9.0" || contractVersion == workbenchversion.CurrentContractVersion) && resource.Shape.Kind == contract.PackageScopeShape {
 		return locatePackageScopePackage(resourceRoot, resource.Shape.Scope, name)
 	}
 	return locateLegacyPackage(resourceRoot, name, allowRoot)
@@ -1394,12 +1403,20 @@ func appendUnique(values []string, additions ...string) []string {
 }
 
 func localRepositoryDeclarationSchema(uri string) (evaluate.Contract, error) {
+	return repositoryDeclarationSchema(uri, localRepositoryDeclarationContract, localVerifierContract, localFocusContract)
+}
+
+func historicalRepositoryDeclarationSchema(uri string) (evaluate.Contract, error) {
+	return repositoryDeclarationSchema(uri, historicalRepository090, historicalVerifier090, historicalFocus090)
+}
+
+func repositoryDeclarationSchema(uri, repository, verifier, focus string) (evaluate.Contract, error) {
 	root, err := url.Parse(uri)
 	if err != nil {
 		return evaluate.Contract{}, err
 	}
 	var dependencies []evaluate.Contract
-	for _, source := range []struct{ name, contents string }{{"Verifier.pkl", localVerifierContract}, {"Focus.pkl", localFocusContract}} {
+	for _, source := range []struct{ name, contents string }{{"Verifier.pkl", verifier}, {"Focus.pkl", focus}} {
 		dependencyURI := root.ResolveReference(&url.URL{Path: source.name})
 		dependencyURI.OmitHost = root.OmitHost
 		dependency, err := evaluate.LocalContract(dependencyURI.String(), source.contents)
@@ -1408,5 +1425,5 @@ func localRepositoryDeclarationSchema(uri string) (evaluate.Contract, error) {
 		}
 		dependencies = append(dependencies, dependency)
 	}
-	return evaluate.LocalContract(uri, localRepositoryDeclarationContract, dependencies...)
+	return evaluate.LocalContract(uri, repository, dependencies...)
 }

@@ -1,0 +1,18 @@
+/// What a `verify` call attends to. Every listing narrows; an empty listing is unrestricted.
+module phosphor.workbench.Focus
+
+typealias Severity = "error" | "warning" | "suggestion" | "message"
+
+class Focus {
+  /// Globs over repository-relative paths.
+  files: Listing<String(!isEmpty, !startsWith("/"))>(isDistinct)
+  /// Diagnostic codes or error keys.
+  codes: Listing<String(!isEmpty)>(isDistinct)
+  /// Verifier ids.
+  verifiers: Listing<String(!isEmpty)>(isDistinct)
+  /// Unit ids.
+  units: Listing<String(!isEmpty)>(isDistinct)
+  /// Sub-Unit member names, such as test names.
+  members: Listing<String(!isEmpty)>(isDistinct)
+  severities: Listing<Severity>(isDistinct)
+}

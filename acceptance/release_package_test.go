@@ -24,9 +24,11 @@ const (
 	v020ReleasePackageZIP    = "https://github.com/phosphorco/workbench-go/releases/download/0.2.0/workbench@0.2.0.zip"
 	currentReleasePackageURI = "package://github.com/phosphorco/workbench-go/releases/download/0.9.0/workbench@0.9.0"
 	currentReleasePackageZIP = "https://github.com/phosphorco/workbench-go/releases/download/0.9.0/workbench@0.9.0.zip"
+	candidatePackageURI      = "package://github.com/phosphorco/workbench-go/releases/download/0.10.0/workbench@0.10.0"
+	candidatePackageZIP      = "https://github.com/phosphorco/workbench-go/releases/download/0.10.0/workbench@0.10.0.zip"
 )
 
-func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
+func TestCandidateContractAndPublishedReleaseCoordinates(t *testing.T) {
 	read := func(path string) string {
 		contents, err := os.ReadFile(path)
 		if err != nil {
@@ -36,9 +38,9 @@ func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
 	}
 	project := read(filepath.Join("..", "PklProject"))
 	for _, marker := range []string{
-		`local releaseCoordinate = "0.9.0"`,
+		`local releaseCoordinate = "0.10.0"`,
 		`baseUri = "package://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench"`,
-		`version = "0.9.0"`,
+		`version = "0.10.0"`,
 		`"https://github.com/phosphorco/workbench-go/releases/download/\(releaseCoordinate)/workbench@\(version).zip"`,
 	} {
 		if !strings.Contains(project, marker) {
@@ -51,10 +53,10 @@ func TestCurrentContractURIMatchesThePublishedReleaseAsset(t *testing.T) {
 
 	workflow := read(filepath.Join("..", ".github", "workflows", "release.yml"))
 	for _, marker := range []string{
-		"WORKBENCH_VERSION: 0.9.1",
-		"WORKBENCH_CONTRACT_VERSION: 0.9.0",
+		"WORKBENCH_VERSION: 0.10.0",
+		"WORKBENCH_CONTRACT_VERSION: 0.10.0",
 		"\"$PKL_EXECUTABLE\" project package --skip-publish-check --output-path contracts .",
-		"contracts/workbench@0.9.0.zip",
+		"contracts/workbench@0.10.0.zip",
 		"gh release create \"${{ github.ref_name }}\" release-assets/*",
 	} {
 		if !strings.Contains(workflow, marker) {
@@ -109,23 +111,23 @@ func TestReleasePackageCandidate(t *testing.T) {
 	outputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, outputRoot)
 
-	metadataPath := filepath.Join(outputRoot, "workbench@0.9.0")
+	metadataPath := filepath.Join(outputRoot, "workbench@0.10.0")
 	archivePath := metadataPath + ".zip"
 	metadata := readReleaseMetadata(t, metadataPath)
 	if metadata.Name != "workbench" {
 		t.Errorf("metadata name = %q, want workbench", metadata.Name)
 	}
-	if metadata.PackageURI != currentReleasePackageURI {
-		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, currentReleasePackageURI)
+	if metadata.PackageURI != candidatePackageURI {
+		t.Errorf("metadata packageUri = %q, want %q", metadata.PackageURI, candidatePackageURI)
 	}
-	if metadata.Version != "0.9.0" {
-		t.Errorf("metadata version = %q, want 0.9.0", metadata.Version)
+	if metadata.Version != "0.10.0" {
+		t.Errorf("metadata version = %q, want 0.10.0", metadata.Version)
 	}
 	if metadata.Version != contracts.PackageVersion {
 		t.Fatalf("bundled skill Pkl version %q differs from packaged contract %q", contracts.PackageVersion, metadata.Version)
 	}
-	if metadata.PackageZIPURL != currentReleasePackageZIP {
-		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, currentReleasePackageZIP)
+	if metadata.PackageZIPURL != candidatePackageZIP {
+		t.Errorf("metadata packageZipUrl = %q, want %q", metadata.PackageZIPURL, candidatePackageZIP)
 	}
 
 	metadataChecksum := verifyReleaseChecksum(t, metadataPath)
@@ -178,10 +180,10 @@ func TestReleasePackageCandidate(t *testing.T) {
 	secondOutputRoot := t.TempDir()
 	packageReleaseCandidate(t, projectRoot, secondOutputRoot)
 	for _, name := range []string{
-		"workbench@0.9.0",
-		"workbench@0.9.0.sha256",
-		"workbench@0.9.0.zip",
-		"workbench@0.9.0.zip.sha256",
+		"workbench@0.10.0",
+		"workbench@0.10.0.sha256",
+		"workbench@0.10.0.zip",
+		"workbench@0.10.0.zip.sha256",
 	} {
 		first, err := os.ReadFile(filepath.Join(outputRoot, name))
 		if err != nil {
@@ -372,6 +374,7 @@ includes {
 scope = "@workbench-entry"
 buildables {
   ["tsgo"] = new Buildable {
+    buildInputBinding = "observed-v1"
     inputDetection = new GitHeadTreeInputDetection { paths { "scripts/tsgo-artifact-contract.mts" } }
     buildCommand = new BuildCommand { executable = "mise"; arguments { "run"; "tsgo:build-local" } }
     manifest = new ManifestContract { schemaVersion = 2; kind = "tsgo-artifact-manifest"; contractId = "tsgo-v2" }
@@ -393,6 +396,7 @@ buildables {
 
 buildables {
   ["tool"] = new Buildable {
+    buildInputBinding = "observed-v1"
     inputDetection = new GitHeadTreeInputDetection { paths { "tools" } }
     buildCommand = new BuildCommand { executable = "mise" }
     manifest = new ManifestContract { schemaVersion = 1; kind = "tool-manifest"; contractId = "tool-v1" }

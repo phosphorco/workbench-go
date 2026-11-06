@@ -256,12 +256,14 @@ func TestSelfSkillsAliasAndOverwriteRefusalsAreActionable(t *testing.T) {
 	}
 }
 
-func TestSelfSkillExportUsesPublishedContractCoordinates(t *testing.T) {
+func TestSelfSkillExportUsesContractCoordinates(t *testing.T) {
 	for _, fixture := range []struct {
 		flags []string
 		uri   string
 	}{
-		{nil, "releases/download/0.9.0/workbench@0.9.0"},
+		// The 0.10.0 default is a source candidate, not a publication claim.
+		{nil, "releases/download/0.10.0/workbench@0.10.0"},
+		{[]string{"--pkl-package-version", "0.9.0"}, "releases/download/0.9.0/workbench@0.9.0"},
 		{[]string{"--pkl-package-version", "0.6.1"}, "releases/download/0.6.2/workbench@0.6.1"},
 	} {
 		root := t.TempDir()

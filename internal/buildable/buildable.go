@@ -27,7 +27,7 @@ const (
 	ProjectionPath = ".workbench/buildables.json"
 	// ProjectionSchemaDigest binds the projection to the released Pkl schema
 	// interpreted by this binary. A schema edit must update this digest.
-	ProjectionSchemaDigest  = "c44edb2445525a2d6411e1d5f84170c0117f4f6f8fbf54ad1d93be6f4517f2dd"
+	ProjectionSchemaDigest  = "cf600469e3207b765366bf64d028a9056b3c9b1c8c9268fe23a6efc2e87c26ac"
 	projectionSchemaVersion = 1
 )
 
@@ -142,6 +142,7 @@ type ProjectionOwner struct {
 type Buildable struct {
 	InputDetection      InputDetection      `json:"inputDetection"`
 	BuildCommand        BuildCommand        `json:"buildCommand"`
+	BuildInputBinding   *string             `json:"buildInputBinding,omitempty"`
 	VerificationCommand *BuildCommand       `json:"verificationCommand,omitempty"`
 	Manifest            ManifestContract    `json:"manifest"`
 	Candidates          []Candidate         `json:"candidates"`
@@ -769,6 +770,9 @@ func requireJSONEOF(decoder *json.Decoder) error {
 
 // Validate proves the declaration's closed configuration invariants.
 func (buildable Buildable) Validate() error {
+	if buildable.BuildInputBinding != nil && *buildable.BuildInputBinding != "observed-v1" {
+		return fmt.Errorf("unsupported build input binding %q", *buildable.BuildInputBinding)
+	}
 	if buildable.InputDetection.Strategy != "gitHeadTree" {
 		return fmt.Errorf("unsupported input detection strategy %q", buildable.InputDetection.Strategy)
 	}
@@ -1028,6 +1032,14 @@ func verifyCandidate(ctx context.Context, root, name string, buildable Buildable
 	}
 	if manifest.ProducerInputs.Digest != currentDigest {
 		return candidateVerification{}, RefusalStaleProducerInputs, fmt.Errorf("stale artifact: producer input digest is %s, current inputs require %s", manifest.ProducerInputs.Digest, currentDigest)
+	}
+	if buildable.BuildInputBinding != nil {
+		if manifest.DeclarationIdentity == "" {
+			return candidateVerification{}, RefusalCandidateInvalid, errors.New("bound candidate requires declaration identity")
+		}
+		if err := validatePlatformBindings(candidateRoot, name, buildable, currentDigest, manifest.Outputs); err != nil {
+			return candidateVerification{}, RefusalCandidateInvalid, err
+		}
 	}
 	outputs := make(map[string][]artifactOutput, len(buildable.Platforms))
 	for _, output := range manifest.Outputs {

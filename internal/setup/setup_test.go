@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +21,118 @@ import (
 	"github.com/phosphorco/workbench-go/internal/evaluate"
 	"github.com/phosphorco/workbench-go/internal/skills"
 )
+
+func TestCurrentBuildableSchemaCarriesOptionalObservedBindingInBothShapes(t *testing.T) {
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const candidateRepositoryURI = localV0100RepositoryURI
+	const candidateScopeURI = localV0100PackageScopeURI
+	repositorySchema, err := localRepositoryDeclarationSchema(candidateRepositoryURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopeSchema, err := evaluate.LocalContract(candidateScopeURI, localRepositoryContract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := strings.Replace(buildablePklFixture, "inputDetection =", `buildInputBinding = "observed-v1"`+"\n    inputDetection =", 1)
+	for _, test := range []struct {
+		name, uri, prefix string
+		schema            evaluate.Contract
+		scope             bool
+	}{
+		{name: "repository", uri: candidateRepositoryURI, schema: repositorySchema},
+		{name: "package scope", uri: candidateScopeURI, prefix: `scope = "@fixture"`, schema: scopeSchema, scope: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := []byte(fmt.Sprintf("amends %q\n%s\n%s", test.uri, test.prefix, fixture))
+			var declaration contract.Declaration
+			var err error
+			if test.scope {
+				declaration, err = evaluator.EvaluatePackageScopeDeclarationV030(t.Context(), source, test.schema)
+			} else {
+				declaration, err = evaluator.EvaluateRepositoryDeclaration(t.Context(), source, test.schema)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding := declaration.Buildables["hello"].BuildInputBinding
+			if binding == nil || *binding != "observed-v1" {
+				t.Fatalf("binding = %v", binding)
+			}
+			routed, err := EvaluateCurrentDeclaration(t.Context(), evaluator, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := routed.Buildables["hello"].BuildInputBinding; got == nil || *got != "observed-v1" {
+				t.Fatalf("routed binding = %v", got)
+			}
+			projection, err := buildable.EncodeProjection([]buildable.ProjectionOwner{{Identity: "example/fixture", RepositoryPath: "repos/fixture", Source: source, Buildables: declaration.Buildables}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded buildable.Projection
+			if err := json.Unmarshal(projection, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			projected := decoded.Buildables["hello"].Declaration.BuildInputBinding
+			if projected == nil || *projected != "observed-v1" {
+				t.Fatalf("projected binding = %v", projected)
+			}
+		})
+	}
+}
+
+func TestHistorical090SchemaBytesMatchPublishedPackage(t *testing.T) {
+	for name, test := range map[string]struct{ value, digest string }{
+		"Repository":             {historicalRepository090, "a9cf70ad4032b260fa847f6cd0aabbae358b1f1fe16f793bef9f046afbc479ae"},
+		"PackageScopeRepository": {historicalPackageScope090, "48f942e070d5da70273c6f8ace3ab4a41223a88fa9b2f3d6fd7c97dcf930d2d2"},
+		"Verifier":               {historicalVerifier090, "56991364957d7275ff4ff485c666eb844b56ea1e26e11951b97cdaebbbcd7b8d"},
+		"Focus":                  {historicalFocus090, "aabc2682f29705eaa205a0173f4350123b3015cbfabbe1b4afb9d6212bcceff7"},
+	} {
+		got := sha256.Sum256([]byte(test.value))
+		if hex.EncodeToString(got[:]) != test.digest {
+			t.Errorf("published %s schema bytes changed", name)
+		}
+	}
+}
+
+func TestHistoricalLocalBuildableSchemasDoNotAcquireObservedBinding(t *testing.T) {
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := strings.Replace(buildablePklFixture, "inputDetection =", `buildInputBinding = "observed-v1"`+"\n    inputDetection =", 1)
+	for _, test := range []struct{ uri, prefix string }{
+		{localV060RepositoryURI, ""}, {localV061RepositoryURI, ""},
+		{localV060PackageScopeURI, `scope = "@fixture"`}, {localV061PackageScopeURI, `scope = "@fixture"`},
+	} {
+		t.Run(test.uri, func(t *testing.T) {
+			legacy := []byte(fmt.Sprintf("amends %q\n%s\n%s", test.uri, test.prefix, buildablePklFixture))
+			declaration, err := EvaluateCurrentDeclaration(t.Context(), evaluator, legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if declaration.Buildables["hello"].BuildInputBinding != nil {
+				t.Fatal("historical declaration gained binding")
+			}
+			source := []byte(fmt.Sprintf("amends %q\n%s\n%s", test.uri, test.prefix, bound))
+			if _, err := EvaluateCurrentDeclaration(t.Context(), evaluator, source); err == nil {
+				t.Fatal("historical schema accepted observed binding")
+			}
+		})
+	}
+}
 
 func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 	for path, generated := range map[string]string{
@@ -40,7 +153,7 @@ func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 }
 
 func TestHistoricalContractSelectionRemainsSupported(t *testing.T) {
-	for _, historical := range []string{"0.7.0", "0.8.0"} {
+	for _, historical := range []string{"0.7.0", "0.8.0", "0.9.0"} {
 		t.Run(historical, func(t *testing.T) {
 			source := []byte(fmt.Sprintf(`amends "package://github.com/phosphorco/workbench-go/releases/download/%s/workbench@%s#/Repository.pkl"`, historical, historical))
 			if _, version, err := schemaForSource(source, "Repository.pkl"); err != nil {
@@ -118,7 +231,7 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 		})
 	}
 	oldSource := []byte(fmt.Sprintf("amends %q\n", localV050RepositoryURI))
-	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, or 0.9.0") {
+	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, or 0.10.0") {
 		t.Fatalf("0.5 lifecycle declaration error = %v", err)
 	}
 }
@@ -1330,7 +1443,33 @@ func TestProjectSkillsV020RefusesTrackedForgedOwnershipWithoutMutation(t *testin
 	afterGit := exactGitSnapshot(t, entry)
 	afterTree := readTree(t, root)
 	if !reflect.DeepEqual(beforeGit, afterGit) || !reflect.DeepEqual(beforeTree, afterTree) {
-		t.Fatalf("tracked forged ownership refusal mutated state:\nGit before=%#v\nGit after=%#v", beforeGit, afterGit)
+		paths := make(map[string]struct{}, len(beforeTree)+len(afterTree))
+		for path := range beforeTree {
+			paths[path] = struct{}{}
+		}
+		for path := range afterTree {
+			paths[path] = struct{}{}
+		}
+		var changes []string
+		for path := range paths {
+			before, wasPresent := beforeTree[path]
+			after, isPresent := afterTree[path]
+			if wasPresent && isPresent && before == after {
+				continue
+			}
+			beforeHash, afterHash := "absent", "absent"
+			if wasPresent {
+				digest := sha256.Sum256([]byte(before))
+				beforeHash = hex.EncodeToString(digest[:])
+			}
+			if isPresent {
+				digest := sha256.Sum256([]byte(after))
+				afterHash = hex.EncodeToString(digest[:])
+			}
+			changes = append(changes, fmt.Sprintf("%s before=%s after=%s", path, beforeHash, afterHash))
+		}
+		slices.Sort(changes)
+		t.Fatalf("tracked forged ownership refusal mutated state:\nGit before=%#v\nGit after=%#v\nTree changes:\n%s", beforeGit, afterGit, strings.Join(changes, "\n"))
 	}
 }
 
