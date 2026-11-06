@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
@@ -143,5 +144,92 @@ func TestColdObservedBindingRunChild(t *testing.T) {
 	application := applicationsForEnvironment(func() (commandEnvironment, error) { return commandEnvironment{evaluator: evaluator}, nil })
 	if err := runWith(context.Background(), []string{"run", "hello", "--"}, func() (string, error) { return root, nil }, os.Stdout, os.Stderr, application); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestColdHostLocalExecutionCLI(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("fixture declares Linux amd64")
+	}
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	pkl, err = filepath.Abs(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	declaration := `amends "workbench-contract:/0.11.0/Repository.pkl"
+buildables {
+  ["hello"] = new Buildable {
+    buildInputBinding = "observed-v1"
+    localExecution = "host-observed-v1"
+    inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt"; "producer.sh" } }
+    buildCommand = new BuildCommand { executable = "sh"; arguments { "producer.sh" } }
+    manifest = new ManifestContract { schemaVersion = 1; kind = "hello-manifest"; contractId = "hello-v1" }
+    candidates {
+      new BuildableCandidate { root = ".local-build/hello"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild it." }
+      new BuildableCandidate { root = ".ci-build/hello"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore it." }
+    }
+    platforms {
+      ["linux-x86_64"] = new BuildablePlatformOutput { os { "linux" }; arch { "amd64" }; path = "bin/hello" }
+      ["macos-arm64"] = new BuildablePlatformOutput { os { "darwin" }; arch { "arm64" }; path = "bin/mac" }
+    }
+  }
+}
+`
+	producer := `#!/bin/sh
+set -eu
+value=$(cat producer.txt)
+mkdir -p "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin"
+printf '#!/bin/sh\nprintf "%%s\n" "%s"\n' "$value" > "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin/hello"
+chmod +x "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin/hello"
+printf '%s\n' '{"source":{},"capabilities":[]}' > "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/.workbench-buildable-source.json"
+`
+	writeHandlerFile(t, filepath.Join(root, "workbench.pkl"), []byte(declaration), 0o644)
+	writeHandlerFile(t, filepath.Join(root, "producer.txt"), []byte("A\n"), 0o644)
+	writeHandlerFile(t, filepath.Join(root, "producer.sh"), []byte(producer), 0o644)
+	gitOutput(t, root, "init", "-q", "-b", "main")
+	gitOutput(t, root, "config", "user.name", "Workbench Test")
+	gitOutput(t, root, "config", "user.email", "workbench@example.invalid")
+	gitOutput(t, root, "add", "workbench.pkl", "producer.txt", "producer.sh")
+	gitOutput(t, root, "commit", "-qm", "fixture")
+	application := applicationsForEnvironment(func() (commandEnvironment, error) { return commandEnvironment{evaluator: evaluator}, nil })
+	invoke := func(args ...string) (string, error) {
+		var out bytes.Buffer
+		err := runWith(context.Background(), args, func() (string, error) { return root, nil }, &out, io.Discard, application)
+		return out.String(), err
+	}
+	if _, err := invoke("buildable", "build", "--name", "hello", "--platform", "linux-x86_64"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invoke("buildable", "seal", "--name", "hello", "--candidate-root", ".local-build/hello"); err == nil {
+		t.Fatal("full seal accepted missing macOS output")
+	}
+	output, err := invoke("buildable", "resolve", "--name", "hello", "--platform", "linux-x86_64", "--format", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["localExecution"] != "host-observed-v1" {
+		t.Fatalf("scope absent: %s", output)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.run=^TestColdObservedBindingRunChild$")
+	cmd.Env = append(os.Environ(), "WORKBENCH_BINDING_CHILD_ROOT="+root, "WORKBENCH_BINDING_CHILD_PKL="+pkl)
+	value, err := cmd.CombinedOutput()
+	if err != nil || string(value) != "A\n" {
+		t.Fatalf("run = %q, %v", value, err)
 	}
 }

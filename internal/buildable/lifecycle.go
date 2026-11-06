@@ -1,7 +1,7 @@
 package buildable
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -25,6 +25,7 @@ const SourceDescriptorFilename = ".workbench-buildable-source.json"
 type sourceDescriptor struct {
 	Source       map[string]string `json:"source"`
 	Capabilities []string          `json:"capabilities"`
+	digest       string
 }
 
 // MaterializeReceipt is the machine-readable record of an installed output
@@ -76,7 +77,7 @@ func MaterializeDeclared(ctx context.Context, ownerRoot, name string, declaratio
 			Remedy: "Choose one of the platform names declared by the owning workbench.pkl.",
 		}
 	}
-	candidate, verified, err := resolveCandidate(ctx, ownerRoot, name, declaration, platformName)
+	candidate, verified, err := resolveCandidate(ctx, ownerRoot, name, declaration, platformName, false)
 	if err != nil {
 		return MaterializeReceipt{}, err
 	}
@@ -346,7 +347,8 @@ func BuildDeclared(ctx context.Context, ownerRoot, name string, declaration Buil
 			Remedy: declaration.Candidates[0].InvalidRemedy,
 		}
 	}
-	if _, err := readSourceDescriptor(candidateRoot, declaration); err != nil {
+	descriptor, err := readSourceDescriptor(candidateRoot, declaration)
+	if err != nil {
 		return &Refusal{
 			Code: RefusalCandidateInvalid, Buildable: name, Candidate: preferred.Identity,
 			Reason: err.Error(), Remedy: declaration.Candidates[0].InvalidRemedy,
@@ -369,6 +371,9 @@ func BuildDeclared(ctx context.Context, ownerRoot, name string, declaration Buil
 		}
 	}
 	binding := platformBuildBinding{Platform: platformName, DeclarationIdentity: mustDeclarationIdentity(name, declaration), ProducerDigest: before}
+	if declaration.LocalExecution != nil {
+		binding.SourceDigest = descriptor.digest
+	}
 	for _, output := range outputs {
 		outputPath, err := existingPathWithin(candidateRoot, output.Path)
 		if err != nil {
@@ -467,7 +472,7 @@ func sealDeclared(ctx context.Context, ownerRoot, name string, declaration Build
 		}
 	}
 	if declaration.BuildInputBinding != nil {
-		if err := validatePlatformBindings(absoluteCandidate, name, declaration, producerDigest, manifest.Outputs); err != nil {
+		if err := validatePlatformBindingsWithDescriptor(absoluteCandidate, name, declaration, producerDigest, manifest.Outputs, descriptor.digest); err != nil {
 			return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 		}
 	}
@@ -716,16 +721,29 @@ func declaredCandidateIn(ownerRoot, name string, declaration Buildable, candidat
 }
 
 func readSourceDescriptor(candidateRoot string, declaration Buildable) (sourceDescriptor, error) {
+	if declaration.LocalExecution != nil {
+		info, err := os.Lstat(filepath.Join(candidateRoot, SourceDescriptorFilename))
+		if err != nil {
+			return sourceDescriptor{}, fmt.Errorf("inspect source descriptor: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return sourceDescriptor{}, errors.New("source descriptor is not a regular file")
+		}
+	}
 	path, err := existingPathWithin(candidateRoot, SourceDescriptorFilename)
 	if err != nil {
 		return sourceDescriptor{}, fmt.Errorf("source descriptor %q is missing or escapes the candidate: %w", SourceDescriptorFilename, err)
 	}
-	file, err := os.Open(path)
+	file, err := openRegularFile(path)
 	if err != nil {
 		return sourceDescriptor{}, fmt.Errorf("read source descriptor: %w", err)
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(bufio.NewReader(file))
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return sourceDescriptor{}, fmt.Errorf("read source descriptor: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var descriptor sourceDescriptor
 	if err := decoder.Decode(&descriptor); err != nil {
@@ -755,13 +773,20 @@ func readSourceDescriptor(candidateRoot string, declaration Buildable) (sourceDe
 			return sourceDescriptor{}, fmt.Errorf("source descriptor lacks required capability %q", required)
 		}
 	}
+	digest := sha256.Sum256(data)
+	descriptor.digest = hex.EncodeToString(digest[:])
 	return descriptor, nil
 }
 
 func inspectOutput(path, platformName string, output Output) (artifactOutput, error) {
-	file, err := os.Open(path)
+	file, err := openRegularFile(path)
 	if err != nil {
 		return artifactOutput{}, fmt.Errorf("read platform %q output: %w", platformName, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return artifactOutput{}, fmt.Errorf("inspect platform %q output: %w", platformName, err)
 	}
 	digest := sha256.New()
 	size, copyErr := io.Copy(digest, file)
@@ -771,10 +796,6 @@ func inspectOutput(path, platformName string, output Output) (artifactOutput, er
 	}
 	if closeErr != nil {
 		return artifactOutput{}, fmt.Errorf("close platform %q output: %w", platformName, closeErr)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return artifactOutput{}, fmt.Errorf("inspect platform %q output: %w", platformName, err)
 	}
 	if !info.Mode().IsRegular() || size <= 0 || output.Executable && info.Mode().Perm()&0o111 == 0 {
 		return artifactOutput{}, fmt.Errorf("platform %q output %q is not a non-empty regular file", platformName, output.Path)

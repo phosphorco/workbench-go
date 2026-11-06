@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -31,8 +32,8 @@ func TestCurrentBuildableSchemaCarriesOptionalObservedBindingInBothShapes(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	const candidateRepositoryURI = localV0100RepositoryURI
-	const candidateScopeURI = localV0100PackageScopeURI
+	const candidateRepositoryURI = localV0110RepositoryURI
+	const candidateScopeURI = localV0110PackageScopeURI
 	repositorySchema, err := localRepositoryDeclarationSchema(candidateRepositoryURI)
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +232,7 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 		})
 	}
 	oldSource := []byte(fmt.Sprintf("amends %q\n", localV050RepositoryURI))
-	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, or 0.10.0") {
+	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, or 0.11.0") {
 		t.Fatalf("0.5 lifecycle declaration error = %v", err)
 	}
 }
@@ -1791,4 +1792,204 @@ func readVisibleTree(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return result
+}
+
+func TestHostLocalExecutionSchemaBothRepositoryShapes(t *testing.T) {
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := strings.Replace(buildablePklFixture, "inputDetection =", "buildInputBinding = \"observed-v1\"\n    localExecution = \"host-observed-v1\"\n    inputDetection =", 1)
+	for _, tc := range []struct {
+		name, uri, prefix string
+		scope             bool
+	}{
+		{name: "repository", uri: localV0110RepositoryURI},
+		{name: "package-scope", uri: localV0110PackageScopeURI, prefix: `scope = "@fixture"`, scope: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := []byte(fmt.Sprintf("amends %q\n%s\n%s", tc.uri, tc.prefix, fixture))
+			declaration, err := EvaluateCurrentDeclaration(t.Context(), evaluator, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(declaration.Buildables["hello"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var value map[string]any
+			if err := json.Unmarshal(data, &value); err != nil {
+				t.Fatal(err)
+			}
+			if value["localExecution"] != "host-observed-v1" {
+				t.Fatalf("projection lost host-local scope: %s", data)
+			}
+		})
+	}
+}
+
+func TestCurrentSubjectSetupProjectsHostLocalBuildable(t *testing.T) {
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skip("bun unavailable")
+	}
+	pkl, err = filepath.Abs(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bun, err = filepath.Abs(bun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declaration := fmt.Sprintf(`amends "workbench-contract:/0.11.0/Repository.pkl"
+packages {
+  ["@host-local/fixture"] { devDependencies { ["typescript"] = "5.9.3" } }
+}
+buildables {
+  ["hello"] = new Buildable {
+    buildInputBinding = "observed-v1"
+    localExecution = "host-observed-v1"
+    inputDetection = new GitHeadTreeInputDetection { paths { "producer.txt"; "producer.sh" } }
+    buildCommand = new BuildCommand { executable = "sh"; arguments { "producer.sh" } }
+    manifest = new ManifestContract { schemaVersion = 1; kind = "hello-manifest"; contractId = "hello-v1" }
+    candidates {
+      new BuildableCandidate { root = ".local-build/hello"; inputStrategy = "gitWorktree"; invalidRemedy = "Rebuild it." }
+      new BuildableCandidate { root = ".ci-build/hello"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore it." }
+    }
+    platforms {
+      ["host-native"] = new BuildablePlatformOutput { os { %q }; arch { %q }; path = "bin/hello" }
+      ["fixture-foreign"] = new BuildablePlatformOutput { os { "fixture-foreign" }; arch { "fixture-foreign" }; path = "bin/foreign" }
+    }
+  }
+}
+`, runtime.GOOS, runtime.GOARCH)
+	producer := `#!/bin/sh
+set -eu
+value=$(cat producer.txt)
+mkdir -p "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin"
+printf '#!/bin/sh\nprintf "%%s\n" "%s"\n' "$value" > "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin/hello"
+chmod +x "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin/hello"
+printf '%s\n' '{"source":{},"capabilities":[]}' > "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/.workbench-buildable-source.json"
+`
+	for _, tc := range []struct {
+		name, subject string
+		mismatch      bool
+	}{
+		{name: "older Subject refuses current repository", subject: localV061SubjectURI, mismatch: true},
+		{name: "current Subject projects and resolves", subject: "workbench-contract:/0.11.0/WorkbenchSubject.pkl"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			remotes := filepath.Join(root, "remotes")
+			if err := os.MkdirAll(remotes, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			createRemote(t, root, remotes, "host-local-fixture", declaration, map[string]string{
+				"producer.txt": "A\n",
+				"producer.sh":  producer,
+				"src/index.ts": "export const fixture = true\n",
+			})
+			t.Setenv("GIT_ALLOW_PROTOCOL", "file")
+			t.Setenv("GIT_CONFIG_COUNT", "1")
+			t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+filepath.ToSlash(remotes)+"/.insteadOf")
+			t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/phosphorco/")
+			workbench := filepath.Join(root, "workbench")
+			if err := os.MkdirAll(workbench, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(workbench, "workbench-subject.pkl"), fmt.Sprintf("amends %q\n\nworkLine { branch = \"local/meaningful-slice\"; baseBranch = \"main\" }\nentrypoints { \"https://github.com/phosphorco/host-local-fixture\" }\n", tc.subject))
+			result, err := RunWith(t.Context(), workbench, NewToolchain(evaluator, bun))
+			if tc.mismatch {
+				if err == nil || !strings.Contains(err.Error(), "declaration is 0.11.0, want exact 0.6.1") {
+					t.Fatalf("version mismatch = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.ContractVersion != "0.11.0" {
+				t.Fatalf("contract version = %q", result.ContractVersion)
+			}
+			var projection buildable.Projection
+			if err := json.Unmarshal(mustRead(t, filepath.Join(workbench, buildable.ProjectionPath)), &projection); err != nil {
+				t.Fatal(err)
+			}
+			entry, ok := projection.Buildables["hello"]
+			if !ok || projection.SchemaDigest != buildable.ProjectionSchemaDigest || entry.Declaration.LocalExecution == nil || *entry.Declaration.LocalExecution != "host-observed-v1" {
+				t.Fatalf("setup projection = %#v", projection)
+			}
+			if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+				t.Skip("fixture executes a Unix shell script")
+			}
+			owner := filepath.Join(workbench, filepath.FromSlash(entry.Owner.RepositoryPath))
+			if err := buildable.BuildDeclared(t.Context(), owner, "hello", entry.Declaration, "host-native"); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := buildable.ResolvePlatform(t.Context(), workbench, "hello", "host-native")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.LocalExecution != "host-observed-v1" || len(resolved.Outputs) != 1 {
+				t.Fatalf("resolution = %#v", resolved)
+			}
+			output, err := exec.Command(resolved.Outputs[0].Path).Output()
+			if err != nil || string(output) != "A\n" {
+				t.Fatalf("output = %q, %v", output, err)
+			}
+		})
+	}
+}
+
+func TestPublished010HistoricalSchemaBytesAndLocalAdmission(t *testing.T) {
+	for name, expected := range map[string]string{
+		"Repository.pkl":             "7fe56f9656ca7ff5ead5d0185e117ab4904711b3d590aa6eb618735f2cbbf11e",
+		"PackageScopeRepository.pkl": "49f596edbe7a51e4efbedcf63d68bc1c3b4dc09addbadc089e068ad1965becb1",
+	} {
+		data, err := os.ReadFile(filepath.Join("historical", "0.10.0", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(data)
+		if hex.EncodeToString(digest[:]) != expected {
+			t.Fatalf("published 0.10 %s bytes changed", name)
+		}
+	}
+	pkl, err := exec.LookPath("pkl")
+	if err != nil {
+		t.Skip("pkl unavailable")
+	}
+	evaluator, err := evaluate.NewEvaluator(pkl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := strings.Replace(buildablePklFixture, "inputDetection =", "buildInputBinding = \"observed-v1\"\n    inputDetection =", 1)
+	host := strings.Replace(observed, "inputDetection =", "localExecution = \"host-observed-v1\"\n    inputDetection =", 1)
+	for _, tc := range []struct{ uri, prefix string }{
+		{"workbench-contract:/0.10.0/Repository.pkl", ""},
+		{"workbench-contract:/0.10.0/PackageScopeRepository.pkl", `scope = "@fixture"`},
+	} {
+		t.Run(tc.uri, func(t *testing.T) {
+			source := []byte(fmt.Sprintf("amends %q\n%s\n%s", tc.uri, tc.prefix, observed))
+			if _, err := EvaluateCurrentDeclaration(t.Context(), evaluator, source); err != nil {
+				t.Fatalf("published 0.10 observed binding refused: %v", err)
+			}
+			source = []byte(fmt.Sprintf("amends %q\n%s\n%s", tc.uri, tc.prefix, host))
+			if _, err := EvaluateCurrentDeclaration(t.Context(), evaluator, source); err == nil {
+				t.Fatal("published 0.10 schema accepted host-local opt-in")
+			}
+		})
+	}
 }

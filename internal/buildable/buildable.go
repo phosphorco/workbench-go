@@ -27,8 +27,9 @@ const (
 	ProjectionPath = ".workbench/buildables.json"
 	// ProjectionSchemaDigest binds the projection to the released Pkl schema
 	// interpreted by this binary. A schema edit must update this digest.
-	ProjectionSchemaDigest  = "cf600469e3207b765366bf64d028a9056b3c9b1c8c9268fe23a6efc2e87c26ac"
-	projectionSchemaVersion = 1
+	ProjectionSchemaDigest       = "f131870cf74221d89c8361ae46f3c3bac3ef601ce5c9752f8f328b9b75ce053f"
+	legacyProjectionSchemaDigest = "cf600469e3207b765366bf64d028a9056b3c9b1c8c9268fe23a6efc2e87c26ac"
+	projectionSchemaVersion      = 1
 )
 
 var (
@@ -73,13 +74,14 @@ func (refusal *Refusal) Error() string {
 // candidate roots and manifest details are deliberately absent from this
 // value.
 type Resolution struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	Buildable     string            `json:"buildable"`
-	Candidate     string            `json:"candidate"`
-	Platform      string            `json:"platform"`
-	Outputs       []ResolvedOutput  `json:"outputs"`
-	Capabilities  []string          `json:"capabilities"`
-	Source        map[string]string `json:"source"`
+	SchemaVersion  int               `json:"schemaVersion"`
+	Buildable      string            `json:"buildable"`
+	Candidate      string            `json:"candidate"`
+	Platform       string            `json:"platform"`
+	LocalExecution string            `json:"localExecution,omitempty"`
+	Outputs        []ResolvedOutput  `json:"outputs"`
+	Capabilities   []string          `json:"capabilities"`
+	Source         map[string]string `json:"source"`
 
 	// Path is retained for source compatibility with pre-seam Go callers. It
 	// is not serialized and is populated only for the single executable output.
@@ -101,12 +103,13 @@ type ResolvedOutput struct {
 
 // CheckReport is the stable JSON result of the no-exec check command.
 type CheckReport struct {
-	SchemaVersion int      `json:"schemaVersion"`
-	Status        string   `json:"status"`
-	Buildable     string   `json:"buildable"`
-	Candidate     string   `json:"candidate,omitempty"`
-	Path          string   `json:"path,omitempty"`
-	Refusal       *Refusal `json:"refusal,omitempty"`
+	SchemaVersion  int      `json:"schemaVersion"`
+	Status         string   `json:"status"`
+	Buildable      string   `json:"buildable"`
+	Candidate      string   `json:"candidate,omitempty"`
+	Path           string   `json:"path,omitempty"`
+	LocalExecution string   `json:"localExecution,omitempty"`
+	Refusal        *Refusal `json:"refusal,omitempty"`
 }
 
 // Projection is the strict setup-owned execution contract.
@@ -143,6 +146,7 @@ type Buildable struct {
 	InputDetection      InputDetection      `json:"inputDetection"`
 	BuildCommand        BuildCommand        `json:"buildCommand"`
 	BuildInputBinding   *string             `json:"buildInputBinding,omitempty"`
+	LocalExecution      *string             `json:"localExecution,omitempty"`
 	VerificationCommand *BuildCommand       `json:"verificationCommand,omitempty"`
 	Manifest            ManifestContract    `json:"manifest"`
 	Candidates          []Candidate         `json:"candidates"`
@@ -219,16 +223,17 @@ type artifactOutput struct {
 }
 
 type candidateVerification struct {
-	Root     string
-	Manifest artifactManifest
-	Outputs  map[string][]artifactOutput
+	Root           string
+	Manifest       artifactManifest
+	Outputs        map[string][]artifactOutput
+	LocalExecution string
 }
 
 // EncodeProjection validates and deterministically encodes all owner declarations.
 func EncodeProjection(owners []ProjectionOwner) ([]byte, error) {
 	projection := Projection{
 		SchemaVersion: projectionSchemaVersion,
-		SchemaDigest:  ProjectionSchemaDigest,
+		SchemaDigest:  legacyProjectionSchemaDigest,
 		Buildables:    make(map[string]ProjectedBuildable),
 	}
 	for _, owner := range owners {
@@ -258,6 +263,9 @@ func EncodeProjection(owners []ProjectionOwner) ([]byte, error) {
 					owner.Identity,
 					owner.RepositoryPath,
 				)
+			}
+			if declaration.LocalExecution != nil {
+				projection.SchemaDigest = ProjectionSchemaDigest
 			}
 			projection.Buildables[name] = ProjectedBuildable{
 				Owner: OwnerReference{
@@ -576,15 +584,16 @@ func resolveDeclaredPlatform(ctx context.Context, root, name string, declaration
 			Remedy: "Choose one of the platform names declared by the owning workbench.pkl.",
 		}
 	}
-	candidate, verified, err := resolveCandidate(ctx, root, name, declaration, platformName)
+	candidate, verified, err := resolveCandidate(ctx, root, name, declaration, platformName, true)
 	if err != nil {
 		return Resolution{}, err
 	}
 	resolution := Resolution{
 		SchemaVersion: 1, Buildable: name, Candidate: candidate.Identity, Platform: platformName,
-		Capabilities: append([]string(nil), verified.Manifest.Capabilities...),
-		Source:       cloneStringMap(verified.Manifest.Source),
-		Outputs:      make([]ResolvedOutput, 0, len(verified.Outputs[platformName])),
+		LocalExecution: verified.LocalExecution,
+		Capabilities:   append([]string(nil), verified.Manifest.Capabilities...),
+		Source:         cloneStringMap(verified.Manifest.Source),
+		Outputs:        make([]ResolvedOutput, 0, len(verified.Outputs[platformName])),
 	}
 	for _, output := range verified.Outputs[platformName] {
 		resolvedPath, pathErr := existingPathWithin(verified.Root, output.Path)
@@ -624,7 +633,7 @@ func resolveDeclaredPlatform(ctx context.Context, root, name string, declaration
 	return resolution, nil
 }
 
-func resolveCandidate(ctx context.Context, root, name string, declaration Buildable, selectedPlatform string) (Candidate, candidateVerification, error) {
+func resolveCandidate(ctx context.Context, root, name string, declaration Buildable, selectedPlatform string, allowHostLocal bool) (Candidate, candidateVerification, error) {
 	for index, candidate := range declaration.Candidates {
 		candidate.Identity = candidateIdentity(candidate, index)
 		present, err := candidatePresent(root, candidate, declaration.Platforms)
@@ -634,9 +643,18 @@ func resolveCandidate(ctx context.Context, root, name string, declaration Builda
 		if !present {
 			continue
 		}
-		verified, code, err := verifyCandidate(ctx, root, name, declaration, candidate)
-		if err != nil {
-			return Candidate{}, candidateVerification{}, &Refusal{Code: code, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
+		var verified candidateVerification
+		var code RefusalCode
+		var verifyErr error
+		manifest := filepath.Join(root, filepath.FromSlash(candidate.Root), "manifest.json")
+		_, manifestErr := os.Lstat(manifest)
+		if allowHostLocal && index == 0 && declaration.LocalExecution != nil && errors.Is(manifestErr, os.ErrNotExist) {
+			verified, code, verifyErr = verifyHostLocal(ctx, root, name, declaration, candidate, selectedPlatform)
+		} else {
+			verified, code, verifyErr = verifyCandidate(ctx, root, name, declaration, candidate)
+		}
+		if verifyErr != nil {
+			return Candidate{}, candidateVerification{}, &Refusal{Code: code, Buildable: name, Candidate: candidate.Identity, Reason: verifyErr.Error(), Remedy: candidate.InvalidRemedy}
 		}
 		if _, exists := verified.Outputs[selectedPlatform]; !exists {
 			return Candidate{}, candidateVerification{}, &Refusal{
@@ -659,7 +677,7 @@ func Check(ctx context.Context, workbenchRoot, name, hostOS, hostArch string) (C
 	if err == nil {
 		return CheckReport{
 			SchemaVersion: 1, Status: "valid", Buildable: name,
-			Candidate: resolution.Candidate, Path: resolution.Path,
+			Candidate: resolution.Candidate, Path: resolution.Path, LocalExecution: resolution.LocalExecution,
 		}, nil
 	}
 	var refusal *Refusal
@@ -725,7 +743,7 @@ func loadProjection(root string) (Projection, error) {
 	if err := requireJSONEOF(decoder); err != nil {
 		return Projection{}, fmt.Errorf("decode generated buildable projection %q: %w", path, err)
 	}
-	if projection.SchemaVersion != projectionSchemaVersion || projection.SchemaDigest != ProjectionSchemaDigest {
+	if projection.SchemaVersion != projectionSchemaVersion || projection.SchemaDigest != ProjectionSchemaDigest && projection.SchemaDigest != legacyProjectionSchemaDigest {
 		return Projection{}, fmt.Errorf(
 			"projection schema is version %d digest %q, want version %d digest %q",
 			projection.SchemaVersion,
@@ -738,6 +756,9 @@ func loadProjection(root string) (Projection, error) {
 		return Projection{}, errors.New("generated buildable projection omits buildables")
 	}
 	for name, projected := range projection.Buildables {
+		if projection.SchemaDigest == legacyProjectionSchemaDigest && projected.Declaration.LocalExecution != nil {
+			return Projection{}, errors.New("legacy projection cannot declare host-local execution")
+		}
 		if err := ValidateName(name); err != nil {
 			return Projection{}, err
 		}
@@ -770,6 +791,14 @@ func requireJSONEOF(decoder *json.Decoder) error {
 
 // Validate proves the declaration's closed configuration invariants.
 func (buildable Buildable) Validate() error {
+	if buildable.LocalExecution != nil {
+		if *buildable.LocalExecution != "host-observed-v1" {
+			return fmt.Errorf("unsupported local execution %q", *buildable.LocalExecution)
+		}
+		if buildable.BuildInputBinding == nil || *buildable.BuildInputBinding != "observed-v1" {
+			return errors.New("host-observed local execution requires observed-v1 build input binding")
+		}
+	}
 	if buildable.BuildInputBinding != nil && *buildable.BuildInputBinding != "observed-v1" {
 		return fmt.Errorf("unsupported build input binding %q", *buildable.BuildInputBinding)
 	}
@@ -1481,9 +1510,14 @@ func gitHeadTreeDigest(ctx context.Context, root string, paths []string) (string
 }
 
 func verifyOutput(path string, output artifactOutput) error {
-	file, err := os.Open(path)
+	file, err := openRegularFile(path)
 	if err != nil {
-		return errors.New("read output bytes")
+		return fmt.Errorf("read output bytes: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return errors.New("inspect output mode")
 	}
 	hash := sha256.New()
 	size, copyErr := io.Copy(hash, file)
@@ -1500,10 +1534,6 @@ func verifyOutput(path string, output artifactOutput) error {
 	}
 	if size != output.Size {
 		return fmt.Errorf("size mismatch: expected %d, found %d", output.Size, size)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return errors.New("inspect output mode")
 	}
 	if output.Executable && info.Mode().Perm()&0o111 == 0 {
 		return errors.New("executable mode is absent")
