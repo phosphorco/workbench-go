@@ -43,3 +43,14 @@ func TestHistorical090LifecycleAdmission(t *testing.T) {
 		}
 	})
 }
+
+func TestHistorical0100LifecycleAdmission(t *testing.T) {
+	const version = "0.10.0"
+	const prefix = "package://github.com/phosphorco/workbench-go/releases/download/0.10.0/workbench@0.10.0#/"
+	if _, err := releasedCommitPlanContract([]byte("amends \""+prefix+"WorkbenchCommitPlan.pkl\"\n"), version); err != nil {
+		t.Fatal(err)
+	}
+	if _, kind, err := releasedSnapshotContractFromSource([]byte("amends \"" + prefix + "WorkbenchSnapshot.pkl\"\n")); err != nil || kind != currentSnapshotContract {
+		t.Fatalf("0.10 snapshot: %v %v", kind, err)
+	}
+}

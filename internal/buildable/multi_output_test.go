@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -236,7 +237,7 @@ func TestRunRefusesAValidNonExecutableModule(t *testing.T) {
 	workbench, repository := multiOutputFixture(t)
 	declaration := moduleDeclaration()
 	declaration.Platforms["browser-wasm"] = buildable.Platform{
-		OS: []string{"linux"}, Arch: []string{"amd64"}, Outputs: declaration.Platforms["browser-wasm"].Outputs,
+		OS: []string{runtime.GOOS}, Arch: []string{runtime.GOARCH}, Outputs: declaration.Platforms["browser-wasm"].Outputs,
 	}
 	project(t, workbench, repository, declaration)
 	if err := buildable.Seal(context.Background(), workbench, "browser-module", ".local-build/browser-module"); err != nil {

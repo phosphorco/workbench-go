@@ -67,7 +67,12 @@ func newReviewFixture(t *testing.T, home map[string]any, badCache bool) reviewFi
 
 func newReviewFixtureOptions(t *testing.T, home map[string]any, badCache bool, options contextdaemon.RuntimeOptions) reviewFixture {
 	t.Helper()
-	root := t.TempDir()
+	// Fixture names must fit Darwin's Unix socket address limit.
+	root, err := os.MkdirTemp("", "wctx-review-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	if home == nil {
 		home = map[string]any{}
 	}

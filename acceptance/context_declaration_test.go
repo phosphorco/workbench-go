@@ -25,7 +25,7 @@ func TestContextDeclarationPublicWitnesses(t *testing.T) {
 	binary := contextDeclarationAcceptanceBinary(t, moduleRoot)
 
 	t.Run("no source is silent and creates no context artifacts", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -44,7 +44,7 @@ func TestContextDeclarationPublicWitnesses(t *testing.T) {
 	})
 
 	t.Run("explicit builtin Pkl declaration activates the real hook", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		copyContextDeclarationFixture(t, moduleRoot, "pkl-builtin", root)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
@@ -62,7 +62,7 @@ func TestContextDeclarationPublicWitnesses(t *testing.T) {
 	})
 
 	t.Run("legacy JSON alone is inert even with matching guidance", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		copyContextDeclarationFixture(t, moduleRoot, "legacy-json-only", root)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
@@ -91,7 +91,7 @@ func TestContextDeclarationPublicWitnesses(t *testing.T) {
 	} {
 		boundary := boundary
 		t.Run(boundary.name+" blocks ancestor selection", func(t *testing.T) {
-			root := t.TempDir()
+			root := shortContextTempDir(t)
 			ancestor := filepath.Join(root, "ancestor")
 			child := filepath.Join(ancestor, "child")
 			workingDirectory := child
@@ -133,7 +133,7 @@ func TestContextDeclarationPublicWitnesses(t *testing.T) {
 	} {
 		boundary := boundary
 		t.Run(boundary.name+" owns the complete selection", func(t *testing.T) {
-			root := t.TempDir()
+			root := shortContextTempDir(t)
 			ancestor := filepath.Join(root, "ancestor")
 			child := filepath.Join(ancestor, "child")
 			workingDirectory := child
@@ -166,7 +166,11 @@ func TestContextDeclarationPublicWitnesses(t *testing.T) {
 			if childStatusErr != nil || len(childStatusStderr) != 0 {
 				t.Fatalf("blocked child status failed: err=%v stderr=%q stdout=%q", childStatusErr, childStatusStderr, childStatusStdout)
 			}
-			assertContextDeclarationStatus(t, childStatusStdout, "inactive", child, boundary.module)
+			reason := boundary.module
+			if boundary.module == "directory-only" {
+				reason = "does not cover this directory"
+			}
+			assertContextDeclarationStatus(t, childStatusStdout, "inactive", child, reason)
 
 			stdout, stderr, runErr := runContextProcess(t, binary, workingDirectory, environment,
 				claudeContextHookPayload(workingDirectory, "pkl-boundary-session-"+boundary.module, "pkl-boundary-turn-"+boundary.module, ""),
@@ -178,7 +182,7 @@ func TestContextDeclarationPublicWitnesses(t *testing.T) {
 	}
 
 	t.Run("init creates the project Pkl declaration", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		environment := contextAcceptanceEnvironment(root)
 
@@ -202,7 +206,7 @@ func TestContextDeclarationPublicWitnesses(t *testing.T) {
 	})
 
 	t.Run("init ignores legacy JSON and preserves it", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		legacyPath := filepath.Join(root, ".workbench", "context.json")
 		legacy := `{"schemaVersion":1,"optIn":true,"includeChildren":true}`
 		writeAcceptanceFile(t, legacyPath, legacy, 0o600)
@@ -244,7 +248,7 @@ func TestContextDeclarationExpandedWitnesses(t *testing.T) {
 		t.Cleanup(func() {
 			_ = os.WriteFile(privatePkl, privateBytes, 0o755)
 		})
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		stdout, stderr, runErr := runContextProcess(t, binary, root, contextAcceptanceEnvironment(root),
@@ -267,7 +271,7 @@ func TestContextDeclarationExpandedWitnesses(t *testing.T) {
 		t.Cleanup(func() {
 			_ = os.WriteFile(privatePkl, privateBytes, 0o755)
 		})
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		writeAcceptanceFile(t, filepath.Join(root, contextDeclarationProjectFile), explicitBuiltinModule(), 0o600)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
@@ -285,7 +289,7 @@ func TestContextDeclarationExpandedWitnesses(t *testing.T) {
 	})
 
 	t.Run("home-only policy is inactive without a covered directory and stays warm-silent", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		writeAcceptanceFile(t, paths.homeConfig, `amends "workbench:context-home"
 
@@ -314,7 +318,7 @@ limits {}
 	})
 
 	t.Run("import edits, deletion, restore, and snapshot disposal follow current bytes", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -397,7 +401,7 @@ limits {}
 	})
 
 	t.Run("retargeted equal-size import changes selection", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -432,7 +436,7 @@ limits {}
 	})
 
 	t.Run("imported home exclusion changes activation", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -469,7 +473,7 @@ limits {}
 	})
 
 	t.Run("reduced home cache cap becomes authoritative after prior population", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -501,7 +505,7 @@ limits {}
 	})
 
 	t.Run("named builtins retain distinct identities after one is removed", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -533,7 +537,7 @@ limits {}
 	})
 
 	t.Run("profile-only executable contributes profile facts but receives no contribute call", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -556,7 +560,7 @@ limits {}
 
 	t.Run("init follows fresh inherited legacy and authored-state rules", func(t *testing.T) {
 		t.Run("fresh creates the public Pkl declaration", func(t *testing.T) {
-			root := t.TempDir()
+			root := shortContextTempDir(t)
 			paths := contextDeclarationPaths(root)
 			stdout, stderr, runErr := runContextProcess(t, binary, root, contextAcceptanceEnvironment(root), nil, contextInitArguments(paths, root))
 			if runErr != nil || len(stderr) != 0 {
@@ -575,7 +579,7 @@ limits {}
 		})
 
 		t.Run("inherited ancestor is preserved", func(t *testing.T) {
-			root := t.TempDir()
+			root := shortContextTempDir(t)
 			ancestor := filepath.Join(root, "ancestor")
 			child := filepath.Join(ancestor, "child")
 			if err := os.MkdirAll(child, 0o700); err != nil {
@@ -605,7 +609,7 @@ limits {}
 		})
 
 		t.Run("legacy-only state is inert and preserved", func(t *testing.T) {
-			root := t.TempDir()
+			root := shortContextTempDir(t)
 			legacyPath := filepath.Join(root, ".workbench", "context.json")
 			legacy := `{"schemaVersion":1,"optIn":true,"includeChildren":true}`
 			writeAcceptanceFile(t, legacyPath, legacy, 0o600)
@@ -632,7 +636,7 @@ limits {}
 		} {
 			state := state
 			t.Run("preserves "+state.name, func(t *testing.T) {
-				root := t.TempDir()
+				root := shortContextTempDir(t)
 				path := filepath.Join(root, contextDeclarationProjectFile)
 				writeAcceptanceFile(t, path, state.body, 0o600)
 				paths := contextDeclarationPaths(root)
@@ -647,7 +651,7 @@ limits {}
 		}
 
 		t.Run("home exclusion prevents local creation", func(t *testing.T) {
-			root := t.TempDir()
+			root := shortContextTempDir(t)
 			paths := contextDeclarationPaths(root)
 			homeRulesPath := filepath.Join(filepath.Dir(paths.homeConfig), "home-rules.pkl")
 			writeAcceptanceFile(t, homeRulesPath, homeRules(root), 0o600)
@@ -663,7 +667,7 @@ limits {}
 	})
 
 	t.Run("history retains the configured contributor across declaration revision", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := contextDeclarationPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)

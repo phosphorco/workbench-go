@@ -94,3 +94,33 @@ assert set(delivery['writer']['needs']) <= set(revised['writer']['needs'])
 assert {'produced(streaming-tests)', 'verified(streaming-tests)'} <= set(revised['writer']['needs'])
 PY
 printf 'Installed planner acceptance passed: %s\n' "$fixture"
+
+# New releases exercise coordination through the installed private runtime.
+# Historical distribution checks also invoke this script against older CLIs.
+if grep -Fq 'class ActorKind' Plan.pkl; then
+  mkdir actors
+  cp .agents/skills/workbench-plan/assets/actors/*.pkl actors/
+  cat > coordination.plan.pkl <<'PKL'
+amends "workbench:plan"
+import "actors/bb.pkl" as bb
+import "actors/people.pkl" as people
+meta { title = "Installed coordination"; goal = "Track work independently of acceptance." }
+actors { kinds { ["thread"] = bb.thread; ["user"] = people.email } }
+nodes { new Guard { id = "work"; owner = "test"; oracle = module.mechanical("true") } }
+PKL
+  PATH=/nonexistent BB_THREAD_ID=thr_release "$workbench" plan update coordination.plan.pkl --node work --assignee @me --status in-progress --expect-revision 0
+  PATH=/nonexistent BB_THREAD_ID=thr_release "$workbench" plan update coordination.plan.pkl --node work --status stalled --reason 'Waiting for review.' --resume-when 'Reviewer available.' --waiting-on-actor alex@example.com --expect-revision 1
+  "$workbench" plan verify coordination.plan.pkl --node work --by thread:thr_release
+  PATH=/nonexistent "$workbench" plan tick coordination.plan.pkl --format json > coordination.json
+  python3 - <<'PY'
+import json
+r = json.load(open('coordination.json'))
+assert r['counts']['complete'] == 1, r
+w = r['work'][0]['work']
+assert w['status'] == 'stalled' and w['revision'] == 2, w
+assert w['assignee'] == {'kind': 'thread', 'id': 'thr_release'}, w
+assert w['stall']['waitingOnActor'] == {'kind': 'user', 'id': 'alex@example.com'}, w
+PY
+  PATH=/nonexistent BB_THREAD_ID=thr_release "$workbench" plan update coordination.plan.pkl --node work --status in-progress --expect-revision 2
+  printf 'Installed actor and stall acceptance passed: %s\n' "$fixture"
+fi

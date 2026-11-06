@@ -73,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$PUBLISHED_VERSION/$CONTRACT_VERSION" in
-            0.9.1/0.9.0|0.10.0/0.10.0) ;;
+            0.9.1/0.9.0|0.10.0/0.10.0|0.11.0/0.11.0) ;;
             *) echo "unsupported published binary and contract pair" >&2; exit 1 ;;
           esac
           [[ "$EXPECTED_PUBLISHED_REVISION" =~ ^[0-9a-f]{40}$ ]]
@@ -142,7 +142,7 @@ jobs:
           test "$(sed -n '1p' "$RUNNER_TEMP/private-pkl-help.stdout")" = 'workbench verify [--gate <name>] [--json]'
 
       - name: Exercise the published observed build binding
-        if: inputs.published_version == '0.10.0' && matrix.runner == 'ubuntu-24.04'
+        if: (inputs.published_version == '0.10.0' || inputs.published_version == '0.11.0') && matrix.runner == 'ubuntu-24.04'
         run: |
           set -euo pipefail
           export MISE_DATA_DIR="$RUNNER_TEMP/planner-mise-data"
@@ -154,7 +154,7 @@ jobs:
           root="$RUNNER_TEMP/observed-binding"
           mkdir -p "$root"
           cat > "$root/workbench.pkl" <<'EOF'
-          amends "package://github.com/phosphorco/workbench-go/releases/download/0.10.0/workbench@0.10.0#/Repository.pkl"
+          amends "package://github.com/phosphorco/workbench-go/releases/download/${{ inputs.contract_version }}/workbench@${{ inputs.contract_version }}#/Repository.pkl"
           buildables {
             ["hello"] = new Buildable {
               buildInputBinding = "observed-v1"

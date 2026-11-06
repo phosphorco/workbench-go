@@ -15,8 +15,8 @@ func TestRuntimeLockPinsClosedPlatformAndLicenseInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRuntimeLock(): %v", err)
 	}
-	if lock.WorkbenchVersion != "0.10.0" {
-		t.Fatalf("WorkbenchVersion = %q, want 0.10.0", lock.WorkbenchVersion)
+	if lock.WorkbenchVersion != "0.11.0" {
+		t.Fatalf("WorkbenchVersion = %q, want 0.11.0", lock.WorkbenchVersion)
 	}
 	wantDependencies := map[string]string{
 		"go":         "1.26.6",
@@ -157,6 +157,12 @@ func TestWriteArchiveIsByteDeterministicAndHasClosedLayout(t *testing.T) {
 		"workbench-0.5.0/share/workbench/skills/",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/SKILL.md",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/assets/",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/assets/actors/",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/assets/actors/bb.pkl",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/assets/actors/codex.pkl",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/assets/actors/people.pkl",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/assets/actors/services.pkl",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/bulk-export/",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/bulk-export/campaign.pkl",
@@ -165,6 +171,7 @@ func TestWriteArchiveIsByteDeterministicAndHasClosedLayout(t *testing.T) {
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/examples/bulk-export/revised.plan.pkl",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/references/",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/references/authoring.md",
+		"workbench-0.5.0/share/workbench/skills/workbench-plan/references/coordination.md",
 		"workbench-0.5.0/share/workbench/skills/workbench-plan/references/planning-tactics.md",
 		"workbench-0.5.0/share/workbench/skills/workbench/",
 		"workbench-0.5.0/share/workbench/skills/workbench/SKILL.md",

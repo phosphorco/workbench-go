@@ -231,7 +231,7 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 		})
 	}
 	oldSource := []byte(fmt.Sprintf("amends %q\n", localV050RepositoryURI))
-	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, or 0.10.0") {
+	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, or 0.11.0") {
 		t.Fatalf("0.5 lifecycle declaration error = %v", err)
 	}
 }

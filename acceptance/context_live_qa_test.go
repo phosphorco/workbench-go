@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -237,6 +238,9 @@ func TestContextLiveQARuntimeCleanupWitness(t *testing.T) {
 }
 
 func TestContextLiveQAOfflineCounterexamples(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("runtime ownership witnesses require Linux /proc; exercised in Linux CI")
+	}
 	command := exec.Command("python3", "context_live_qa.py", "--self-test-contract")
 	command.Dir = filepath.Join("..", "acceptance")
 	output, err := command.Output()
@@ -255,6 +259,9 @@ func TestContextLiveQAOfflineCounterexamples(t *testing.T) {
 }
 
 func TestContextLiveQAClaudeResetBoundary(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("runtime ownership witnesses require Linux /proc; exercised in Linux CI")
+	}
 	command := exec.Command("python3", "context_live_qa.py", "--self-test-protocol")
 	command.Dir = filepath.Join("..", "acceptance")
 	output, err := command.Output()

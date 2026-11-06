@@ -104,7 +104,7 @@ func TestContextAcceptance(t *testing.T) {
 	binary := buildContextWorkbench(t, moduleRoot)
 
 	t.Run("inactive is silent and creates no context artifacts", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := newAcceptanceContextPaths(root)
 		environment := contextAcceptanceEnvironment(root)
 		payload := claudeContextHookPayload(root, "inactive-session", "inactive-turn", "")
@@ -134,7 +134,7 @@ func TestContextAcceptance(t *testing.T) {
 	})
 
 	t.Run("cold evaluator lease wait stays inside the whole-hook deadline", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := newAcceptanceContextPaths(root)
 		environment := contextAcceptanceEnvironment(root)
 		writeAcceptanceFile(t, filepath.Join(root, "workbench-context.pkl"), builtinProjectDeclaration(), 0o600)
@@ -162,7 +162,7 @@ func TestContextAcceptance(t *testing.T) {
 	})
 
 	t.Run("setup is isolated idempotent and init opts in", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := newAcceptanceContextPaths(root)
 		environment := contextAcceptanceEnvironment(root)
 		claudeSettings := filepath.Join(root, "claude", "settings.json")
@@ -237,7 +237,7 @@ func TestContextAcceptance(t *testing.T) {
 		if runtime.GOOS != "linux" {
 			t.Skip("profile provider subprocess proof uses Linux cleanup")
 		}
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := newAcceptanceContextPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -291,7 +291,7 @@ func TestContextAcceptance(t *testing.T) {
 	})
 
 	t.Run("builtin offers, confirms, separates sessions, and leaves bounded history", func(t *testing.T) {
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := newAcceptanceContextPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -376,7 +376,7 @@ func TestContextAcceptance(t *testing.T) {
 		if runtime.GOOS != "linux" {
 			t.Skip("provider process cleanup proof uses Linux process groups")
 		}
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := newAcceptanceContextPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -419,7 +419,7 @@ func TestContextAcceptance(t *testing.T) {
 		if runtime.GOOS != "linux" {
 			t.Skip("daemon process bound proof uses Linux /proc")
 		}
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := newAcceptanceContextPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -460,7 +460,7 @@ func TestContextAcceptance(t *testing.T) {
 		if runtime.GOOS != "linux" {
 			t.Skip("idle eviction observation uses the live Linux daemon")
 		}
-		root := t.TempDir()
+		root := shortContextTempDir(t)
 		paths := newAcceptanceContextPaths(root)
 		registerContextDaemonCleanup(t, paths)
 		environment := contextAcceptanceEnvironment(root)
@@ -486,7 +486,7 @@ func TestContextAcceptance(t *testing.T) {
 // valid acceptance fixture.
 func buildContextWorkbench(t *testing.T, moduleRoot string) string {
 	t.Helper()
-	installation := t.TempDir()
+	installation := shortContextTempDir(t)
 	binary := filepath.Join(installation, "bin", "workbench")
 	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
 		t.Fatal(err)
@@ -896,4 +896,16 @@ func contextDaemonPIDs(socket string) []int {
 	}
 	sort.Ints(pids)
 	return pids
+}
+
+// Unix socket addresses include fixture paths; short names keep real daemon
+// witnesses within Darwin's sockaddr_un limit regardless of the test name.
+func shortContextTempDir(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp("", "wctx-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	return root
 }
