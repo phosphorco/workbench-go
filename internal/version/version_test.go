@@ -2,6 +2,17 @@ package version
 
 import "testing"
 
+func TestPackageCoordinatesPreserveHistoricalAndCandidateContracts(t *testing.T) {
+	for version, want := range map[string]string{"0.6.1": "0.6.2", "0.9.0": "0.9.0", "0.10.0": "0.10.0"} {
+		if got := PackageReleaseCoordinate(version); got != want {
+			t.Errorf("coordinate for %s = %s, want %s", version, got, want)
+		}
+	}
+	if CurrentContractVersion != "0.10.0" || ReleaseCoordinate != "0.10.0" {
+		t.Fatal("candidate contract coordinate changed")
+	}
+}
+
 func TestCurrentRejectsUninjectedRelease(t *testing.T) {
 	previousVersion, previousRevision := release, revision
 	t.Cleanup(func() { release, revision = previousVersion, previousRevision })

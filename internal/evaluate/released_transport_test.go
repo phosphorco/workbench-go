@@ -8,6 +8,28 @@ import (
 	"testing"
 )
 
+func TestHistoricalAndCandidateRepositoryPackageTransportsStaySeparate(t *testing.T) {
+	for _, version := range []string{"0.9.0", "0.10.0"} {
+		module := "package://github.com/phosphorco/workbench-go/releases/download/" + version + "/workbench@" + version + "#/Repository.pkl"
+		contract, err := ReleasedContract(module)
+		if err != nil {
+			t.Fatal(err)
+		}
+		patterns := exactResourcePatterns(contract.packageResources...)
+		want := "https://github.com/phosphorco/workbench-go/releases/download/" + version + "/workbench@" + version + ".zip"
+		if !matchesAny(patterns, want) {
+			t.Fatalf("missing exact transport %s", want)
+		}
+		other := "0.9.0"
+		if version == other {
+			other = "0.10.0"
+		}
+		if matchesAny(patterns, "https://github.com/phosphorco/workbench-go/releases/download/"+other+"/workbench@"+other+".zip") {
+			t.Fatal("transport granted another release")
+		}
+	}
+}
+
 func TestReleasedContractGrantsOnlyItsExactPackageTransport(t *testing.T) {
 	const module = "package://github.com/phosphorco/workbench-go/releases/download/0.1.0/workbench@0.1.0#/WorkbenchSubject.pkl"
 	contract, err := ReleasedContract(module)

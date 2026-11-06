@@ -316,6 +316,17 @@ func BuildDeclared(ctx context.Context, ownerRoot, name string, declaration Buil
 	}
 	preferred := declaration.Candidates[0]
 	preferred.Identity = candidateIdentity(preferred, 0)
+	var before string
+	if declaration.BuildInputBinding != nil {
+		var err error
+		before, err = candidateInputDigest(ctx, ownerRoot, preferred, declaration.InputDetection.Paths)
+		if err != nil {
+			return fmt.Errorf("fingerprint producer before build: %w", err)
+		}
+		if err := clearPlatformBinding(ownerRoot, preferred.Root, platformName); err != nil {
+			return fmt.Errorf("invalidate previous platform build: %w", err)
+		}
+	}
 	command := exec.CommandContext(ctx, declaration.BuildCommand.Executable, declaration.BuildCommand.Arguments...)
 	command.Dir = ownerRoot
 	command.Env = append(os.Environ(),
@@ -348,6 +359,16 @@ func BuildDeclared(ctx context.Context, ownerRoot, name string, declaration Buil
 			Reason: fmt.Sprintf("platform %q: %v", platformName, err), Remedy: declaration.Candidates[0].InvalidRemedy,
 		}
 	}
+	if declaration.BuildInputBinding != nil {
+		after, err := candidateInputDigest(ctx, ownerRoot, preferred, declaration.InputDetection.Paths)
+		if err != nil {
+			return fmt.Errorf("fingerprint producer after build: %w", err)
+		}
+		if before != after {
+			return &Refusal{Code: RefusalStaleProducerInputs, Buildable: name, Candidate: preferred.Identity, Reason: "producer inputs changed during build", Remedy: preferred.InvalidRemedy}
+		}
+	}
+	binding := platformBuildBinding{Platform: platformName, DeclarationIdentity: mustDeclarationIdentity(name, declaration), ProducerDigest: before}
 	for _, output := range outputs {
 		outputPath, err := existingPathWithin(candidateRoot, output.Path)
 		if err != nil {
@@ -364,6 +385,18 @@ func BuildDeclared(ctx context.Context, ownerRoot, name string, declaration Buil
 				Reason: fmt.Sprintf("platform %q output %q is not a non-empty regular file", platformName, output.Path),
 				Remedy: declaration.Candidates[0].InvalidRemedy,
 			}
+		}
+		if declaration.BuildInputBinding != nil {
+			fact, err := inspectOutput(outputPath, platformName, output)
+			if err != nil {
+				return err
+			}
+			binding.Outputs = append(binding.Outputs, fact)
+		}
+	}
+	if declaration.BuildInputBinding != nil {
+		if err := writePlatformBinding(candidateRoot, binding); err != nil {
+			return fmt.Errorf("record build inputs: %w", err)
 		}
 	}
 	return nil
@@ -431,6 +464,11 @@ func sealDeclared(ctx context.Context, ownerRoot, name string, declaration Build
 				return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 			}
 			manifest.Outputs = append(manifest.Outputs, output)
+		}
+	}
+	if declaration.BuildInputBinding != nil {
+		if err := validatePlatformBindings(absoluteCandidate, name, declaration, producerDigest, manifest.Outputs); err != nil {
+			return &Refusal{Code: RefusalCandidateInvalid, Buildable: name, Candidate: candidate.Identity, Reason: err.Error(), Remedy: candidate.InvalidRemedy}
 		}
 	}
 	encoded, err := json.MarshalIndent(manifest, "", "  ")
