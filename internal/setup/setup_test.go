@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -1852,7 +1853,7 @@ func TestCurrentSubjectSetupProjectsHostLocalBuildable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	declaration := `amends "workbench-contract:/0.11.0/Repository.pkl"
+	declaration := fmt.Sprintf(`amends "workbench-contract:/0.11.0/Repository.pkl"
 packages {
   ["@host-local/fixture"] { devDependencies { ["typescript"] = "5.9.3" } }
 }
@@ -1868,12 +1869,12 @@ buildables {
       new BuildableCandidate { root = ".ci-build/hello"; inputStrategy = "gitHeadTree"; invalidRemedy = "Restore it." }
     }
     platforms {
-      ["linux-x86_64"] = new BuildablePlatformOutput { os { "linux" }; arch { "amd64" }; path = "bin/hello" }
-      ["macos-arm64"] = new BuildablePlatformOutput { os { "darwin" }; arch { "arm64" }; path = "bin/mac" }
+      ["host-native"] = new BuildablePlatformOutput { os { %q }; arch { %q }; path = "bin/hello" }
+      ["fixture-foreign"] = new BuildablePlatformOutput { os { "fixture-foreign" }; arch { "fixture-foreign" }; path = "bin/foreign" }
     }
   }
 }
-`
+`, runtime.GOOS, runtime.GOARCH)
 	producer := `#!/bin/sh
 set -eu
 value=$(cat producer.txt)
@@ -1930,11 +1931,14 @@ printf '%s\n' '{"source":{},"capabilities":[]}' > "$WORKBENCH_BUILDABLE_CANDIDAT
 			if !ok || projection.SchemaDigest != buildable.ProjectionSchemaDigest || entry.Declaration.LocalExecution == nil || *entry.Declaration.LocalExecution != "host-observed-v1" {
 				t.Fatalf("setup projection = %#v", projection)
 			}
+			if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+				t.Skip("fixture executes a Unix shell script")
+			}
 			owner := filepath.Join(workbench, filepath.FromSlash(entry.Owner.RepositoryPath))
-			if err := buildable.BuildDeclared(t.Context(), owner, "hello", entry.Declaration, "linux-x86_64"); err != nil {
+			if err := buildable.BuildDeclared(t.Context(), owner, "hello", entry.Declaration, "host-native"); err != nil {
 				t.Fatal(err)
 			}
-			resolved, err := buildable.ResolvePlatform(t.Context(), workbench, "hello", "linux-x86_64")
+			resolved, err := buildable.ResolvePlatform(t.Context(), workbench, "hello", "host-native")
 			if err != nil {
 				t.Fatal(err)
 			}

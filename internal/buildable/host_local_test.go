@@ -5,12 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/phosphorco/workbench-go/internal/buildable"
 )
@@ -85,6 +88,101 @@ func TestHostLocalObservedExecutionAndCoverage(t *testing.T) {
 	if result.Candidate != "local" || result.Platform != "linux-x86_64" || !containsString(result.Capabilities, "greeting-v1") {
 		t.Fatalf("resolution = %#v", result)
 	}
+}
+
+func TestHostLocalRejectsDescriptorFIFOWithoutBlocking(t *testing.T) {
+	if root := os.Getenv("WORKBENCH_FIFO_TEST_ROOT"); root != "" {
+		var declaration buildable.Buildable
+		if err := json.Unmarshal([]byte(os.Getenv("WORKBENCH_FIFO_TEST_DECLARATION")), &declaration); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintln(os.Stdout, "fifo-admission-started")
+		_, err := buildable.ResolveDeclaredPlatform(context.Background(), root, "hello", declaration, "linux-x86_64")
+		var refusal *buildable.Refusal
+		if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid || !strings.Contains(refusal.Reason, "regular file") {
+			t.Fatalf("FIFO refusal = %v", err)
+		}
+		return
+	}
+	mkfifo, err := exec.LookPath("mkfifo")
+	if err != nil {
+		t.Skip("mkfifo unavailable")
+	}
+	root, declaration := hostLocalFixture(t)
+	hostResolve(t, root, declaration)
+	descriptor := filepath.Join(root, ".local-build/hello", buildable.SourceDescriptorFilename)
+	if err := os.Remove(descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(mkfifo, descriptor).CombinedOutput(); err != nil {
+		t.Fatalf("create FIFO: %s: %v", output, err)
+	}
+	info, err := os.Lstat(descriptor)
+	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("descriptor is not a FIFO: %v, %v", info, err)
+	}
+	encoded, err := json.Marshal(declaration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "-test.run=^TestHostLocalRejectsDescriptorFIFOWithoutBlocking$")
+	command.Env = append(os.Environ(), "WORKBENCH_FIFO_TEST_ROOT="+root, "WORKBENCH_FIFO_TEST_DECLARATION="+string(encoded))
+	output, err := command.CombinedOutput()
+	if !strings.Contains(string(output), "fifo-admission-started") {
+		t.Fatalf("child did not reach FIFO admission: %q, %v", output, err)
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("FIFO admission blocked until child timeout: %q", output)
+	}
+	if err != nil {
+		t.Fatalf("FIFO admission did not refuse correctly: %q, %v", output, err)
+	}
+}
+
+func TestDescriptorSymlinkCompatibility(t *testing.T) {
+	t.Run("legacy confined descriptor remains valid", func(t *testing.T) {
+		_, root := fixtureRepository(t)
+		declaration := helloDeclaration()
+		declaration.BuildCommand = buildable.BuildCommand{Executable: "true"}
+		writeUnsealedCandidate(t, root, ".local-build/hello", "legacy")
+		candidate := filepath.Join(root, ".local-build/hello")
+		descriptor := filepath.Join(candidate, buildable.SourceDescriptorFilename)
+		if err := os.Rename(descriptor, filepath.Join(candidate, "source.json")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("source.json", descriptor); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		if err := buildable.BuildDeclared(context.Background(), root, "hello", declaration, "linux-x86_64"); err != nil {
+			t.Fatalf("legacy symlink build: %v", err)
+		}
+		if err := buildable.SealDeclared(context.Background(), root, "hello", declaration, ".local-build/hello"); err != nil {
+			t.Fatalf("legacy symlink seal: %v", err)
+		}
+	})
+	t.Run("host-local descriptor symlink refuses", func(t *testing.T) {
+		root, declaration := hostLocalFixture(t)
+		hostResolve(t, root, declaration)
+		candidate := filepath.Join(root, ".local-build/hello")
+		descriptor := filepath.Join(candidate, buildable.SourceDescriptorFilename)
+		if err := os.Rename(descriptor, filepath.Join(candidate, "source.json")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("source.json", descriptor); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		_, err := buildable.ResolveDeclaredPlatform(context.Background(), root, "hello", declaration, "linux-x86_64")
+		var refusal *buildable.Refusal
+		if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid || !strings.Contains(refusal.Reason, "regular file") {
+			t.Fatalf("host-local symlink refusal = %v", err)
+		}
+	})
 }
 
 func TestHostLocalRefusesAlterations(t *testing.T) {

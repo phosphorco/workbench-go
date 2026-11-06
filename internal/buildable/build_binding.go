@@ -115,12 +115,16 @@ func readPlatformBinding(root, platform string) (platformBuildBinding, error) {
 func validatePlatformBindings(root, name string, declaration Buildable, digest string, outputs []artifactOutput) error {
 	var sourceDigest string
 	if declaration.LocalExecution != nil {
-		var err error
-		sourceDigest, err = sourceDescriptorDigest(root)
+		descriptor, err := readSourceDescriptor(root, declaration)
 		if err != nil {
 			return err
 		}
+		sourceDigest = descriptor.digest
 	}
+	return validatePlatformBindingsWithDescriptor(root, name, declaration, digest, outputs, sourceDigest)
+}
+
+func validatePlatformBindingsWithDescriptor(root, name string, declaration Buildable, digest string, outputs []artifactOutput, sourceDigest string) error {
 	byKey := make(map[string]artifactOutput, len(outputs))
 	for _, output := range outputs {
 		byKey[outputKey(output.Platform, output.Path)] = output
@@ -159,23 +163,6 @@ func validatePlatformBindings(root, name string, declaration Buildable, digest s
 	return nil
 }
 
-func sourceDescriptorDigest(root string) (string, error) {
-	path := filepath.Join(root, SourceDescriptorFilename)
-	info, err := os.Lstat(path)
-	if err != nil {
-		return "", fmt.Errorf("inspect source descriptor: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", errors.New("source descriptor is not a regular file")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read source descriptor: %w", err)
-	}
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:]), nil
-}
-
 func verifyHostLocal(ctx context.Context, root, name string, declaration Buildable, candidate Candidate, platformName string) (candidateVerification, RefusalCode, error) {
 	invalid := func(err error) (candidateVerification, RefusalCode, error) {
 		return candidateVerification{}, RefusalCandidateInvalid, err
@@ -192,10 +179,6 @@ func verifyHostLocal(ctx context.Context, root, name string, declaration Buildab
 	if err != nil {
 		return invalid(err)
 	}
-	descriptorDigest, err := sourceDescriptorDigest(candidateRoot)
-	if err != nil {
-		return invalid(err)
-	}
 	binding, err := readPlatformBinding(candidateRoot, platformName)
 	if err != nil {
 		return invalid(fmt.Errorf("platform %q build binding unavailable: %w", platformName, err))
@@ -207,7 +190,7 @@ func verifyHostLocal(ctx context.Context, root, name string, declaration Buildab
 	if binding.DeclarationIdentity != mustDeclarationIdentity(name, declaration) || binding.ProducerDigest != currentDigest {
 		return candidateVerification{}, RefusalStaleProducerInputs, errors.New("host-local build binding has different producer inputs or declaration")
 	}
-	if binding.SourceDigest == "" || binding.SourceDigest != descriptorDigest {
+	if binding.SourceDigest == "" || binding.SourceDigest != descriptor.digest {
 		return invalid(errors.New("host-local source descriptor differs from build"))
 	}
 	declared, err := platform.outputs()
