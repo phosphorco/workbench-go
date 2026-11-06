@@ -20,6 +20,16 @@ on:
         description: JSON array of platform/runner objects; runner policy stays caller-owned.
         required: true
         type: string
+      producer-prepare-interpreter:
+        description: Optional explicit producer preparation interpreter, python3 or bash.
+        required: false
+        type: string
+        default: ""
+      producer-prepare-script:
+        description: Optional checkout-relative producer preparation script.
+        required: false
+        type: string
+        default: ""
       integration-mode:
         description: pull-request requires callers to make the promotion-pr-verify job a required check with strict up-to-date pull-request protection; direct-push requires an explicit bypass grant.
         required: false
@@ -71,6 +81,29 @@ jobs:
           version: 2026.8.12
           install: false
           cache: false
+
+      - name: Prepare producer explicitly
+        if: inputs.producer-prepare-interpreter != '' || inputs.producer-prepare-script != ''
+        env:
+          PREPARE_INTERPRETER: ${{ inputs.producer-prepare-interpreter }}
+          PREPARE_SCRIPT: ${{ inputs.producer-prepare-script }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+
+          interpreter = os.environ["PREPARE_INTERPRETER"]
+          path = Path(os.environ["PREPARE_SCRIPT"])
+          if interpreter not in ("python3", "bash") or path.is_absolute() or not path.parts or any(part in (".", "..") for part in path.parts):
+              raise SystemExit("invalid producer preparation command")
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          script = root / path
+          if script.resolve(strict=True) != script or not script.is_file():
+              raise SystemExit("producer preparation script must be a regular checkout file without symlinks")
+          subprocess.run([interpreter, str(script)], cwd=root, check=True)
+          PY
 
       - name: Build declared platform into the local candidate
         shell: bash
