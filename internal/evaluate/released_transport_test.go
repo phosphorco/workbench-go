@@ -9,7 +9,7 @@ import (
 )
 
 func TestHistoricalAndCandidateRepositoryPackageTransportsStaySeparate(t *testing.T) {
-	for _, version := range []string{"0.9.0", "0.10.0"} {
+	for _, version := range []string{"0.9.0", "0.10.0", "0.11.0", "0.12.0"} {
 		module := "package://github.com/phosphorco/workbench-go/releases/download/" + version + "/workbench@" + version + "#/Repository.pkl"
 		contract, err := ReleasedContract(module)
 		if err != nil {

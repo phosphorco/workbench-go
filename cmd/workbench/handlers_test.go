@@ -431,8 +431,8 @@ func TestCommitPlanContractsMatchTheExactSubjectRelease(t *testing.T) {
 
 func TestContractReleaseCoordinatesPreserveHistoricalIdentities(t *testing.T) {
 	for _, fixture := range []struct{ packageVersion, release string }{
-		// 0.11.0 is a source candidate; this does not assert it has been published.
-		{currentContractVersion, "0.11.0"}, {"0.9.0", "0.9.0"}, {"0.8.0", "0.8.0"}, {"0.6.1", "0.6.2"}, {"0.6.0", "0.6.0"},
+		// 0.12.0 is a source candidate; this does not assert it has been published.
+		{currentContractVersion, "0.12.0"}, {"0.11.0", "0.11.0"}, {"0.9.0", "0.9.0"}, {"0.8.0", "0.8.0"}, {"0.6.1", "0.6.2"}, {"0.6.0", "0.6.0"},
 	} {
 		for _, filename := range []string{"Repository.pkl", "WorkbenchSubject.pkl", "WorkbenchCommitPlan.pkl", "WorkbenchSnapshot.pkl"} {
 			want := "package://github.com/phosphorco/workbench-go/releases/download/" + fixture.release + "/workbench@" + fixture.packageVersion + "#/" + filename

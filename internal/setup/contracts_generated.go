@@ -122,6 +122,7 @@ class Buildable {
   inputDetection: GitHeadTreeInputDetection
   buildCommand: BuildCommand
   buildInputBinding: "observed-v1"? = null
+  localExecution: "host-observed-v1"? = null
   /// Optional repository-owned composition proof invoked only by the explicit
   /// buildable verify command.
   verificationCommand: BuildCommand? = null
@@ -249,6 +250,7 @@ class Buildable {
   inputDetection: GitHeadTreeInputDetection
   buildCommand: BuildCommand
   buildInputBinding: "observed-v1"? = null
+  localExecution: "host-observed-v1"? = null
   /// Optional repository-owned composition proof invoked only by the explicit
   /// buildable verify command.
   verificationCommand: BuildCommand? = null

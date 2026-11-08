@@ -729,6 +729,17 @@ Declared verification receives the name and candidate root. A dirty local
 producer is usable after sealing because `gitWorktree` fingerprints its actual
 input contents, but it cannot pass a committed-revision freshness proof.
 
+The **0.12.0 source candidate is unpublished**. Its buildable declaration can
+opt into current-host local execution with `buildInputBinding = "observed-v1"`
+and `localExecution = "host-observed-v1"`. A validated unsealed preferred
+local candidate can then be used on the actual host after a build. Admission
+checks the observed declaration, producer inputs, source descriptor and output
+bytes again; it does not authenticate provenance, guarantee an immutable
+snapshot, or detect changes reversed between checks. Ignored or undeclared
+inputs are outside the fingerprint. Full sealing and promotion still require
+every declared platform; `materialize` still requires a complete sealed
+candidate. A present invalid local candidate refuses before fallback.
+
 ## Skills follow the repository closure
 
 Skills have two independent properties:

@@ -15,8 +15,8 @@ func TestRuntimeLockPinsClosedPlatformAndLicenseInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRuntimeLock(): %v", err)
 	}
-	if lock.WorkbenchVersion != "0.11.0" {
-		t.Fatalf("WorkbenchVersion = %q, want 0.11.0", lock.WorkbenchVersion)
+	if lock.WorkbenchVersion != "0.12.0" {
+		t.Fatalf("WorkbenchVersion = %q, want 0.12.0", lock.WorkbenchVersion)
 	}
 	wantDependencies := map[string]string{
 		"go":         "1.26.6",

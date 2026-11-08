@@ -261,8 +261,8 @@ func TestSelfSkillExportUsesContractCoordinates(t *testing.T) {
 		flags []string
 		uri   string
 	}{
-		// The 0.11.0 default is a source candidate, not a publication claim.
-		{nil, "releases/download/0.11.0/workbench@0.11.0"},
+		// The 0.12.0 default is a source candidate, not a publication claim.
+		{nil, "releases/download/0.12.0/workbench@0.12.0"},
 		{[]string{"--pkl-package-version", "0.9.0"}, "releases/download/0.9.0/workbench@0.9.0"},
 		{[]string{"--pkl-package-version", "0.6.1"}, "releases/download/0.6.2/workbench@0.6.1"},
 	} {
