@@ -1066,7 +1066,7 @@ func verifyCandidate(ctx context.Context, root, name string, buildable Buildable
 		if manifest.DeclarationIdentity == "" {
 			return candidateVerification{}, RefusalCandidateInvalid, errors.New("bound candidate requires declaration identity")
 		}
-		if err := validatePlatformBindings(candidateRoot, name, buildable, currentDigest, manifest.Outputs); err != nil {
+		if err := validatePlatformBindings(candidateRoot, name, buildable, currentDigest, manifest); err != nil {
 			return candidateVerification{}, RefusalCandidateInvalid, err
 		}
 	}

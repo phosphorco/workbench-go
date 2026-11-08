@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 )
 
 const bindingDirectory = ".workbench-build-inputs"
@@ -112,16 +114,19 @@ func readPlatformBinding(root, platform string) (platformBuildBinding, error) {
 	return binding, nil
 }
 
-func validatePlatformBindings(root, name string, declaration Buildable, digest string, outputs []artifactOutput) error {
+func validatePlatformBindings(root, name string, declaration Buildable, digest string, manifest artifactManifest) error {
 	var sourceDigest string
 	if declaration.LocalExecution != nil {
 		descriptor, err := readSourceDescriptor(root, declaration)
 		if err != nil {
 			return err
 		}
+		if !maps.Equal(manifest.Source, descriptor.Source) || !slices.Equal(manifest.Capabilities, descriptor.Capabilities) {
+			return errors.New("sealed manifest source or capabilities differ from the bound source descriptor")
+		}
 		sourceDigest = descriptor.digest
 	}
-	return validatePlatformBindingsWithDescriptor(root, name, declaration, digest, outputs, sourceDigest)
+	return validatePlatformBindingsWithDescriptor(root, name, declaration, digest, manifest.Outputs, sourceDigest)
 }
 
 func validatePlatformBindingsWithDescriptor(root, name string, declaration Buildable, digest string, outputs []artifactOutput, sourceDigest string) error {
@@ -167,8 +172,8 @@ func verifyHostLocal(ctx context.Context, root, name string, declaration Buildab
 	invalid := func(err error) (candidateVerification, RefusalCode, error) {
 		return candidateVerification{}, RefusalCandidateInvalid, err
 	}
-	host, platform, err := declaration.platform(runtime.GOOS, runtime.GOARCH)
-	if err != nil || host != platformName {
+	platform, exists := declaration.Platforms[platformName]
+	if !exists || !contains(platform.OS, runtime.GOOS) || !contains(platform.Arch, runtime.GOARCH) {
 		return invalid(errors.New("host-local candidate is only valid for the current host platform"))
 	}
 	candidateRoot, err := existingPathWithin(root, candidate.Root)

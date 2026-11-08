@@ -559,3 +559,113 @@ func TestHostLocalWrongHostRejectsValidForeignFragment(t *testing.T) {
 		t.Fatal("foreign host refusal changed fixture bytes")
 	}
 }
+
+func TestHostLocalExplicitSecondHostPlatform(t *testing.T) {
+	root, declaration := hostLocalFixture(t)
+	alias := declaration.Platforms["linux-x86_64"]
+	alias.Path = "bin/alias"
+	declaration.Platforms["z-linux-alias"] = alias
+	declaration.BuildCommand = buildable.BuildCommand{Executable: "sh", Arguments: []string{"-c", `printf '#!/bin/sh\necho host\n' > "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin/alias"; chmod +x "$WORKBENCH_BUILDABLE_CANDIDATE_ROOT/bin/alias"`}}
+	if err := buildable.BuildDeclared(context.Background(), root, "hello", declaration, "z-linux-alias"); err != nil {
+		t.Fatalf("build selected host alias: %v", err)
+	}
+	result, err := buildable.ResolveDeclaredPlatform(context.Background(), root, "hello", declaration, "z-linux-alias")
+	if err != nil {
+		t.Fatalf("resolve selected host alias: %v", err)
+	}
+	if result.Platform != "z-linux-alias" || result.Path == "" || result.LocalExecution != "host-observed-v1" {
+		t.Fatalf("selected host alias result = %#v", result)
+	}
+	if output, err := exec.Command(result.Path).Output(); err != nil || string(output) != "host\n" {
+		t.Fatalf("selected host alias output = %q, %v", output, err)
+	}
+	_, err = buildable.ResolveDeclaredPlatform(context.Background(), root, "hello", declaration, "macos-arm64")
+	var refusal *buildable.Refusal
+	if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid {
+		t.Fatalf("foreign platform refusal = %v", err)
+	}
+}
+
+func TestSealedHostLocalManifestMetadataMatchesBoundDescriptor(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("fixture executes linux amd64")
+	}
+	for _, mode := range []string{"host", "observed", "unbound"} {
+		for _, field := range []string{"source", "capability"} {
+			t.Run(mode+"/"+field, func(t *testing.T) {
+				_, root := fixtureRepository(t)
+				declaration := helloDeclaration()
+				declaration.BuildCommand = buildable.BuildCommand{Executable: "true"}
+				if mode != "unbound" {
+					binding := "observed-v1"
+					declaration.BuildInputBinding = &binding
+				}
+				if mode == "host" {
+					local := "host-observed-v1"
+					declaration.LocalExecution = &local
+				}
+				writeUnsealedCandidate(t, root, ".local-build/hello", "sealed")
+				if err := buildable.BuildDeclared(context.Background(), root, "hello", declaration, "linux-x86_64"); err != nil {
+					t.Fatalf("build: %v", err)
+				}
+				if err := buildable.SealDeclared(context.Background(), root, "hello", declaration, ".local-build/hello"); err != nil {
+					t.Fatalf("seal: %v", err)
+				}
+				before, err := buildable.ResolveDeclaredPlatform(context.Background(), root, "hello", declaration, "linux-x86_64")
+				if err != nil || before.Source["version"] != "1.0.0" || !containsString(before.Capabilities, "greeting-v1") {
+					t.Fatalf("valid sealed control = %#v, %v", before, err)
+				}
+				candidate := filepath.Join(root, ".local-build/hello")
+				protected := []string{filepath.Join(root, "producer.txt"), filepath.Join(candidate, "bin/hello"), filepath.Join(candidate, buildable.SourceDescriptorFilename)}
+				if mode != "unbound" {
+					digest := sha256.Sum256([]byte("linux-x86_64"))
+					protected = append(protected, filepath.Join(candidate, ".workbench-build-inputs", hex.EncodeToString(digest[:])+".json"))
+				}
+				unchanged := make(map[string]string)
+				for _, path := range protected {
+					data, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					unchanged[path] = string(data)
+				}
+				manifestPath := filepath.Join(candidate, "manifest.json")
+				data, err := os.ReadFile(manifestPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var manifest map[string]any
+				if err := json.Unmarshal(data, &manifest); err != nil {
+					t.Fatal(err)
+				}
+				if field == "source" {
+					manifest["source"].(map[string]any)["version"] = "2.0.0"
+				} else {
+					manifest["capabilities"] = append(manifest["capabilities"].([]any), "optional-extra")
+				}
+				data, err = json.Marshal(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				write(t, manifestPath, string(data)+"\n", 0o644)
+				for path, want := range unchanged {
+					got, err := os.ReadFile(path)
+					if err != nil || string(got) != want {
+						t.Fatalf("protected input changed: %s: %v", path, err)
+					}
+				}
+				got, err := buildable.ResolveDeclaredPlatform(context.Background(), root, "hello", declaration, "linux-x86_64")
+				if mode == "host" {
+					var refusal *buildable.Refusal
+					if !errors.As(err, &refusal) || refusal.Code != buildable.RefusalCandidateInvalid {
+						t.Fatalf("altered sealed %s accepted: result=%#v error=%v", field, got, err)
+					}
+				} else if err != nil {
+					t.Fatalf("legacy %s metadata should remain admitted: %v", mode, err)
+				} else if field == "source" && got.Source["version"] != "2.0.0" || field == "capability" && !containsString(got.Capabilities, "optional-extra") {
+					t.Fatalf("legacy result did not retain changed metadata: %#v", got)
+				}
+			})
+		}
+	}
+}
