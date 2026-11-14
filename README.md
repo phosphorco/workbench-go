@@ -46,7 +46,7 @@ agents through a versioned control protocol.
 
 | Surface | Status |
 | --- | --- |
-| Binary `0.11.0`; Pkl resource contracts `0.11.0` | Released |
+| Binary `0.12.1`; Pkl resource contracts `0.12.0` | Released |
 | `setup`, `check`, commit saga, snapshots, prune, skills, and buildables described below | Released |
 | Structured status, Environment Index, explain/ownership queries, explicit reconciliation plans, receipts, and scoped verification | Proposed and sequenced |
 
@@ -78,11 +78,12 @@ components does not relicense them as Workbench code.
 The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
 terms together and is included unchanged in every platform archive.
 
-Install the pinned `0.11.0` release. It carries the `0.11.0` Pkl contract,
-including actor identification and work coordination for task plans.
+Install the pinned `0.12.1` release. It carries the unchanged `0.12.0` Pkl
+contract and [repairs bounded context-history rotation](docs/release-0.12.1.md)
+without clearing retained evidence or changing context delivery.
 
 ```sh
-mise use -g github:phosphorco/workbench-go@0.11.0
+mise use -g github:phosphorco/workbench-go@0.12.1
 workbench version
 ```
 
@@ -729,7 +730,7 @@ Declared verification receives the name and candidate root. A dirty local
 producer is usable after sealing because `gitWorktree` fingerprints its actual
 input contents, but it cannot pass a committed-revision freshness proof.
 
-The **0.12.0 source candidate is unpublished**. Its buildable declaration can
+The released **0.12.0 contract**, also carried by binary 0.12.1, can
 opt into current-host local execution with `buildInputBinding = "observed-v1"`
 and `localExecution = "host-observed-v1"`. A validated unsealed preferred
 local candidate can then be used on the actual host after a build. Admission
