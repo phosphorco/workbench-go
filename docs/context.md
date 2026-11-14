@@ -290,6 +290,13 @@ queries have bounded record, page-byte, and scan-byte budgets. A bare
 configured cache remains usable; pass explicit `--limit`, `--max-bytes`, or
 `--max-scan-bytes` only when a smaller bounded page is desired.
 
+The shared pool also has a finite filesystem-entry bound. History rotation
+must reserve space for its retained-range state as well as the incoming block
+before eviction stops; byte headroom alone is not sufficient. Rotation removes
+only its oldest owned trace blocks, preserves unrelated snapshots, and keeps
+the retained generation and record identities across reopening. An upgrade
+does not clear history or erase already reported gaps.
+
 Pending offers, receipts, and suppression are runtime delivery state. They are
 not made durable by the explanation cache and may be lost on runtime restart;
 inspection discloses the resulting generation or evidence gap. Cache failure

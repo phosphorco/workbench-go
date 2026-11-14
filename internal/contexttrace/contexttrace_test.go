@@ -329,8 +329,8 @@ func TestFirstRotationAccountsForStateAndIncomingBlock(t *testing.T) {
 	if got := reopened.Stats().DiskBytes; got > capBytes {
 		t.Fatalf("two measured blocks already exceed exact cap: %d > %d", got, capBytes)
 	}
-	if _, err := reopened.Append(Record{Kind: KindObservation, Content: []byte("same-size")}); !errors.Is(err, ErrDiskCap) {
-		t.Fatalf("third append exceeded exact cap instead of being rejected: %v", err)
+	if _, err := reopened.Append(Record{Kind: KindObservation, Content: []byte("same-size")}); err != nil {
+		t.Fatalf("rotation did not make room for its state and incoming block: %v", err)
 	}
 	if got := reopened.Stats().DiskBytes; got > capBytes || directoryUsage(t, directory) > capBytes {
 		t.Fatalf("first-rotation accounting exceeded exact cap: stats=%d dir=%d cap=%d", got, directoryUsage(t, directory), capBytes)
@@ -361,6 +361,79 @@ func TestLiveFlushEnforcesMaxBlocksAndReportsRotation(t *testing.T) {
 	}
 	if usage := directoryUsage(t, directory); usage > 32_000 {
 		t.Fatalf("live block rotation exceeded disk cap: %d > %d", usage, 32_000)
+	}
+}
+
+func TestRotationAtSharedEntryLimitSurvivesReopen(t *testing.T) {
+	root := t.TempDir()
+	options := testOptions()
+	options.MaxBlockRecords = 1
+	const maxEntries = 12
+	pool, err := contextcache.Open(root, contextcache.Options{MaxScanEntries: maxEntries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy(1_000_000)
+	key := snapshotKey(t, "unrelated-retained-snapshot")
+	snapshot := []byte("rotation must not evict this snapshot")
+	if err := pool.SnapshotPublish(context.Background(), policy, key, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	var previousID uint64
+	var generation uint64
+	for cycle := 0; cycle < 3; cycle++ {
+		store, err := Open(context.Background(), options, pool, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cycle == 0 {
+			generation = store.Generation()
+		} else if store.Generation() != generation {
+			t.Fatal("reopen changed the retained generation")
+		}
+		for index := 0; index < 20; index++ {
+			if _, err := store.Append(Record{Kind: KindConfirmed, Scope: "entry-boundary", Content: []byte("retained receipt")}); err != nil {
+				t.Fatalf("cycle %d append %d: %v", cycle, index, err)
+			}
+		}
+		before, err := store.Query(context.Background(), Query{Scope: "entry-boundary", Limit: 32})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(before.Records) == 0 || !hasGap(before.Gaps, GapRotated) || hasGap(before.Gaps, GapDropped) {
+			t.Fatalf("rotation must retain recent records and report only actual eviction: %+v", before)
+		}
+		lastID := before.Records[len(before.Records)-1].ID
+		if lastID <= previousID {
+			t.Fatalf("record identity reused after reopen: %d <= %d", lastID, previousID)
+		}
+		previousID = lastID
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := Open(context.Background(), options, pool, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, err := reopened.Query(context.Background(), Query{Scope: "entry-boundary", Limit: 32})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.EqualFunc(before.Records, after.Records, func(a, b Record) bool {
+			return a.ID == b.ID && a.Generation == b.Generation && a.ContentDigest == b.ContentDigest
+		}) {
+			t.Fatal("reopen changed retained receipt identities or content")
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatal(err)
+		}
+		got, hit, err := pool.SnapshotRead(context.Background(), key)
+		if err != nil || !hit || !bytes.Equal(got, snapshot) {
+			t.Fatalf("trace rotation damaged unrelated snapshot: hit=%t err=%v", hit, err)
+		}
+		if usage := poolUsage(t, pool, policy); usage.Entries > maxEntries || usage.Bytes > policy.CapBytes {
+			t.Fatalf("rotation exceeded shared capacity: %+v", usage)
+		}
 	}
 }
 

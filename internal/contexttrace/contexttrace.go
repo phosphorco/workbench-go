@@ -1404,10 +1404,17 @@ func (store *Store) makeRoomLocked(lease *contextcache.Mutation, additional int6
 	}
 	rotated := false
 	for {
-		admissionErr := lease.EnsureFits(contextcache.Admission{
+		admission := contextcache.Admission{
 			TempBytes:   additional,
 			TempEntries: 1,
-		})
+		}
+		if rotated {
+			// Once rotation changes the retained range, admit its durable state
+			// replacement together with the incoming block before ending eviction.
+			admission.TempBytes += stateFileSize
+			admission.TempEntries++
+		}
+		admissionErr := lease.EnsureFits(admission)
 		if len(store.blocks) < store.options.MaxBlocks && admissionErr == nil {
 			break
 		}
@@ -1436,15 +1443,6 @@ func (store *Store) makeRoomLocked(lease *contextcache.Mutation, additional int6
 		}
 	}
 	if rotated {
-		// Rotation changes the retained range, so the state replacement and the
-		// incoming block must fit together while both temporary files exist.
-		state := encodeState(stateDisk{Generation: store.generation, RotatedThrough: store.rotatedThrough})
-		if err := lease.EnsureFits(contextcache.Admission{
-			TempBytes:   int64(len(state)) + additional,
-			TempEntries: 2,
-		}); err != nil {
-			return store.mapCapacityError(err)
-		}
 		if err := store.writeStateLocked(lease); err != nil {
 			return err
 		}
