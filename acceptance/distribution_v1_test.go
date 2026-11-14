@@ -161,7 +161,7 @@ func TestReleaseAcceptanceSelectsPublishedCoordinatesAndObservedBinding(t *testi
 	for _, marker := range []string{
 		"published_version:", "contract_version:", "default: 0.9.1", "default: 0.9.0",
 		"PUBLISHED_VERSION: ${{ inputs.published_version }}", "CONTRACT_VERSION: ${{ inputs.contract_version }}",
-		"0.9.1/0.9.0|0.10.0/0.10.0|0.11.0/0.11.0|0.12.0/0.12.0", "unsupported published binary and contract pair",
+		"0.9.1/0.9.0|0.10.0/0.10.0|0.11.0/0.11.0|0.12.0/0.12.0|0.12.1/0.12.0", "unsupported published binary and contract pair",
 		"EXPECTED_PUBLISHED_REVISION: ${{ inputs.published_revision }}",
 		"if: (inputs.published_version == '0.10.0' || inputs.published_version == '0.11.0') && matrix.runner == 'ubuntu-24.04'",
 		"releases/download/${{ inputs.contract_version }}/workbench@${{ inputs.contract_version }}#/Repository.pkl",
@@ -182,12 +182,12 @@ func TestReleaseAcceptanceSelectsPublishedCoordinatesAndObservedBinding(t *testi
 func TestReleaseWorkflowBuildsCompleteCandidateBeforeTagOnlyPublication(t *testing.T) {
 	workflow := readFile(t, filepath.Join("..", ".github", "workflows", "release.yml"))
 	for _, marker := range []string{
-		`tags: ["0.12.0"]`,
+		`tags: ["0.12.1"]`,
 		"workflow_dispatch:",
 		"release/acquire-pkl.sh",
 		`case "$PKL_EXECUTABLE" in /*)`,
 		"published_revision: ${{ github.sha }}",
-		`published_version: "0.12.0"`, `contract_version: "0.12.0"`,
+		`published_version: "0.12.1"`, `contract_version: "0.12.0"`,
 		"if: github.event_name == 'push' && github.ref_type == 'tag'",
 		"needs: [binaries, contracts]",
 		"candidate-checks:",

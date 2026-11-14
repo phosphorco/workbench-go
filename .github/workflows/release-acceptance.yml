@@ -73,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$PUBLISHED_VERSION/$CONTRACT_VERSION" in
-            0.9.1/0.9.0|0.10.0/0.10.0|0.11.0/0.11.0|0.12.0/0.12.0) ;;
+            0.9.1/0.9.0|0.10.0/0.10.0|0.11.0/0.11.0|0.12.0/0.12.0|0.12.1/0.12.0) ;;
             *) echo "unsupported published binary and contract pair" >&2; exit 1 ;;
           esac
           [[ "$EXPECTED_PUBLISHED_REVISION" =~ ^[0-9a-f]{40}$ ]]
@@ -201,7 +201,7 @@ jobs:
           fi
 
       - name: Exercise the published host-local build binding
-        if: inputs.published_version == '0.12.0' && matrix.runner == 'ubuntu-24.04'
+        if: inputs.contract_version == '0.12.0' && matrix.runner == 'ubuntu-24.04'
         run: |
           set -euo pipefail
           export MISE_DATA_DIR="$RUNNER_TEMP/planner-mise-data"

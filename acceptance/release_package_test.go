@@ -53,7 +53,7 @@ func TestCandidateContractAndPublishedReleaseCoordinates(t *testing.T) {
 
 	workflow := read(filepath.Join("..", ".github", "workflows", "release.yml"))
 	for _, marker := range []string{
-		"WORKBENCH_VERSION: 0.12.0",
+		"WORKBENCH_VERSION: 0.12.1",
 		"WORKBENCH_CONTRACT_VERSION: 0.12.0",
 		"\"$PKL_EXECUTABLE\" project package --skip-publish-check --output-path contracts .",
 		"contracts/workbench@0.12.0.zip",
