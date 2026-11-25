@@ -1277,6 +1277,9 @@ func (runtime *Runtime) acquireProvider(ctx context.Context, config contextapi.P
 		maxProcesses = defaultProviderProcesses
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, func() {}, err
+		}
 		runtime.mu.Lock()
 		state := runtime.providers[key]
 		if state == nil {
@@ -1348,6 +1351,15 @@ func (runtime *Runtime) acquireProvider(ctx context.Context, config contextapi.P
 				err = contextprovider.ErrProviderClosed
 			}
 			return nil, func() {}, err
+		}
+		if !state.client.Reusable() {
+			// Reap a dead stream before a later callback acquires a replacement.
+			// Keep its process charge until Close joins all operations/readers;
+			// the failed callback is never replayed and partition receipts survive.
+			state.closing = true
+			runtime.mu.Unlock()
+			_ = runtime.closeProviderState(state)
+			continue
 		}
 		state.users++
 		state.lastUsed = now

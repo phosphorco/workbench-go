@@ -394,6 +394,23 @@ func (c *Client) Stats() Stats {
 	return stats
 }
 
+// Reusable reports whether this client's process and transport can still accept
+// a new operation. Termination is visible before the asynchronous process reap.
+// A process may fail after this snapshot; that operation must still report its
+// own failure rather than replaying it on a replacement process.
+func (c *Client) Reusable() bool {
+	select {
+	case <-c.terminated:
+		return false
+	case <-c.waitDone:
+		return false
+	case <-c.closed:
+		return false
+	default:
+		return true
+	}
+}
+
 func (c *Client) roundTrip(ctx context.Context, method string, params any, result any) error {
 	if err := c.beginOperation(ctx); err != nil {
 		return err

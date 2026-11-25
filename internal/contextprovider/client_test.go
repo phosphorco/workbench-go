@@ -544,3 +544,54 @@ func TestClientCloseWithBackgroundBoundsIgnoredShutdown(t *testing.T) {
 		t.Fatalf("background close exceeded finite shutdown bound: %s", elapsed)
 	}
 }
+
+func TestClientReusableTracksFatalTransportAndProcessExit(t *testing.T) {
+	t.Run("deadline", func(t *testing.T) {
+		config, resource := testClientConfig(t, "ignore-contribute")
+		client, err := Start(context.Background(), config, resource, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close(context.Background())
+		if !client.Reusable() {
+			t.Fatal("new initialized provider is not reusable")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		if _, err := client.Contribute(ctx, testContributionRequest()); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("want deadline, got %v", err)
+		}
+		// This must not wait for cmd.Wait's asynchronous ProcessExited update.
+		if client.Reusable() {
+			t.Fatal("terminated transport remained reusable")
+		}
+		if err := client.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if client.Reusable() {
+			t.Fatal("closed provider remained reusable")
+		}
+	})
+	t.Run("unexpected-exit", func(t *testing.T) {
+		config, resource := testClientConfig(t, "normal")
+		client, err := Start(context.Background(), config, resource, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close(context.Background())
+		if _, err := client.Contribute(context.Background(), testContributionRequest()); err != nil {
+			t.Fatalf("lost actual final response: %v", err)
+		}
+		if err := client.cmd.Process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-client.waitDone:
+		case <-time.After(time.Second):
+			t.Fatal("child exit not reaped")
+		}
+		if client.Reusable() {
+			t.Fatal("reaped process remained reusable")
+		}
+	})
+}
