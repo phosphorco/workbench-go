@@ -80,6 +80,8 @@ func inPlaceCommitFixture(t *testing.T) (string, string, commandEnvironment) {
 	t.Setenv("GIT_CONFIG_VALUE_0", "git@github.com:phosphorco/mono.git")
 	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
 	runGit(t, base, "init", "-q", "-b", "main", root)
+	runGit(t, root, "config", "user.name", "Workbench In-Place Test")
+	runGit(t, root, "config", "user.email", "in-place@example.invalid")
 	runGit(t, root, "remote", "add", "origin", "git@github.com:phosphorco/mono.git")
 	writeInPlaceFile(t, filepath.Join(root, "workbench-subject.pkl"), "amends \"workbench-contract:/0.14.0/InPlaceSubject.pkl\"\n\nentrypoint = \"https://github.com/phosphorco/mono\"\n")
 	writeInPlaceFile(t, filepath.Join(root, "workbench.pkl"), commitInPlaceDeclaration)
