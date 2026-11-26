@@ -59,14 +59,14 @@ func specifiersBySource(imports []workspace.Import) map[string][]string {
 }
 
 // writeLayoutPackage writes one package whose files exercise every 0.13
-// observation rule. A Bun-unparseable ambient declaration and imports below
-// hidden, dependency and excluded directories would all be refused or
-// observed by the released walk.
+// observation rule. The released walk would refuse the shebang file and the
+// Bun-unparseable ambient declaration, and would observe the imports below
+// hidden, dependency and excluded directories.
 func writeLayoutPackage(t *testing.T, root string) {
 	t.Helper()
 	write(t, filepath.Join(root, "src", "index.ts"), "import { a } from \"@real/runtime\"\nexport const value = a\n")
 	write(t, filepath.Join(root, "src", "cli.ts"), "#!/usr/bin/env bun\n\nimport { b } from \"@real/shebang\"\nexport const cli = b\n")
-	write(t, filepath.Join(root, "src", "ambient.d.ts"), "import \"@false/ambient\"\nexport const modules: ReadonlyArray<string>\n")
+	write(t, filepath.Join(root, "src", "ambient.d.ts"), "import type { M } from \"@real/ambient\"\nexport const modules: ReadonlyArray<M>\n")
 	write(t, filepath.Join(root, "src", ".prototypes", "draft.ts"), "import \"@false/hidden-directory\"\n")
 	write(t, filepath.Join(root, "src", ".hidden.ts"), "import \"@false/hidden-file\"\n")
 	write(t, filepath.Join(root, "src", "node_modules", "dep", "index.ts"), "import \"@false/dependency\"\n")
@@ -88,6 +88,7 @@ func TestSourceImportsFollowTypeScriptIncludeSemantics(t *testing.T) {
 	want := map[string][]string{
 		"__tests__/unit.ts (dev)":      {"@real/tests-root"},
 		"src/__tests__/inner.ts (dev)": {"@real/src-tests"},
+		"src/ambient.d.ts":             {"@real/ambient"},
 		"src/cli.ts":                   {"@real/shebang"},
 		"src/index.ts":                 {"@real/runtime"},
 	}
@@ -124,55 +125,6 @@ func TestReleasedObservationStillWalksEverySourceFile(t *testing.T) {
 	}
 	if got := specifiersBySource(imports); !reflect.DeepEqual(got, want) {
 		t.Fatalf("released observation = %#v, want %#v", got, want)
-	}
-}
-
-func TestReleasedObservationAcceptsShebangFiles(t *testing.T) {
-	bun := requireBun(t)
-	root := t.TempDir()
-	write(t, filepath.Join(root, "src", "bin.ts"), "#!/usr/bin/env bun\nimport \"@real/shebang\"\n")
-	imports, err := sourceImports(context.Background(), root, []string{"src"}, nil, legacySourceObservation, bun)
-	if err != nil || len(imports) != 1 || imports[0].Specifier != "@real/shebang" || imports[0].Line != 2 {
-		t.Fatalf("shebang imports = %#v, %v", imports, err)
-	}
-	if got := string(withoutShebang([]byte("#!x\n"))); got != "//x\n" {
-		t.Fatalf("withoutShebang = %q", got)
-	}
-	original := []byte("#!x")
-	withoutShebang(original)
-	if string(original) != "#!x" {
-		t.Fatal("withoutShebang mutated the source it was given")
-	}
-}
-
-func TestDeclarationFilesBunCannotParseAreLeftUnobserved(t *testing.T) {
-	bun := requireBun(t)
-	root := t.TempDir()
-	// Valid ambient TypeScript that Bun parses as an implementation file and refuses.
-	write(t, filepath.Join(root, "src", "mounts.d.ts"), "export const modules: ReadonlyArray<Record<string, unknown>>\n")
-	if _, err := sourceImports(context.Background(), root, []string{"src"}, nil, legacySourceObservation, bun); err == nil || !strings.Contains(err.Error(), "must be initialized") {
-		t.Fatalf("released walk of an ambient declaration = %v", err)
-	}
-	imports, err := sourceImports(context.Background(), root, []string{"src"}, nil, typeScriptIncludeObservation, bun)
-	if err != nil || len(imports) != 0 {
-		t.Fatalf("0.13 walk of an ambient declaration = %#v, %v", imports, err)
-	}
-}
-
-func TestRuntimeBuiltinModulesComeFromThePinnedBun(t *testing.T) {
-	builtins, err := runtimeBuiltinModules(context.Background(), requireBun(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"bun", "fs", "fs/promises", "path", "child_process", "worker_threads"} {
-		if !builtins[name] {
-			t.Fatalf("built-ins lack %q: %v", name, builtins)
-		}
-	}
-	for _, name := range []string{"effect", "typescript", "@types/bun"} {
-		if builtins[name] {
-			t.Fatalf("package %q reported as a built-in", name)
-		}
 	}
 }
 
@@ -369,7 +321,7 @@ func TestInRepositoryScopesRefuseInconsistentDeclarations(t *testing.T) {
 		}, want: `declares scope "@beta", want "@alpha"`},
 		{name: "package also at root", prepare: func(t *testing.T, checkout string) {
 			write(t, filepath.Join(checkout, "pkg", "@alpha", "workbench.pkl"), scopeFixtureDeclaration)
-		}, root: map[string]contract.PackagePolicy{"@alpha/web": {Directory: "web"}}, want: `package "@alpha/web" is declared both by the repository workbench.pkl and by pkg/@alpha/workbench.pkl`},
+		}, root: map[string]contract.PackagePolicy{"@alpha/web": {Directory: "web"}}, want: `package "@alpha/web" is in listed scope @alpha; declare it in pkg/@alpha/workbench.pkl`},
 		{name: "repository contract", prepare: func(t *testing.T, checkout string) {
 			write(t, filepath.Join(checkout, "pkg", "@alpha", "workbench.pkl"), "amends \"workbench-contract:/0.13.0/Repository.pkl\"\n")
 		}, want: `must amend the PackageScopeRepository.pkl contract, not "Repository.pkl"`},
@@ -402,7 +354,7 @@ func TestInRepositoryScopesRefuseInconsistentDeclarations(t *testing.T) {
 func TestInRepositoryScopesRequireTheCurrentContract(t *testing.T) {
 	source := inRepositoryScopeSource(t, "0.12.0")
 	declaration := contract.Declaration{Shape: contract.ResourceShape{Kind: contract.RepositoryShape}, Scopes: []string{"@alpha"}}
-	if err := source.mergeInRepositoryScopes("phosphorco/mono", t.TempDir(), &declaration); err == nil || !strings.Contains(err.Error(), "require a 0.13.0 Repository declaration") {
+	if err := source.mergeInRepositoryScopes("phosphorco/mono", t.TempDir(), &declaration); err == nil || !strings.Contains(err.Error(), "require a 0.13.0 or later Repository declaration") {
 		t.Fatalf("0.12 scopes = %v", err)
 	}
 }

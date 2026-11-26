@@ -235,6 +235,8 @@ func clonePackagePolicies(source map[string]contract.PackagePolicy) map[string]c
 		policy.OptionalDependencies = cloneStringMap(policy.OptionalDependencies)
 		policy.Imports = cloneStringMap(policy.Imports)
 		policy.Exports = cloneStringMap(policy.Exports)
+		policy.SourceRoots = append([]string(nil), policy.SourceRoots...)
+		policy.SourceExcludes = append([]string(nil), policy.SourceExcludes...)
 		result[name] = policy
 	}
 	return result

@@ -17,7 +17,7 @@ import (
 // scopes, verbatim versions, and TypeScript-include-shaped observation.
 // Earlier versions keep their released observation byte for byte.
 func supportsRepositoryLayout(version string) bool {
-	return version == workbenchversion.CurrentContractVersion
+	return version == "0.13.0" || version == workbenchversion.CurrentContractVersion
 }
 
 // inRepositoryScopeDeclarationPath is the one place a Repository's scope is declared.
@@ -35,7 +35,14 @@ func (source *discoverySource) mergeInRepositoryScopes(github, checkout string, 
 		return nil
 	}
 	if declaration.Shape.Kind != contract.RepositoryShape || !supportsRepositoryLayout(source.version) {
-		return fmt.Errorf("repository %q: in-repository scopes require a %s Repository declaration", github, workbenchversion.CurrentContractVersion)
+		return fmt.Errorf("repository %q: in-repository scopes require a 0.13.0 or later Repository declaration", github)
+	}
+	for name := range declaration.Packages {
+		for _, scope := range declaration.Scopes {
+			if strings.HasPrefix(name, scope+"/") {
+				return fmt.Errorf("repository %q package %q is in listed scope %s; declare it in %s, not in the repository workbench.pkl", github, name, scope, inRepositoryScopeDeclarationPath(scope))
+			}
+		}
 	}
 	packages := make(map[string]contract.PackagePolicy, len(declaration.Packages))
 	for name, policy := range declaration.Packages {
@@ -140,17 +147,25 @@ func mergeOptionalSelection(left, right *contract.SkillSelection) *contract.Skil
 // readRealFileWithin reads root/relative only when every component is a real
 // directory or regular file: no symlink, so the bytes cannot come from outside.
 func readRealFileWithin(root, relative string) ([]byte, error) {
-	path, err := realPathWithin(root, relative, false)
+	path, err := realPathWithin(root, relative, regularFile)
 	if err != nil {
 		return nil, err
 	}
 	return os.ReadFile(path)
 }
 
+type pathKind uint8
+
+const (
+	anyKind pathKind = iota
+	directoryKind
+	regularFile
+)
+
 // realPathWithin resolves a slash-separated relative path below root, refusing
 // a missing component, a symlink anywhere on the path, or a final entry of the
 // wrong kind.
-func realPathWithin(root, relative string, directory bool) (string, error) {
+func realPathWithin(root, relative string, kind pathKind) (string, error) {
 	rootInfo, err := os.Lstat(root)
 	if err != nil {
 		return "", fmt.Errorf("observe checkout root: %w", err)
@@ -179,9 +194,11 @@ func realPathWithin(root, relative string, directory bool) (string, error) {
 		switch {
 		case !last && !info.IsDir():
 			return "", fmt.Errorf("%q is not a directory", strings.Join(segments[:index+1], "/"))
-		case last && directory && !info.IsDir():
+		case last && kind == directoryKind && !info.IsDir():
 			return "", fmt.Errorf("%q is not a directory", relative)
-		case last && !directory && !info.Mode().IsRegular():
+		case last && kind == anyKind && !info.IsDir() && !info.Mode().IsRegular():
+			return "", fmt.Errorf("%q is neither a directory nor a regular file", relative)
+		case last && kind == regularFile && !info.Mode().IsRegular():
 			return "", fmt.Errorf("%q is not a regular file", relative)
 		}
 	}
@@ -199,12 +216,12 @@ func realPathWithin(root, relative string, directory bool) (string, error) {
 // directory and every declared source root must be real directories inside the
 // checkout, reached without symlinks.
 func locateDeclaredPackage(resourceRoot string, policy contract.PackagePolicy) (string, error) {
-	packageRoot, err := realPathWithin(resourceRoot, policy.Directory, true)
+	packageRoot, err := realPathWithin(resourceRoot, policy.Directory, directoryKind)
 	if err != nil {
 		return "", fmt.Errorf("declared directory: %w", err)
 	}
 	for _, sourceRoot := range policy.EffectiveSourceRoots() {
-		if _, err := realPathWithin(resourceRoot, policy.Directory+"/"+sourceRoot, true); err != nil {
+		if _, err := realPathWithin(resourceRoot, policy.Directory+"/"+sourceRoot, directoryKind); err != nil {
 			return "", fmt.Errorf("declared source root %q: %w", sourceRoot, err)
 		}
 	}

@@ -238,10 +238,7 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	}
 	var runtimeBuiltins map[string]bool
 	if supportsRepositoryLayout(version) {
-		runtimeBuiltins, err = runtimeBuiltinModules(ctx, toolchain.Bun)
-		if err != nil {
-			return Result{}, err
-		}
+		runtimeBuiltins = workspace.RuntimeBuiltinModulesV0130()
 	}
 	projection, err := workspace.BuildWithOptions(packages, workspace.BuildOptions{
 		RuntimeBuiltins:            runtimeBuiltins,
@@ -889,6 +886,11 @@ func observePackagesAt(ctx context.Context, resources []Resource, contractVersio
 			names = append(names, name)
 		}
 		sort.Strings(names)
+		type placement struct {
+			name, root, relative string
+			policy               contract.PackagePolicy
+		}
+		placements := make([]placement, 0, len(names))
 		placed := make(map[string]string, len(names))
 		for _, name := range names {
 			policy := resource.Packages[name]
@@ -904,19 +906,41 @@ func observePackagesAt(ctx context.Context, resources []Resource, contractVersio
 				return nil, fmt.Errorf("packages %q and %q in %q both resolve to directory %q; each package needs its own directory", previous, name, resource.Identity, filepath.ToSlash(relativeInResource))
 			}
 			placed[relativeInResource] = name
-			relative := filepath.Join(filepath.FromSlash(resource.CanonicalPath), relativeInResource)
-			imports, err := sourceImports(ctx, packageRoot, policy.ScannedSourceRoots(), policy.SourceExcludes, rules, bun)
+			if rules.refuseSharedDirectories {
+				for _, exclude := range policy.SourceExcludes {
+					if _, err := realPathWithin(packageRoot, exclude, anyKind); err != nil {
+						return nil, fmt.Errorf("package %q in %q source exclude %q: %w", name, resource.Identity, exclude, err)
+					}
+				}
+			}
+			placements = append(placements, placement{name: name, root: packageRoot, relative: relativeInResource, policy: policy})
+		}
+		if rules.refuseSharedDirectories {
+			for _, outer := range placements {
+				for _, inner := range placements {
+					for _, sourceRoot := range outer.policy.ScannedSourceRoots() {
+						within := filepath.ToSlash(filepath.Join(outer.relative, filepath.FromSlash(sourceRoot)))
+						if inner.name != outer.name && contract.PathWithin(filepath.ToSlash(inner.relative), within) {
+							return nil, fmt.Errorf("package %q in %q lies at %q, inside source root %q of package %q; a package directory cannot be another package's source", inner.name, resource.Identity, filepath.ToSlash(inner.relative), within, outer.name)
+						}
+					}
+				}
+			}
+		}
+		for _, current := range placements {
+			relative := filepath.Join(filepath.FromSlash(resource.CanonicalPath), current.relative)
+			imports, err := sourceImports(ctx, current.root, current.policy.ScannedSourceRoots(), current.policy.SourceExcludes, rules, bun)
 			if err != nil {
-				return nil, fmt.Errorf("observe package %q imports: %w", name, err)
+				return nil, fmt.Errorf("observe package %q imports: %w", current.name, err)
 			}
 			for index := range imports {
 				imports[index].Source = filepath.ToSlash(filepath.Join(relative, filepath.FromSlash(imports[index].Source)))
 			}
 			result = append(result, workspace.Package{
-				Name:      name,
+				Name:      current.name,
 				Directory: relative,
 				Imports:   imports,
-				Policy:    resource.Packages[name],
+				Policy:    current.policy,
 			})
 		}
 	}
@@ -1084,20 +1108,25 @@ type sourceObservation struct {
 	// skipHiddenAndDependencies skips `.`-prefixed entries and node_modules
 	// below a source root, as TypeScript `include` wildcards do.
 	skipHiddenAndDependencies bool
-	// skipDeclarationFiles leaves ambient `.d.ts` files unobserved: they have no
-	// runtime module graph, and Bun parses them as implementation files.
-	skipDeclarationFiles bool
 	// packageRelativeDevelopment classifies `__tests__` relative to the package
 	// rather than relative to src, so `src/__tests__` and a `__tests__` root are
 	// development sources.
 	packageRelativeDevelopment bool
-	// refuseSharedDirectories refuses two packages resolving to one directory.
+	// refuseSharedDirectories refuses two packages resolving to one directory,
+	// a package directory inside another package's source root, and a source
+	// exclude that does not exist.
 	refuseSharedDirectories bool
+	// neutralizeShebang lets Bun scan files beginning with `#!`.
+	neutralizeShebang bool
+	// lexDeclarationFiles observes `.d.ts` imports from the Go lexer alone.
+	// Bun parses declaration files as implementation files and refuses valid
+	// ambient syntax such as `export const x: T`.
+	lexDeclarationFiles bool
 }
 
 var (
 	legacySourceObservation      = sourceObservation{}
-	typeScriptIncludeObservation = sourceObservation{skipHiddenAndDependencies: true, skipDeclarationFiles: true, packageRelativeDevelopment: true, refuseSharedDirectories: true}
+	typeScriptIncludeObservation = sourceObservation{skipHiddenAndDependencies: true, lexDeclarationFiles: true, packageRelativeDevelopment: true, refuseSharedDirectories: true, neutralizeShebang: true}
 )
 
 // sourceImports observes the imports of every .ts and .tsx file below the
@@ -1108,6 +1137,7 @@ func sourceImports(ctx context.Context, packageRoot string, sourceRoots, sourceE
 		excluded[exclude] = struct{}{}
 	}
 	files := make([]typeScriptSourceFile, 0)
+	declarations := make([]workspace.Import, 0)
 	for _, sourceRoot := range sourceRoots {
 		root := filepath.Join(packageRoot, filepath.FromSlash(sourceRoot))
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -1136,12 +1166,12 @@ func sourceImports(ctx context.Context, packageRoot string, sourceRoots, sourceE
 			if entry.IsDir() || (!strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx")) {
 				return nil
 			}
-			if rules.skipDeclarationFiles && strings.HasSuffix(path, ".d.ts") {
-				return nil
-			}
 			contents, err := os.ReadFile(path)
 			if err != nil {
 				return err
+			}
+			if rules.neutralizeShebang {
+				contents = withoutShebang(contents)
 			}
 			loader := "ts"
 			if strings.HasSuffix(path, ".tsx") {
@@ -1155,6 +1185,15 @@ func sourceImports(ctx context.Context, packageRoot string, sourceRoots, sourceE
 				}
 				development = isDevelopmentSource(withinRoot)
 			}
+			if rules.lexDeclarationFiles && strings.HasSuffix(path, ".d.ts") {
+				// Declaration files contain no regex literals or template
+				// expressions, the constructs Bun confirmation guards against,
+				// so the lexer's module-loading candidates are the imports.
+				for _, candidate := range observeTypeScriptImports(contents) {
+					declarations = append(declarations, workspace.Import{Specifier: candidate.specifier, Source: relative, Line: candidate.line, Development: development})
+				}
+				return nil
+			}
 			files = append(files, typeScriptSourceFile{source: contents, path: relative, loader: loader, development: development})
 			return nil
 		})
@@ -1166,6 +1205,7 @@ func sourceImports(ctx context.Context, packageRoot string, sourceRoots, sourceE
 	if err != nil {
 		return nil, err
 	}
+	observed = append(observed, declarations...)
 	sort.Slice(observed, func(left, right int) bool {
 		if observed[left].Source != observed[right].Source {
 			return observed[left].Source < observed[right].Source

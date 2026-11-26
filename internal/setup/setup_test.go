@@ -204,6 +204,31 @@ func TestBuildableProjectionSchemaDigestMatchesItsBuildableSchema(t *testing.T) 
 
 func buildableSchemaSection(t *testing.T, schema string) string {
 	t.Helper()
+	// The buildable classes and the typealiases they or the buildables mapping
+	// name. Each alias runs to the next top-level declaration.
+	aliases := ""
+	for _, name := range []string{"NonEmptyString", "PackageName", "BuildableName", "RelativePath"} {
+		start := strings.Index(schema, "typealias "+name+" =")
+		if start < 0 {
+			t.Fatalf("schema lacks typealias %s", name)
+		}
+		end := start + 1
+		for end < len(schema) {
+			next := strings.IndexByte(schema[end:], '\n')
+			if next < 0 {
+				end = len(schema)
+				break
+			}
+			end += next + 1
+			if end >= len(schema) || (schema[end] != ' ' && schema[end] != ')' && schema[end] != '\t') {
+				break
+			}
+		}
+		aliases += schema[start:end]
+	}
+	if !strings.Contains(schema, "buildables: Mapping<BuildableName, Buildable> = new {}") {
+		t.Fatal("schema lacks the buildables mapping")
+	}
 	start := strings.Index(schema, "class GitHeadTreeInputDetection {")
 	end := strings.Index(schema, "/// Repository identity is derived")
 	if end < 0 {
@@ -212,7 +237,7 @@ func buildableSchemaSection(t *testing.T, schema string) string {
 	if start < 0 || end < start {
 		t.Fatal("buildable schema section is not delimited")
 	}
-	return schema[start:end]
+	return aliases + schema[start:end]
 }
 
 func TestHistoricalRepositorySchemasRemainBuildableFree(t *testing.T) {
