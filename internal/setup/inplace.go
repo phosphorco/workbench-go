@@ -100,8 +100,35 @@ func CheckInPlace(ctx context.Context, root string, toolchain Toolchain) (CheckR
 	return state.compare()
 }
 
+// InPlaceAdmissionState is what an in-place commit admits: the check report,
+// the owned paths and the projected bytes of each rendered owned file.
+type InPlaceAdmissionState struct {
+	Report   CheckReport
+	Owned    map[string]bool
+	Contents map[string][]byte
+}
+
+// InPlaceAdmission checks the working tree without writing anything and
+// returns what an in-place commit may admit.
+func InPlaceAdmission(ctx context.Context, root string, toolchain Toolchain) (InPlaceAdmissionState, error) {
+	state, err := computeInPlace(ctx, root, toolchain)
+	if err != nil {
+		return InPlaceAdmissionState{}, err
+	}
+	report, err := state.compare()
+	if err != nil {
+		return InPlaceAdmissionState{}, err
+	}
+	owned := make(map[string]bool, len(state.owned))
+	for _, path := range state.owned {
+		owned[path] = true
+	}
+	return InPlaceAdmissionState{Report: report, Owned: owned, Contents: state.projection.Files}, nil
+}
+
 // runInPlace writes the owned files that differ, deletes extra owned files and
-// installs only when the Subject declares it, with a frozen lockfile.
+// installs only when the Subject declares it, with a frozen lockfile. It never
+// overwrites or deletes an owned file with uncommitted changes.
 func runInPlace(ctx context.Context, root string, toolchain Toolchain) (Result, error) {
 	state, err := computeInPlace(ctx, root, toolchain)
 	if err != nil {
@@ -111,40 +138,144 @@ func runInPlace(ctx context.Context, root string, toolchain Toolchain) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
-	changed := []string{}
+	writes := []string{}
 	for _, difference := range report.Differing {
-		changed = append(changed, difference.Path)
+		writes = append(writes, difference.Path)
 	}
-	changed = append(changed, report.Missing...)
-	for _, relative := range changed {
-		target := filepath.Join(root, filepath.FromSlash(relative))
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return Result{}, fmt.Errorf("create parent for %q: %w", relative, err)
+	writes = append(writes, report.Missing...)
+	dirty, err := uncommittedPaths(ctx, state.root)
+	if err != nil {
+		return Result{}, err
+	}
+	refused := []string{}
+	for _, relative := range append(append([]string{}, writes...), report.Extra...) {
+		if dirty[relative] {
+			refused = append(refused, relative)
 		}
-		if err := os.WriteFile(target, state.projection.Files[relative], 0o644); err != nil {
-			return Result{}, fmt.Errorf("write owned file %q: %w", relative, err)
+	}
+	if len(refused) != 0 {
+		sort.Strings(refused)
+		return Result{}, fmt.Errorf("Workbench-owned files have uncommitted changes and differ from the projection: %s; remedy: commit, stash or discard them, then run setup again", strings.Join(refused, ", "))
+	}
+	changed := []string{}
+	for _, relative := range writes {
+		if err := writeOwnedFile(state.root, relative, state.projection.Files[relative]); err != nil {
+			return Result{}, err
 		}
+		changed = append(changed, relative)
 	}
 	for _, relative := range report.Extra {
-		if err := os.Remove(filepath.Join(root, filepath.FromSlash(relative))); err != nil {
+		if err := requireNoSymlink(state.root, relative); err != nil {
+			return Result{}, err
+		}
+		if err := os.Remove(filepath.Join(state.root, filepath.FromSlash(relative))); err != nil {
 			return Result{}, fmt.Errorf("delete extra owned file %q: %w", relative, err)
 		}
 		changed = append(changed, relative)
 	}
+	sort.Strings(changed)
 	if state.subject.Install {
 		command := exec.CommandContext(ctx, toolchain.Bun, "install", "--frozen-lockfile", "--ignore-scripts")
-		command.Dir = root
+		command.Dir = state.root
 		command.Env = os.Environ()
 		if output, err := command.CombinedOutput(); err != nil {
-			return Result{}, fmt.Errorf("install with a frozen lockfile: %w: %s", err, strings.TrimSpace(string(output)))
+			return Result{}, fmt.Errorf("setup wrote %d owned file(s) (%s), then install with a frozen lockfile failed: %w: %s; remedy: run bun install to update bun.lock for the new manifests and commit it, or set install = false", len(changed), strings.Join(changed, ", "), err, strings.TrimSpace(string(output)))
 		}
 	}
-	sort.Strings(changed)
 	return Result{
 		Resources:       []Resource{{Identity: state.github, GitHub: state.github, CanonicalPath: ".", Shape: contract.ResourceShape{Kind: contract.RepositoryShape}}},
 		ChangedPaths:    changed,
 		ContractVersion: "0.14.0",
 	}, nil
+}
+
+// uncommittedPaths returns every path git status reports: modified, staged,
+// deleted, renamed (both sides) or untracked.
+func uncommittedPaths(ctx context.Context, root string) (map[string]bool, error) {
+	command := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	command.Dir = root
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("observe uncommitted changes: %w", err)
+	}
+	result := map[string]bool{}
+	entries := strings.Split(string(output), "\x00")
+	for index := 0; index < len(entries); index++ {
+		entry := entries[index]
+		if len(entry) < 4 {
+			continue
+		}
+		result[entry[3:]] = true
+		if strings.ContainsAny(entry[:2], "RC") && index+1 < len(entries) {
+			index++
+			result[entries[index]] = true
+		}
+	}
+	return result, nil
+}
+
+// requireNoSymlink refuses an owned path any of whose existing components is
+// a symlink or, before the last, not a directory. Missing components are
+// fine: setup creates them.
+func requireNoSymlink(root, relative string) error {
+	current := root
+	segments := strings.Split(relative, "/")
+	for index, segment := range segments {
+		current = filepath.Join(current, segment)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("Workbench-owned %q reaches a symlink at %q; owned paths must stay inside the checkout without symlinks", relative, strings.Join(segments[:index+1], "/"))
+		}
+		if index < len(segments)-1 && !info.IsDir() {
+			return fmt.Errorf("Workbench-owned %q: %q is not a directory", relative, strings.Join(segments[:index+1], "/"))
+		}
+		if index == len(segments)-1 && !info.Mode().IsRegular() {
+			return fmt.Errorf("Workbench-owned %q is not a regular file", relative)
+		}
+	}
+	return nil
+}
+
+// writeOwnedFile writes through a temporary file and a rename in the same
+// directory, after refusing symlinks on the path.
+func writeOwnedFile(root, relative string, contents []byte) error {
+	if err := requireNoSymlink(root, relative); err != nil {
+		return err
+	}
+	target := filepath.Join(root, filepath.FromSlash(relative))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("create parent for %q: %w", relative, err)
+	}
+	if err := requireNoSymlink(root, relative); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(target), ".workbench-owned-*")
+	if err != nil {
+		return fmt.Errorf("write owned file %q: %w", relative, err)
+	}
+	defer os.Remove(temporary.Name())
+	if _, err := temporary.Write(contents); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write owned file %q: %w", relative, err)
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write owned file %q: %w", relative, err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("write owned file %q: %w", relative, err)
+	}
+	if err := os.Rename(temporary.Name(), target); err != nil {
+		return fmt.Errorf("write owned file %q: %w", relative, err)
+	}
+	return nil
 }
 
 func computeInPlace(ctx context.Context, root string, toolchain Toolchain) (*inPlaceState, error) {
@@ -203,9 +334,13 @@ func computeInPlace(ctx context.Context, root string, toolchain Toolchain) (*inP
 		return nil, fmt.Errorf("build workspace projection: %w", err)
 	}
 	projection.Notes = append(notes, projection.Notes...)
+	owned, err := ownedFiles(tracked, input, projection)
+	if err != nil {
+		return nil, err
+	}
 	return &inPlaceState{
 		root: root, github: github, subject: subject, projection: projection,
-		owned: ownedFiles(tracked, input, projection),
+		owned: owned,
 	}, nil
 }
 
@@ -227,18 +362,31 @@ func requireInPlaceCheckout(root, github string) error {
 	if filepath.Clean(realRoot) != filepath.Clean(realTop) {
 		return fmt.Errorf("an in-place Workbench must be the top of its checkout %s, not %s", realTop, realRoot)
 	}
-	origin, err := runSetupGit(root, "remote", "get-url", "origin")
+	urls, err := runSetupGit(root, "config", "--get-all", "remote.origin.url")
 	if err != nil {
 		return fmt.Errorf("read the checkout's origin: %w", err)
 	}
-	identity, err := contract.GitHubRemoteIdentity(origin)
-	if err != nil {
-		return fmt.Errorf("origin %q: %w", strings.TrimSpace(origin), err)
-	}
-	if identity != github {
-		return fmt.Errorf("origin names %s but the InPlaceSubject entrypoint names %s; remedy: run setup in a checkout of the entrypoint or correct the entrypoint", identity, github)
+	pushURLs, _ := runSetupGit(root, "config", "--get-all", "remote.origin.pushurl")
+	for _, remote := range append(nonEmptyLines(urls), nonEmptyLines(pushURLs)...) {
+		identity, err := contract.GitHubRemoteIdentity(remote)
+		if err != nil {
+			return fmt.Errorf("origin URL %q: %w", remote, err)
+		}
+		if identity != github {
+			return fmt.Errorf("origin URL %q names %s but the InPlaceSubject entrypoint names %s; every origin fetch and push URL must name the entrypoint; remedy: run setup in a checkout of the entrypoint or correct the entrypoint", remote, identity, github)
+		}
 	}
 	return nil
+}
+
+func nonEmptyLines(value string) []string {
+	lines := []string{}
+	for _, line := range strings.Split(value, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func loadInPlaceDeclaration(ctx context.Context, root, github string, toolchain Toolchain) (contract.Declaration, error) {
@@ -375,7 +523,7 @@ func regexpRoleFile(name string) bool {
 // tsconfig.json and tsconfig.*.json in placed package directories; base
 // files; .tsconfigs/** under index and package directories; standalone
 // project files; the root package.json and tsconfig.json.
-func ownedFiles(tracked []string, input workspace.LayoutInput, projection workspace.LayoutProjection) []string {
+func ownedFiles(tracked []string, input workspace.LayoutInput, projection workspace.LayoutProjection) ([]string, error) {
 	packageDirectories := map[string]bool{}
 	for _, pkg := range input.Packages {
 		packageDirectories[pkg.Directory] = true
@@ -395,22 +543,43 @@ func ownedFiles(tracked []string, input workspace.LayoutInput, projection worksp
 		exact[project.Config] = true
 	}
 	owned := []string{}
+	foreign := []string{}
 	for _, file := range tracked {
 		directory, name := path.Dir(file), path.Base(file)
 		switch {
 		case exact[file]:
 		case packageDirectories[directory] && (name == "package.json" || regexpRoleFile(name)):
 		case hasAnyPrefix(file, indexRoots):
+			// Only child indexes are owned below .tsconfigs; anything else
+			// there is refused rather than deleted.
+			if !indexDirectory(directory, indexRoots) || !strings.HasPrefix(name, "tsconfig.") || !strings.HasSuffix(name, ".json") {
+				foreign = append(foreign, file)
+				continue
+			}
 		default:
 			continue
 		}
 		owned = append(owned, file)
 	}
+	if len(foreign) != 0 {
+		return nil, fmt.Errorf("Workbench owns .tsconfigs directories for its child indexes, but they hold other tracked files: %s; remedy: move them out of .tsconfigs", strings.Join(foreign, ", "))
+	}
 	for file := range projection.Files {
 		owned = append(owned, file)
 	}
 	sort.Strings(owned)
-	return dedupeSorted(owned)
+	return dedupeSorted(owned), nil
+}
+
+// indexDirectory reports whether directory is exactly one of the .tsconfigs
+// roots (not a directory below one).
+func indexDirectory(directory string, indexRoots []string) bool {
+	for _, root := range indexRoots {
+		if directory+"/" == root {
+			return true
+		}
+	}
+	return false
 }
 
 func hasAnyPrefix(value string, prefixes []string) bool {
@@ -439,6 +608,9 @@ func (state *inPlaceState) compare() (CheckReport, error) {
 		report.Notes = []workspace.Note{}
 	}
 	for _, relative := range state.owned {
+		if err := requireNoSymlink(state.root, relative); err != nil {
+			return CheckReport{}, err
+		}
 		want, projected := state.projection.Files[relative]
 		current, err := os.ReadFile(filepath.Join(state.root, filepath.FromSlash(relative)))
 		missing := errors.Is(err, os.ErrNotExist)
@@ -506,7 +678,10 @@ func sortedKeysOf[Value any](values map[string]Value) []string {
 // refuseInPlaceLayout refuses 0.14 layout fields in a context Workbench. A
 // context Workbench projects a 0.14 declaration with the 0.13 workspace
 // projection, so these fields would otherwise be silently ignored.
-func refuseInPlaceLayout(github string, declaration contract.Declaration) error {
+func refuseInPlaceLayout(github, version string, declaration contract.Declaration) error {
+	if !supportsRoles(version) {
+		return nil
+	}
 	fields := []string{}
 	if !declaration.TypeScript.Empty() {
 		fields = append(fields, "typescript")
@@ -528,7 +703,9 @@ func refuseInPlaceLayout(github string, declaration contract.Declaration) error 
 		if len(policy.Fields.Members) != 0 {
 			fields = append(fields, "packages["+name+"].fields")
 		}
-		if policy.Private != nil && !*policy.Private {
+		// The 0.13 projection always writes "private": true, so a 0.14
+		// context declaration must say exactly that.
+		if policy.Private == nil || !*policy.Private {
 			fields = append(fields, "packages["+name+"].private")
 		}
 	}

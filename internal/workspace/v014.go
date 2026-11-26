@@ -96,6 +96,9 @@ type layoutReference struct {
 	target   roleKey
 	path     string
 	circular bool
+	// derived is true for references derived from imports; only these may
+	// carry a circular mark.
+	derived bool
 }
 
 // BuildLayout renders the 0.14 projection.
@@ -372,22 +375,57 @@ func resolveExportFile(target *LayoutPackage, subpath string) (string, bool) {
 	if target.Policy.Exports == nil {
 		return "", false
 	}
-	if value, exists := target.Policy.Exports[subpath]; exists {
+	if value, exists := target.Policy.Exports[subpath]; exists && !strings.Contains(subpath, "*") {
 		return path.Join(target.Directory, value), true
 	}
-	best, bestPrefix := "", -1
-	for pattern, value := range target.Policy.Exports {
-		star := strings.Index(pattern, "*")
-		if star < 0 {
+	// Node's PACKAGE_EXPORTS_RESOLVE: keys with exactly one "*" whose
+	// wildcard matches at least one character, the best by
+	// PATTERN_KEY_COMPARE; every "*" of the target is substituted.
+	best, bestKey := "", ""
+	for _, key := range sortedMapKeys(target.Policy.Exports) {
+		star := strings.Index(key, "*")
+		if star < 0 || strings.Count(key, "*") != 1 {
 			continue
 		}
-		prefix, suffix := pattern[:star], pattern[star+1:]
-		if strings.HasPrefix(subpath, prefix) && strings.HasSuffix(subpath, suffix) && len(subpath) >= len(prefix)+len(suffix) && len(prefix) > bestPrefix {
-			replacement := subpath[len(prefix) : len(subpath)-len(suffix)]
-			best, bestPrefix = path.Join(target.Directory, strings.Replace(value, "*", replacement, 1)), len(prefix)
+		prefix, suffix := key[:star], key[star+1:]
+		if !strings.HasPrefix(subpath, prefix) || subpath == prefix || len(subpath) < len(key) || !strings.HasSuffix(subpath, suffix) {
+			continue
 		}
+		if bestKey != "" && patternKeyCompare(bestKey, key) != 1 {
+			continue
+		}
+		replacement := subpath[len(prefix) : len(subpath)-len(suffix)]
+		best, bestKey = path.Join(target.Directory, strings.ReplaceAll(target.Policy.Exports[key], "*", replacement)), key
 	}
-	return best, bestPrefix >= 0
+	return best, bestKey != ""
+}
+
+// patternKeyCompare is Node's PATTERN_KEY_COMPARE: -1 when left is the more
+// specific pattern key, 1 when right is.
+func patternKeyCompare(left, right string) int {
+	leftStar, rightStar := strings.Index(left, "*"), strings.Index(right, "*")
+	leftBase, rightBase := len(left), len(right)
+	if leftStar >= 0 {
+		leftBase = leftStar + 1
+	}
+	if rightStar >= 0 {
+		rightBase = rightStar + 1
+	}
+	switch {
+	case leftBase > rightBase:
+		return -1
+	case rightBase > leftBase:
+		return 1
+	case leftStar < 0:
+		return 1
+	case rightStar < 0:
+		return -1
+	case len(left) > len(right):
+		return -1
+	case len(right) > len(left):
+		return 1
+	}
+	return 0
 }
 
 func (build *layoutBuild) targetRole(importer string, role contract.Role, specifier string) (roleKey, bool, error) {
@@ -396,6 +434,7 @@ func (build *layoutBuild) targetRole(importer string, role contract.Role, specif
 	fallback := roleKey{name, role.TargetRole()}
 	file, resolved := resolveExportFile(target, importedPackageExport(name, specifier))
 	if !resolved {
+		build.notes = append(build.notes, Note{Kind: "referenceFallback", Path: importer, Detail: fmt.Sprintf("%q names no exports entry of %s; referencing its %s role", specifier, name, fallback.role)})
 		return fallback, false, nil
 	}
 	owner, owned := build.fileOwner[file]
@@ -414,9 +453,11 @@ func (build *layoutBuild) deriveReferences() error {
 	for _, pkg := range build.input.Packages {
 		for _, role := range pkg.Roles {
 			key := roleKey{pkg.Name, role.Name}
+			// targets records whether each edge was derived from imports;
+			// only derived edges may carry a circular mark.
 			targets := map[roleKey]bool{}
 			for _, consumed := range role.Role.Consumes {
-				targets[roleKey{pkg.Name, consumed}] = true
+				targets[roleKey{pkg.Name, consumed}] = targets[roleKey{pkg.Name, consumed}] || false
 			}
 			if role.Role.Derives(role.Name) {
 				for _, observed := range role.Imports {
@@ -436,7 +477,7 @@ func (build *layoutBuild) deriveReferences() error {
 				if err != nil {
 					return err
 				}
-				targets[target] = true
+				targets[target] = targets[target] || false
 			}
 			references, err := build.renderReferences(path.Dir(role.Config), key, targets)
 			if err != nil {
@@ -464,7 +505,7 @@ func (build *layoutBuild) deriveReferences() error {
 			if err != nil {
 				return fmt.Errorf("project %q: %w", project.Config, err)
 			}
-			targets[target] = true
+			targets[target] = targets[target] || false
 		}
 		references, err := build.renderReferences(path.Dir(project.Config), roleKey{"", project.Config}, targets)
 		if err != nil {
@@ -511,11 +552,14 @@ func (build *layoutBuild) renderReferences(directory string, source roleKey, tar
 		if !exists {
 			return nil, fmt.Errorf("references role %q of %q, which declares no such role", target.role, target.pkg)
 		}
-		if target.pkg != source.pkg && !build.emits[target] {
+		if !build.emits[target] {
+			if target.pkg == source.pkg {
+				return nil, fmt.Errorf("consumes the %s role, which does not emit; TypeScript refuses a reference to a noEmit project (TS6310)", target.role)
+			}
 			return nil, fmt.Errorf("references the %s role of %s, which does not emit; a project can only reference an emitting role of another package", target.role, target.pkg)
 		}
-		reference := layoutReference{target: target, path: relativeReference(directory, role.Config)}
-		if source.role == contract.DefaultRole && target.role == contract.DefaultRole && target.pkg != source.pkg {
+		reference := layoutReference{target: target, path: relativeReference(directory, role.Config), derived: targets[target]}
+		if reference.derived && source.role == contract.DefaultRole && target.role == contract.DefaultRole && target.pkg != source.pkg {
 			reference.circular = build.circular[source.pkg+" -> "+target.pkg]
 		}
 		references = append(references, reference)
@@ -550,7 +594,7 @@ func (build *layoutBuild) validateGraph() error {
 			if !reference.circular {
 				unmarked[position] = append(unmarked[position], target)
 			}
-			if node.role == contract.DefaultRole && reference.target.role == contract.DefaultRole && node.pkg != reference.target.pkg {
+			if reference.derived && node.role == contract.DefaultRole && reference.target.role == contract.DefaultRole && node.pkg != reference.target.pkg {
 				derived[node.pkg+" -> "+reference.target.pkg] = true
 			}
 		}
@@ -571,19 +615,8 @@ func (build *layoutBuild) validateGraph() error {
 		}
 	}
 	unmarkedComponents := stronglyConnected(unmarked)
-	sizes := map[int][]roleKey{}
-	for position, componentID := range unmarkedComponents {
-		sizes[componentID] = append(sizes[componentID], nodes[position])
-	}
-	for _, members := range sizes {
-		if len(members) > 1 {
-			names := make([]string, 0, len(members))
-			for _, member := range members {
-				names = append(names, member.pkg+"#"+member.role)
-			}
-			sort.Strings(names)
-			return fmt.Errorf("the derived reference graph has a cycle no circular edge closes: %s; %s", strings.Join(names, ", "), remedy)
-		}
+	if cycles := componentsWithCycles(unmarkedComponents, nodes); len(cycles) != 0 {
+		return fmt.Errorf("the derived reference graph has %d cycle(s) no circular edge closes: %s; %s", len(cycles), strings.Join(cycles, "; "), remedy)
 	}
 	for position := range nodes {
 		for _, target := range unmarked[position] {
@@ -592,15 +625,28 @@ func (build *layoutBuild) validateGraph() error {
 			}
 		}
 	}
-	byComponent := map[int]map[string]int{}
+	// Circular marks close cycles between packages; a cycle that passes
+	// through two roles of one package cannot be closed by any mark.
+	members := map[int][]roleKey{}
 	for position, componentID := range component {
-		if byComponent[componentID] == nil {
-			byComponent[componentID] = map[string]int{}
+		members[componentID] = append(members[componentID], nodes[position])
+	}
+	inPackage := []string{}
+	for _, cycle := range members {
+		perPackage := map[string]int{}
+		for _, member := range cycle {
+			perPackage[member.pkg]++
 		}
-		byComponent[componentID][nodes[position].pkg]++
-		if byComponent[componentID][nodes[position].pkg] > 1 {
-			return fmt.Errorf("package %q has a reference cycle through two of its own roles", nodes[position].pkg)
+		for _, member := range cycle {
+			if perPackage[member.pkg] > 1 {
+				inPackage = append(inPackage, describeCycle(cycle))
+				break
+			}
 		}
+	}
+	if len(inPackage) != 0 {
+		sort.Strings(inPackage)
+		return fmt.Errorf("the reference graph cycles through two roles of one package: %s; remedy: break the cycle in the package's imports or consumes (circular marks only close cycles between packages)", strings.Join(inPackage, "; "))
 	}
 	sourcesNodes := []int{}
 	for position, node := range nodes {
@@ -638,6 +684,32 @@ func (build *layoutBuild) graph(counts map[int]int, marks int) {
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(summary.SourcesCycleSizes)))
 	build.summary = summary
+}
+
+// componentsWithCycles lists every component with more than one member,
+// members sorted, components sorted.
+func componentsWithCycles(component []int, nodes []roleKey) []string {
+	members := map[int][]roleKey{}
+	for position, componentID := range component {
+		members[componentID] = append(members[componentID], nodes[position])
+	}
+	cycles := []string{}
+	for _, cycle := range members {
+		if len(cycle) > 1 {
+			cycles = append(cycles, describeCycle(cycle))
+		}
+	}
+	sort.Strings(cycles)
+	return cycles
+}
+
+func describeCycle(cycle []roleKey) string {
+	names := make([]string, 0, len(cycle))
+	for _, member := range cycle {
+		names = append(names, member.pkg+"#"+member.role)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // stronglyConnected returns a component id per node (Tarjan, iterative).

@@ -1,0 +1,18 @@
+{
+  "name": "workbench",
+  "private": true,
+  "workspaces": [
+    "repos/mono/pkg/@alpha/core",
+    "repos/mono/pkg/@alpha/web",
+    "repos/mono/tools/cli"
+  ],
+  "scripts": {
+    "test": "bun test --path-ignore-patterns='**/dist/**'",
+    "typecheck": "tsc --build tsconfig.json --pretty false"
+  },
+  "devDependencies": {
+    "aliased-number": "npm:is-number@7.0.0",
+    "thing": "file:repos/mono/tools/cli/vendor/thing",
+    "typescript": "file:repos/mono/tools/cli/vendor/typescript"
+  }
+}

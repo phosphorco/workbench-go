@@ -152,6 +152,9 @@ func (declaration Declaration) Validate() error {
 	if err := declaration.TypeScript.Validate(); err != nil {
 		return fmt.Errorf("typescript: %w", err)
 	}
+	if declaration.GeneratedMarker != nil && strings.TrimSpace(*declaration.GeneratedMarker) == "" {
+		return fmt.Errorf("generatedMarker must not be empty")
+	}
 	if declaration.CircularEdges != nil {
 		if err := ValidateRepositoryRelativePath(declaration.CircularEdges.Path); err != nil {
 			return fmt.Errorf("circularEdges path %q: %w", declaration.CircularEdges.Path, err)
@@ -341,6 +344,8 @@ type CommitSelection struct {
 	FilePaths             []string `json:"filePaths"`
 	HunkIDs               []string `json:"hunkIds"`
 	UnrelatedDeletedPaths []string `json:"unrelatedDeletedPaths"`
+	// AllowDefaultBranch is a 0.14 field; earlier contracts never render it.
+	AllowDefaultBranch bool `json:"allowDefaultBranch,omitempty"`
 }
 
 func DecodeWorkbenchCommitPlan(encoded []byte) (WorkbenchCommitPlan, error) {

@@ -194,15 +194,17 @@ func TestObservationRefusesTwoPackagesInOneDeclaredDirectory(t *testing.T) {
 	}
 }
 
-func TestContractSelectionFreezes0120AndAdmits0130(t *testing.T) {
+func TestContractSelectionFreezes0120And0130AndAdmits0140(t *testing.T) {
 	evaluator := requireEvaluator(t)
 	for _, test := range []struct {
 		uri, version, frozen string
 	}{
 		{localV0120RepositoryURI, "0.12.0", historicalRepository0120},
 		{localV0120PackageScopeURI, "0.12.0", historicalPackageScope0120},
-		{localV0130RepositoryURI, "0.13.0", localRepositoryDeclarationContract},
-		{localV0130PackageScopeURI, "0.13.0", localRepositoryContract},
+		{localV0130RepositoryURI, "0.13.0", historicalRepository0130},
+		{localV0130PackageScopeURI, "0.13.0", historicalPackageScope0130},
+		{localV0140RepositoryURI, "0.14.0", localRepositoryDeclarationContract},
+		{localV0140PackageScopeURI, "0.14.0", localRepositoryContract},
 		{"package://github.com/phosphorco/workbench-go/releases/download/0.12.0/workbench@0.12.0#/Repository.pkl", "0.12.0", ""},
 		{"package://github.com/phosphorco/workbench-go/releases/download/0.13.0/workbench@0.13.0#/Repository.pkl", "0.13.0", ""},
 	} {
@@ -210,13 +212,24 @@ func TestContractSelectionFreezes0120AndAdmits0130(t *testing.T) {
 		if hash := strings.LastIndex(test.uri, "#/"); hash >= 0 {
 			filename = test.uri[hash+2:]
 		}
-		_, version, err := schemaForSource([]byte(fmt.Sprintf("amends %q\n", test.uri)), filename)
+		schema, version, err := schemaForSource([]byte(fmt.Sprintf("amends %q\n", test.uri)), filename)
 		if err != nil || version != test.version {
 			t.Fatalf("select %s = %s, %v", test.uri, version, err)
 		}
+		if schema.LocalContents() != test.frozen {
+			t.Fatalf("select %s chose a different schema than %s's", test.uri, test.version)
+		}
 	}
-	if historicalRepository0120 == localRepositoryDeclarationContract || historicalPackageScope0120 == localRepositoryContract {
-		t.Fatal("0.13 schemas equal the frozen 0.12 schemas")
+	if historicalRepository0120 == historicalRepository0130 || historicalPackageScope0120 == historicalPackageScope0130 ||
+		historicalRepository0130 == localRepositoryDeclarationContract || historicalPackageScope0130 == localRepositoryContract {
+		t.Fatal("successive schemas are equal")
+	}
+	// A 0.13.0 declaration cannot reach the 0.14 fields.
+	for _, field := range []string{`packages { ["cli"] { roles { ["sources"] {} } } }`, `packages { ["cli"] { fields { ["version"] = "1" } } }`, `generatedMarker = "x"`, `typescript {}`} {
+		source := []byte(fmt.Sprintf("amends %q\n%s\n", localV0130RepositoryURI, field))
+		if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, source); err == nil {
+			t.Fatalf("0.13.0 Repository admitted %s", field)
+		}
 	}
 	// A 0.12.0 declaration cannot reach the 0.13 layout fields.
 	for _, field := range []string{`directory = "tools/cli"`, `sourceRoots { "lib" }`, `dependencyVersions = "verbatim"`} {

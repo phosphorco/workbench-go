@@ -37,6 +37,17 @@ type Request struct {
 	UnrelatedDeletedPaths []string
 	GeneratedPathPolicyID string
 	RejectPath            func(string) bool
+	// Owned names files whose committed content Workbench owns (an in-place
+	// Workbench). An owned path may only be selected whole, and its candidate
+	// blob must equal Contents[path]; an owned path absent from Contents may
+	// only be deleted.
+	Owned *OwnedFiles
+}
+
+// OwnedFiles is the owned-file admission rule for one candidate.
+type OwnedFiles struct {
+	Paths    map[string]bool
+	Contents map[string][]byte
 }
 
 type Hunk struct {
@@ -218,6 +229,9 @@ func prepare(ctx context.Context, request Request) (Candidate, error) {
 		if request.RejectPath != nil && request.RejectPath(hunk.Path) {
 			return Candidate{}, fmt.Errorf("selected path %q is generated or Workbench-owned", hunk.Path)
 		}
+		if request.Owned != nil && request.Owned.Paths[hunk.Path] {
+			return Candidate{}, fmt.Errorf("selected hunk %s is in Workbench-owned %q; select owned files whole so the commit carries the projection exactly", id, hunk.Path)
+		}
 		if _, duplicate := selectedIDs[id]; duplicate {
 			return Candidate{}, fmt.Errorf("hunk %q appears more than once", id)
 		}
@@ -300,6 +314,9 @@ func prepare(ctx context.Context, request Request) (Candidate, error) {
 	if err := validateCandidatePaths(ctx, shadow, shadowEnvironment, allowed, request.RejectPath); err != nil {
 		return Candidate{}, err
 	}
+	if err := validateOwnedContents(ctx, shadow, shadowEnvironment, request.Owned); err != nil {
+		return Candidate{}, err
+	}
 	preparedPaths, err := changedPaths(ctx, shadow, shadowEnvironment, true)
 	if err != nil {
 		return Candidate{}, err
@@ -357,6 +374,9 @@ func prepare(ctx context.Context, request Request) (Candidate, error) {
 	}
 	if err := validateCandidatePaths(ctx, shadow, shadowEnvironment, allowed, request.RejectPath); err != nil {
 		return Candidate{}, fmt.Errorf("commit hook widened exact selection: %w", err)
+	}
+	if err := validateOwnedContents(ctx, shadow, shadowEnvironment, request.Owned); err != nil {
+		return Candidate{}, fmt.Errorf("commit hook changed an owned file: %w", err)
 	}
 	for path, before := range hunkDiffs {
 		after, err := git(ctx, shadow, shadowEnvironment, nil, "diff", "--cached", "--binary", "HEAD", "--", path)
@@ -784,6 +804,46 @@ func validateCandidatePaths(ctx context.Context, root string, environment []stri
 		}
 		if reject != nil && reject(path) {
 			return fmt.Errorf("generated or Workbench-owned path %q entered the candidate", path)
+		}
+	}
+	return nil
+}
+
+// validateOwnedContents requires every changed owned path in the candidate
+// index to hold exactly the projected bytes, or to be deleted when it is no
+// longer projected.
+func validateOwnedContents(ctx context.Context, root string, environment []string, owned *OwnedFiles) error {
+	if owned == nil {
+		return nil
+	}
+	paths, err := changedPaths(ctx, root, environment, true)
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		if !owned.Paths[path] {
+			continue
+		}
+		want, projected := owned.Contents[path]
+		present, err := git(ctx, root, environment, nil, "ls-files", "-z", "--cached", "--", path)
+		if err != nil {
+			return err
+		}
+		if len(present) == 0 {
+			if projected {
+				return fmt.Errorf("the candidate deletes Workbench-owned %q, which the projection renders; run workbench setup", path)
+			}
+			continue
+		}
+		if !projected {
+			return fmt.Errorf("the candidate keeps Workbench-owned %q, which the projection no longer renders; run workbench setup", path)
+		}
+		blob, err := git(ctx, root, environment, nil, "cat-file", "blob", ":"+path)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(blob, want) {
+			return fmt.Errorf("the candidate's Workbench-owned %q differs from the projection; run workbench setup and select the file whole", path)
 		}
 	}
 	return nil

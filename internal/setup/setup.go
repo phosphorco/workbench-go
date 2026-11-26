@@ -631,7 +631,7 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	if err := source.mergeInRepositoryScopes(github, discoveryPath, &declaration); err != nil {
 		return contract.Declaration{}, err
 	}
-	if err := refuseInPlaceLayout(github, declaration); err != nil {
+	if err := refuseInPlaceLayout(github, version, declaration); err != nil {
 		return contract.Declaration{}, err
 	}
 	source.v020Declarations[github] = declaration

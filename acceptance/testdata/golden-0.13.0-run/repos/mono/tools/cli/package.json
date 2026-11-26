@@ -1,0 +1,20 @@
+{
+  "name": "tool-cli",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@alpha/core": "workspace:*",
+    "aliased-number": "npm:is-number@7.0.0",
+    "thing": "file:./vendor/thing"
+  },
+  "devDependencies": {
+    "@alpha/web": "workspace:*",
+    "typescript": "file:./vendor/typescript"
+  }
+}

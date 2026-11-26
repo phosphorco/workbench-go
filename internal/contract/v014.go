@@ -181,6 +181,9 @@ func ValidateRole(name string, role Role, roleNames map[string]struct{}, standal
 			}
 		}
 	}
+	if err := validateIncludePatterns(role.Include); err != nil {
+		return err
+	}
 	if role.Files != nil {
 		for _, value := range *role.Files {
 			_, foreign := role.ForeignFiles[value]
@@ -270,6 +273,26 @@ func refuseOwnedCompilerOptions(options orderedjson.Value, role bool) error {
 		if key == "references" {
 			return fmt.Errorf("compilerOptions %q is not a compiler option", key)
 		}
+		if value, _ := options.Get(key); (key == "allowJs" || key == "checkJs") && !(value.Kind == orderedjson.Bool && !value.IsTrue()) {
+			return fmt.Errorf("compilerOptions %q must be false when set: Workbench observes TypeScript sources only, so JavaScript inputs would be compiled but never observed", key)
+		}
+	}
+	return nil
+}
+
+// validateIncludePatterns refuses include entries TypeScript would drop or
+// that Workbench does not observe.
+func validateIncludePatterns(patterns *[]string) error {
+	if patterns == nil {
+		return nil
+	}
+	for _, value := range *patterns {
+		if value == "**" || strings.HasSuffix(value, "/**") {
+			return fmt.Errorf("include %q ends in **, which TypeScript refuses (TS5010); end it with **/* instead", value)
+		}
+		if strings.HasSuffix(value, ".json") {
+			return fmt.Errorf("include %q names JSON, which resolveJsonModule would compile but Workbench does not observe; list JSON in files instead", value)
+		}
 	}
 	return nil
 }
@@ -283,6 +306,9 @@ func ValidateBase(name string, base TsconfigBase, bases map[string]TsconfigBase)
 		if err := ValidatePackagePath(base.Directory); err != nil {
 			return fmt.Errorf("base %q directory %q: %w", name, base.Directory, err)
 		}
+	}
+	if err := validateIncludePatterns(base.Include); err != nil {
+		return fmt.Errorf("base %q: %w", name, err)
 	}
 	if base.Extends != nil {
 		if _, exists := bases[*base.Extends]; !exists {

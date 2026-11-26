@@ -294,62 +294,31 @@ func evaluateLocalBuildable(ctx context.Context, provider environmentProvider, r
 const inPlaceGeneratedPolicyID = "workbench-0.14-in-place-owned-files-v1"
 
 func runCommit(ctx context.Context, root, planName string, environment commandEnvironment) (string, error) {
+	if inPlace, err := setup.IsInPlace(root); err == nil && inPlace {
+		plan, err := loadCommitPlan(ctx, root, planName, "0.14.0", environment)
+		if err != nil {
+			return "", err
+		}
+		return commitInPlace(ctx, root, plan, environment)
+	}
 	result, err := environment.setup(ctx, root)
 	if err != nil {
 		return "", err
 	}
-	inPlace, err := setup.IsInPlace(root)
+	plan, err := loadCommitPlan(ctx, root, planName, result.ContractVersion, environment)
 	if err != nil {
 		return "", err
 	}
-	var workLine contract.WorkLine
-	policyID, rejectPath := generatedPolicyID, generatedProjectionPath
-	if inPlace {
-		report, err := setup.CheckInPlace(ctx, root, setup.NewToolchain(environment.evaluator, environment.bun))
-		if err != nil {
-			return "", err
-		}
-		policyID, rejectPath = inPlaceGeneratedPolicyID, inPlaceRejectPath(report)
-		branch, err := gitText(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
-		if err != nil {
-			return "", fmt.Errorf("an in-place commit needs a checked-out branch: %w", err)
-		}
-		workLine.Branch = strings.TrimSpace(branch)
-	}
-	planPath, err := workbenchPath(root, planName)
+	subject, err := evaluateSubject(ctx, root, environment.evaluator, result.ContractVersion)
 	if err != nil {
 		return "", err
-	}
-	source, err := os.ReadFile(planPath)
-	if err != nil {
-		return "", fmt.Errorf("read commit plan: %w", err)
-	}
-	schema, err := releasedCommitPlanContract(source, result.ContractVersion)
-	if err != nil {
-		return "", err
-	}
-	plan, err := environment.evaluator.EvaluateWorkbenchCommitPlan(ctx, source, schema)
-	if err != nil {
-		return "", err
-	}
-	if !inPlace {
-		subject, err := evaluateSubject(ctx, root, environment.evaluator, result.ContractVersion)
-		if err != nil {
-			return "", err
-		}
-		workLine = subject.WorkLine
 	}
 	resources := make(map[string]setup.Resource, len(result.Resources))
 	for _, resource := range result.Resources {
 		resources[resource.Identity] = resource
 	}
-	identities := make([]string, 0, len(plan.Commits))
-	for identity := range plan.Commits {
-		identities = append(identities, identity)
-	}
-	sort.Strings(identities)
-	requests := make([]change.Request, 0, len(identities))
-	for _, identity := range identities {
+	requests := make([]change.Request, 0, len(plan.Commits))
+	for _, identity := range sortedCommitIdentities(plan) {
 		resource, exists := resources[identity]
 		if !exists {
 			return "", fmt.Errorf("commit plan resource %q is not a participating repository", identity)
@@ -357,24 +326,120 @@ func runCommit(ctx context.Context, root, planName string, environment commandEn
 		selection := plan.Commits[identity]
 		requests = append(requests, change.Request{
 			ResourceID: identity, Repository: filepath.Join(root, filepath.FromSlash(resource.CanonicalPath)),
-			Branch: workLine.Branch, Remote: "origin", ChangeID: plan.ChangeID,
+			Branch: subject.WorkLine.Branch, Remote: "origin", ChangeID: plan.ChangeID,
 			Title: selection.Title, Description: selection.Description,
 			Paths: selection.FilePaths, HunkIDs: selection.HunkIDs, UnrelatedDeletedPaths: selection.UnrelatedDeletedPaths,
-			GeneratedPathPolicyID: policyID, RejectPath: rejectPath,
+			GeneratedPathPolicyID: generatedPolicyID, RejectPath: generatedProjectionPath,
 		})
 	}
+	return deliverChange(ctx, root, plan, requests)
+}
+
+func loadCommitPlan(ctx context.Context, root, planName, contractVersion string, environment commandEnvironment) (contract.WorkbenchCommitPlan, error) {
+	planPath, err := workbenchPath(root, planName)
+	if err != nil {
+		return contract.WorkbenchCommitPlan{}, err
+	}
+	source, err := os.ReadFile(planPath)
+	if err != nil {
+		return contract.WorkbenchCommitPlan{}, fmt.Errorf("read commit plan: %w", err)
+	}
+	schema, err := releasedCommitPlanContract(source, contractVersion)
+	if err != nil {
+		return contract.WorkbenchCommitPlan{}, err
+	}
+	return environment.evaluator.EvaluateWorkbenchCommitPlan(ctx, source, schema)
+}
+
+func sortedCommitIdentities(plan contract.WorkbenchCommitPlan) []string {
+	identities := make([]string, 0, len(plan.Commits))
+	for identity := range plan.Commits {
+		identities = append(identities, identity)
+	}
+	sort.Strings(identities)
+	return identities
+}
+
+// commitInPlace delivers a change from an in-place Workbench. It never runs
+// the writing setup: it checks, and refuses unless every owned file already
+// equals the projection. Owned files may only be selected whole, and their
+// committed bytes must equal the projection.
+func commitInPlace(ctx context.Context, root string, plan contract.WorkbenchCommitPlan, environment commandEnvironment) (string, error) {
+	admission, err := setup.InPlaceAdmission(ctx, root, setup.NewToolchain(environment.evaluator, environment.bun))
+	if err != nil {
+		return "", err
+	}
+	report := admission.Report
+	if !report.Equal() {
+		paths := []string{}
+		for _, difference := range report.Differing {
+			paths = append(paths, difference.Path)
+		}
+		paths = append(append(paths, report.Missing...), report.Extra...)
+		sort.Strings(paths)
+		return "", fmt.Errorf("Workbench-owned files differ from the projection (%d differing, %d missing, %d extra: %s); remedy: run workbench setup, review the result, and commit again", len(report.Differing), len(report.Missing), len(report.Extra), strings.Join(paths, ", "))
+	}
+	branch, err := gitText(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("an in-place commit needs a checked-out branch: %w", err)
+	}
+	defaultBranch, err := remoteDefaultBranch(ctx, root)
+	if err != nil {
+		return "", err
+	}
+	requests := make([]change.Request, 0, len(plan.Commits))
+	for _, identity := range sortedCommitIdentities(plan) {
+		if identity != report.Repository {
+			return "", fmt.Errorf("commit plan resource %q is not this in-place repository %q", identity, report.Repository)
+		}
+		selection := plan.Commits[identity]
+		if branch == defaultBranch && !selection.AllowDefaultBranch {
+			return "", fmt.Errorf("the checked-out branch %q is the remote's default branch; remedy: commit from a work branch, or set allowDefaultBranch = true for %q in the plan", branch, identity)
+		}
+		requests = append(requests, change.Request{
+			ResourceID: identity, Repository: root, Branch: branch, Remote: "origin", ChangeID: plan.ChangeID,
+			Title: selection.Title, Description: selection.Description,
+			Paths: selection.FilePaths, HunkIDs: selection.HunkIDs, UnrelatedDeletedPaths: selection.UnrelatedDeletedPaths,
+			GeneratedPathPolicyID: inPlaceGeneratedPolicyID, RejectPath: inPlaceRejectPath(report),
+			Owned: &change.OwnedFiles{Paths: admission.Owned, Contents: admission.Contents},
+		})
+	}
+	return deliverChange(ctx, root, plan, requests)
+}
+
+// remoteDefaultBranch reads origin's default branch from the local
+// origin/HEAD, falling back to asking the remote.
+func remoteDefaultBranch(ctx context.Context, root string) (string, error) {
+	if head, err := gitText(ctx, root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil && strings.HasPrefix(head, "origin/") {
+		return strings.TrimPrefix(head, "origin/"), nil
+	}
+	output, err := gitText(ctx, root, "ls-remote", "--symref", "origin", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("determine origin's default branch: %w; remedy: run git remote set-head origin --auto", err)
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if reference, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
+			name, _, _ := strings.Cut(reference, "\t")
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("determine origin's default branch: origin reports no HEAD; remedy: run git remote set-head origin --auto")
+}
+
+func deliverChange(ctx context.Context, root string, plan contract.WorkbenchCommitPlan, requests []change.Request) (string, error) {
 	journal := filepath.Join(root, ".workbench", "changes", plan.ChangeID+".jsonl")
 	var saga *change.Saga
-	if _, err := os.Stat(journal); err == nil {
+	var err error
+	if _, statErr := os.Stat(journal); statErr == nil {
 		saga, err = change.RecoverExact(journal, requests)
-	} else if errors.Is(err, os.ErrNotExist) {
+	} else if errors.Is(statErr, os.ErrNotExist) {
 		var candidates []change.Candidate
 		candidates, err = change.PrepareAll(ctx, requests)
 		if err == nil {
 			saga, err = change.Begin(journal, candidates)
 		}
 	} else {
-		return "", fmt.Errorf("observe change journal: %w", err)
+		return "", fmt.Errorf("observe change journal: %w", statErr)
 	}
 	if err != nil {
 		return "", err
