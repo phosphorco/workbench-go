@@ -36,9 +36,12 @@ type ResourceShape struct {
 // rather than repeated as repository-authored identity. Version-specific
 // decoders establish the laws carried by Packages.
 type Declaration struct {
-	Shape      ResourceShape
-	Includes   map[string]ResourceInclude     `json:"includes"`
-	Packages   map[string]PackagePolicy       `json:"packages"`
+	Shape    ResourceShape
+	Includes map[string]ResourceInclude `json:"includes"`
+	Packages map[string]PackagePolicy   `json:"packages"`
+	// Scopes names in-repository PackageScopes (0.13). Setup reads each from
+	// pkg/<scope>/workbench.pkl and merges its packages and includes.
+	Scopes     []string                       `json:"scopes,omitempty"`
 	Buildables map[string]buildable.Buildable `json:"buildables"`
 	Verifiers  map[string]contracts.Verifier  `json:"verifiers,omitempty"`
 	Gates      map[string]contracts.Gate      `json:"gates,omitempty"`
@@ -91,6 +94,7 @@ func DecodeRepositoryDeclaration(encoded []byte) (Declaration, error) {
 	var value struct {
 		Includes   map[string]ResourceInclude     `json:"includes"`
 		Packages   map[string]PackagePolicy       `json:"packages"`
+		Scopes     []string                       `json:"scopes"`
 		Buildables map[string]buildable.Buildable `json:"buildables"`
 		Verifiers  map[string]contracts.Verifier  `json:"verifiers"`
 		Gates      map[string]contracts.Gate      `json:"gates"`
@@ -103,6 +107,7 @@ func DecodeRepositoryDeclaration(encoded []byte) (Declaration, error) {
 		Shape:      ResourceShape{Kind: RepositoryShape},
 		Includes:   value.Includes,
 		Packages:   value.Packages,
+		Scopes:     value.Scopes,
 		Buildables: value.Buildables,
 		Verifiers:  value.Verifiers,
 		Gates:      value.Gates,
@@ -122,6 +127,24 @@ func (declaration Declaration) Validate() error {
 		if _, err := NormalizeGitHubRepository(designation); err != nil {
 			return fmt.Errorf("include designation %q: %w", designation, err)
 		}
+	}
+	for name, policy := range declaration.Packages {
+		if err := policy.ValidateLayout(declaration.Shape.Kind); err != nil {
+			return fmt.Errorf("package %q: %w", name, err)
+		}
+	}
+	if len(declaration.Scopes) != 0 && declaration.Shape.Kind != RepositoryShape {
+		return fmt.Errorf("only a Repository declares in-repository scopes")
+	}
+	seenScopes := make(map[string]struct{}, len(declaration.Scopes))
+	for _, scope := range declaration.Scopes {
+		if !packageScopePattern.MatchString(scope) {
+			return fmt.Errorf("in-repository scope %q is not a package scope", scope)
+		}
+		if _, duplicate := seenScopes[scope]; duplicate {
+			return fmt.Errorf("in-repository scope %q is declared twice", scope)
+		}
+		seenScopes[scope] = struct{}{}
 	}
 	for name, candidate := range declaration.Buildables {
 		if err := buildable.ValidateName(name); err != nil {

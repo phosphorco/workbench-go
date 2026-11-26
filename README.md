@@ -46,7 +46,7 @@ agents through a versioned control protocol.
 
 | Surface | Status |
 | --- | --- |
-| Binary `0.12.2`; Pkl resource contracts `0.12.0` | Released |
+| Binary `0.13.0`; Pkl resource contracts `0.13.0` | Released |
 | `setup`, `check`, commit saga, snapshots, prune, skills, and buildables described below | Released |
 | Structured status, Environment Index, explain/ownership queries, explicit reconciliation plans, receipts, and scoped verification | Proposed and sequenced |
 
@@ -78,12 +78,14 @@ components does not relicense them as Workbench code.
 The pinned yaml.v3 license artifact carries its upstream MIT and Apache-2.0
 terms together and is included unchanged in every platform archive.
 
-Install the pinned `0.12.2` release. It carries the unchanged `0.12.0` Pkl
-contract and [recovers context helpers after fatal failures](docs/release-0.12.2.md)
-without clearing retained evidence or changing context delivery.
+Install the pinned `0.13.0` release. Its `0.13.0` Pkl contract adds
+[repository layout declarations](docs/release-0.13.0.md): explicit package
+directories, declared source roots and excludes, in-repository PackageScopes and
+verbatim dependency specifiers. Every `0.12.0` and earlier declaration is still
+admitted with its released meaning.
 
 ```sh
-mise use -g github:phosphorco/workbench-go@0.12.2
+mise use -g github:phosphorco/workbench-go@0.13.0
 workbench version
 ```
 
@@ -411,6 +413,73 @@ package-specific `tsconfig.tsbuildinfo` files.
 
 New shapes require a `workbench-go` release. “Extensible” means that adding an internal shape is a localized implementation change, not that resource authors may install arbitrary resource plugins.
 
+## Repository layout declarations (contract 0.13.0)
+
+A 0.13.0 Repository can describe a monorepo's existing package layout instead
+of adopting the `packages/<leaf>` or `<leaf>` search:
+
+```pkl
+amends "package://github.com/phosphorco/workbench-go/releases/download/0.13.0/workbench@0.13.0#/Repository.pkl"
+
+scopes { "@phosphor"; "@design-system" }
+
+packages {
+  ["linky"] {
+    directory = "pkg/@links/cli"
+    sourceRoots { "src"; "__tests__" }
+    sourceExcludes { "__tests__/fixtures" }
+    dependencyVersions = "verbatim"
+    dependencies { ["effect"] = "catalog:" }
+  }
+}
+```
+
+- `directory` (Repository only) is the package directory relative to the
+  checkout. It replaces leaf search. It must be a relative `/`-separated path
+  with no empty, hidden (`.`, `..`, `.x`) or `node_modules` segment, and it and
+  every source root must be real directories reached without any symlink. Two
+  packages may not resolve to one directory.
+- `sourceRoots` (both shapes) lists the directories Workbench scans and the
+  generated tsconfig includes. The default is empty, meaning `src`. Because the
+  default is empty, amending (`sourceRoots { "src"; "__tests__" }`) and
+  assigning (`sourceRoots = new Listing { ... }`) both yield exactly the authored
+  roots; a non-empty Listing default would make an amend append to it. Roots may
+  nest (`src` and `src/__tests__`); each file is observed once. The generated
+  `rootDir` is the deepest directory containing every root, so a package with
+  several roots emits `dist/<root>/...` and should declare `exports`.
+- `sourceExcludes` (both shapes) lists files or directories strictly inside a
+  source root that are neither scanned nor compiled; they become the generated
+  tsconfig `exclude`. An exclude wins over a nested root, as in TypeScript.
+- `dependencyVersions = "verbatim"` (both shapes) passes `catalog:`,
+  `catalog:<name>`, ranges, `npm:` aliases and `file:` specifiers into the
+  package manifest unchanged. The generated root still reassembles one
+  specifier per external dependency, with package-relative `file:`/`link:`
+  paths rebased to the Workbench root. If participating packages declare one
+  dependency with different specifiers, setup refuses and lists every such
+  dependency, its specifiers and their declaring packages. Exact packages keep
+  the exact-version rule.
+- `scopes` (Repository only) names in-repository PackageScopes. Each is declared
+  by `pkg/<scope>/workbench.pkl`, which amends the same-version
+  `PackageScopeRepository.pkl` a standalone scope repository would use, and is
+  evaluated on its own (it cannot import another file). Its packages are placed
+  at `pkg/<scope>/<leaf>` inside the Repository checkout, and its `includes`
+  merge into the Repository's (skill selections are unioned). Setup refuses a
+  missing or symlinked scope file, a file amending another contract or version,
+  a file declaring a different scope, a scope file declaring buildables, and a
+  package declared both at the root and by a scope.
+
+0.13.0 observation follows TypeScript `include` semantics for every package,
+including ones with no layout fields: `.`-prefixed files and directories and
+`node_modules` below a source root are skipped; ambient `.d.ts` files are not
+scanned, because they have no runtime imports and Bun parses them as
+implementation files (it refuses `export const x: T`); `__tests__`, `.test.` and
+`.spec.` are classified relative to the package, so `src/__tests__` and a
+`__tests__` root are test sources; and bare specifiers the pinned Bun runtime
+resolves itself (`node:module` `builtinModules` plus `bun`, for example `fs` or
+`fs/promises`) are not packages. Files beginning with `#!` are observed under
+every contract version. Declarations amending 0.12.0 or earlier keep their
+released observation unchanged.
+
 ## Setup reconciles checkouts and generated state
 
 The central model is:
@@ -730,7 +799,7 @@ Declared verification receives the name and candidate root. A dirty local
 producer is usable after sealing because `gitWorktree` fingerprints its actual
 input contents, but it cannot pass a committed-revision freshness proof.
 
-The released **0.12.0 contract**, also carried by binary 0.12.2, can
+Since the **0.12.0 contract** (carried unchanged into 0.13.0), a buildable can
 opt into current-host local execution with `buildInputBinding = "observed-v1"`
 and `localExecution = "host-observed-v1"`. A validated unsealed preferred
 local candidate can then be used on the actual host after a build. Admission

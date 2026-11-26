@@ -90,6 +90,19 @@ func TestCurrentBuildableSchemaCarriesOptionalObservedBindingInBothShapes(t *tes
 	}
 }
 
+func TestHistorical0120SchemaBytesMatchPublishedPackage(t *testing.T) {
+	// Digests of pkl/*.pkl inside the published workbench@0.12.0.zip.
+	for name, test := range map[string]struct{ value, digest string }{
+		"Repository":             {historicalRepository0120, "b908a59f0d93b08f3cac3342ae76436e1af7a8855af611ed983ce5b5995efad7"},
+		"PackageScopeRepository": {historicalPackageScope0120, "a5a856d5c3d5e4fd0586d5009d512d9c2a7eb688a2383cce480c20fd27bdf077"},
+	} {
+		got := sha256.Sum256([]byte(test.value))
+		if hex.EncodeToString(got[:]) != test.digest {
+			t.Errorf("published 0.12.0 %s schema bytes changed", name)
+		}
+	}
+}
+
 func TestHistorical090SchemaBytesMatchPublishedPackage(t *testing.T) {
 	for name, test := range map[string]struct{ value, digest string }{
 		"Repository":             {historicalRepository090, "a9cf70ad4032b260fa847f6cd0aabbae358b1f1fe16f793bef9f046afbc479ae"},
@@ -154,7 +167,7 @@ func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 }
 
 func TestHistoricalContractSelectionRemainsSupported(t *testing.T) {
-	for _, historical := range []string{"0.7.0", "0.8.0", "0.9.0", "0.10.0", "0.11.0"} {
+	for _, historical := range []string{"0.7.0", "0.8.0", "0.9.0", "0.10.0", "0.11.0", "0.12.0"} {
 		t.Run(historical, func(t *testing.T) {
 			source := []byte(fmt.Sprintf(`amends "package://github.com/phosphorco/workbench-go/releases/download/%s/workbench@%s#/Repository.pkl"`, historical, historical))
 			if _, version, err := schemaForSource(source, "Repository.pkl"); err != nil {
@@ -169,19 +182,37 @@ func TestHistoricalContractSelectionRemainsSupported(t *testing.T) {
 	}
 }
 
-func TestBuildableProjectionSchemaDigestMatchesCurrentRepositoryContracts(t *testing.T) {
-	var schemas []byte
-	for _, path := range []string{"../../pkl/PackageScopeRepository.pkl", "../../pkl/Repository.pkl"} {
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		schemas = append(schemas, contents...)
-	}
-	digest := sha256.Sum256(schemas)
+// The buildable projection digest names the 0.12.0 repository schemas, whose
+// buildable classes 0.13.0 carries unchanged. 0.13.0 changed only package
+// layout, which the buildable projection does not record, so the projection
+// keeps its released digest rather than invalidating every existing projection.
+func TestBuildableProjectionSchemaDigestMatchesItsBuildableSchema(t *testing.T) {
+	schemas := historicalPackageScope0120 + historicalRepository0120
+	digest := sha256.Sum256([]byte(schemas))
 	if got := hex.EncodeToString(digest[:]); got != buildable.ProjectionSchemaDigest {
 		t.Fatalf("buildable projection schema digest = %s, want %s", buildable.ProjectionSchemaDigest, got)
 	}
+	for name, pair := range map[string][2]string{
+		"PackageScopeRepository": {historicalPackageScope0120, localRepositoryContract},
+		"Repository":             {historicalRepository0120, localRepositoryDeclarationContract},
+	} {
+		if frozen, current := buildableSchemaSection(t, pair[0]), buildableSchemaSection(t, pair[1]); frozen != current {
+			t.Fatalf("current %s buildable schema differs from 0.12.0; a buildable schema edit must update buildable.ProjectionSchemaDigest", name)
+		}
+	}
+}
+
+func buildableSchemaSection(t *testing.T, schema string) string {
+	t.Helper()
+	start := strings.Index(schema, "class GitHeadTreeInputDetection {")
+	end := strings.Index(schema, "/// Repository identity is derived")
+	if end < 0 {
+		end = strings.Index(schema, "scope: PackageScope")
+	}
+	if start < 0 || end < start {
+		t.Fatal("buildable schema section is not delimited")
+	}
+	return schema[start:end]
 }
 
 func TestHistoricalRepositorySchemasRemainBuildableFree(t *testing.T) {
@@ -232,7 +263,7 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 		})
 	}
 	oldSource := []byte(fmt.Sprintf("amends %q\n", localV050RepositoryURI))
-	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, 0.11.0, or 0.12.0") {
+	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, 0.11.0, 0.12.0, or 0.13.0") {
 		t.Fatalf("0.5 lifecycle declaration error = %v", err)
 	}
 }

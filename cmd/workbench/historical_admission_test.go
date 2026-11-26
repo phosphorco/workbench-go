@@ -73,3 +73,22 @@ func TestHistorical0110LifecycleAdmission(t *testing.T) {
 		t.Fatalf("0.11 Subject did not reach evaluation: %v", err)
 	}
 }
+
+func TestHistorical0120LifecycleAdmission(t *testing.T) {
+	const version = "0.12.0"
+	const prefix = "package://github.com/phosphorco/workbench-go/releases/download/0.12.0/workbench@0.12.0#/"
+	if _, err := releasedCommitPlanContract([]byte("amends \""+prefix+"WorkbenchCommitPlan.pkl\"\n"), version); err != nil {
+		t.Fatal(err)
+	}
+	if _, kind, err := releasedSnapshotContractFromSource([]byte("amends \"" + prefix + "WorkbenchSnapshot.pkl\"\n")); err != nil || kind != currentSnapshotContract {
+		t.Fatalf("0.12 snapshot: %v %v", kind, err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "workbench-subject.pkl"), []byte("amends \""+prefix+"WorkbenchSubject.pkl\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := evaluateSubject(context.Background(), root, evaluate.Evaluator{}, version)
+	if err == nil || !strings.Contains(err.Error(), "evaluator is uninitialized") {
+		t.Fatalf("0.12 Subject did not reach evaluation: %v", err)
+	}
+}

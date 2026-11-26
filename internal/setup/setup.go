@@ -60,6 +60,9 @@ const (
 	localV0120SubjectURI          = "workbench-contract:/0.12.0/WorkbenchSubject.pkl"
 	localV0120PackageScopeURI     = "workbench-contract:/0.12.0/PackageScopeRepository.pkl"
 	localV0120RepositoryURI       = "workbench-contract:/0.12.0/Repository.pkl"
+	localV0130SubjectURI          = "workbench-contract:/0.13.0/WorkbenchSubject.pkl"
+	localV0130PackageScopeURI     = "workbench-contract:/0.13.0/PackageScopeRepository.pkl"
+	localV0130RepositoryURI       = "workbench-contract:/0.13.0/Repository.pkl"
 )
 
 var (
@@ -233,9 +236,17 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, err
 	}
+	var runtimeBuiltins map[string]bool
+	if supportsRepositoryLayout(version) {
+		runtimeBuiltins, err = runtimeBuiltinModules(ctx, toolchain.Bun)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	projection, err := workspace.BuildWithOptions(packages, workspace.BuildOptions{
-		ReassembleRootDependencies: version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == workbenchversion.CurrentContractVersion,
-		ProductionTypeScript:       version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == workbenchversion.CurrentContractVersion,
+		RuntimeBuiltins:            runtimeBuiltins,
+		ReassembleRootDependencies: version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == workbenchversion.CurrentContractVersion,
+		ProductionTypeScript:       version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == workbenchversion.CurrentContractVersion,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("build workspace projection: %w", err)
@@ -354,7 +365,7 @@ func discoverResources(subject contract.Subject, source *discoverySource, versio
 }
 
 func isVersionedContract(version string) bool {
-	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == workbenchversion.CurrentContractVersion
+	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == workbenchversion.CurrentContractVersion
 }
 
 func reconcileDependencies(ctx context.Context, root, bun string) error {
@@ -593,7 +604,7 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	}
 	var declaration contract.Declaration
 	if filename == "PackageScopeRepository.pkl" {
-		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == workbenchversion.CurrentContractVersion {
+		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == workbenchversion.CurrentContractVersion {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclarationV030(source.ctx, encoded, schema)
 		} else {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclaration(source.ctx, encoded, schema)
@@ -603,6 +614,9 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	}
 	if err != nil {
 		return contract.Declaration{}, fmt.Errorf("evaluate %q workbench.pkl: %w", github, err)
+	}
+	if err := source.mergeInRepositoryScopes(github, discoveryPath, &declaration); err != nil {
+		return contract.Declaration{}, err
 	}
 	source.v020Declarations[github] = declaration
 	return declaration, nil
@@ -759,11 +773,20 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 		value, err := evaluate.LocalContract(uri, localSubjectContract)
 		return value, "0.12.0", err
 	case localV0120PackageScopeURI:
-		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		value, err := evaluate.LocalContract(uri, historicalPackageScope0120)
 		return value, "0.12.0", err
 	case localV0120RepositoryURI:
-		value, err := localRepositoryDeclarationSchema(uri)
+		value, err := repositoryDeclarationSchema(uri, historicalRepository0120, historicalVerifier090, historicalFocus090)
 		return value, "0.12.0", err
+	case localV0130SubjectURI:
+		value, err := evaluate.LocalContract(uri, localSubjectContract)
+		return value, "0.13.0", err
+	case localV0130PackageScopeURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		return value, "0.13.0", err
+	case localV0130RepositoryURI:
+		value, err := localRepositoryDeclarationSchema(uri)
+		return value, "0.13.0", err
 	case localV0110PackageScopeURI:
 		value, err := evaluate.LocalContract(uri, historicalPackageScope0100)
 		return value, "0.11.0", err
@@ -794,6 +817,7 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 			{coordinate: "0.9.0", version: "0.9.0"},
 			{coordinate: "0.10.0", version: "0.10.0"},
 			{coordinate: "0.11.0", version: "0.11.0"},
+			{coordinate: "0.12.0", version: "0.12.0"},
 			{coordinate: workbenchversion.ReleaseCoordinate, version: workbenchversion.CurrentContractVersion},
 		} {
 			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate.coordinate + "/workbench@" + candidate.version + "#/" + filename
@@ -828,8 +852,8 @@ func EvaluateCurrentDeclaration(ctx context.Context, evaluator evaluate.Evaluato
 	if err != nil {
 		return contract.Declaration{}, err
 	}
-	if version != "0.6.0" && version != "0.6.1" && version != "0.7.0" && version != "0.8.0" && version != "0.9.0" && version != "0.10.0" && version != "0.11.0" && version != workbenchversion.CurrentContractVersion {
-		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, 0.11.0, or 0.12.0 declaration, got %s", version)
+	if version != "0.6.0" && version != "0.6.1" && version != "0.7.0" && version != "0.8.0" && version != "0.9.0" && version != "0.10.0" && version != "0.11.0" && version != "0.12.0" && version != workbenchversion.CurrentContractVersion {
+		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, 0.11.0, 0.12.0, or 0.13.0 declaration, got %s", version)
 	}
 	if filename == "PackageScopeRepository.pkl" {
 		return evaluator.EvaluatePackageScopeDeclarationV030(ctx, source, schema)
@@ -850,6 +874,10 @@ func observePackages(root string, resources []Resource, contractVersion string) 
 }
 
 func observePackagesAt(ctx context.Context, resources []Resource, contractVersion string, resourceRoots map[string]string, bun string) ([]workspace.Package, error) {
+	rules := legacySourceObservation
+	if supportsRepositoryLayout(contractVersion) {
+		rules = typeScriptIncludeObservation
+	}
 	result := make([]workspace.Package, 0)
 	for _, resource := range resources {
 		resourceRoot, exists := resourceRoots[resource.Identity]
@@ -861,7 +889,9 @@ func observePackagesAt(ctx context.Context, resources []Resource, contractVersio
 			names = append(names, name)
 		}
 		sort.Strings(names)
+		placed := make(map[string]string, len(names))
 		for _, name := range names {
+			policy := resource.Packages[name]
 			packageRoot, err := locatePackage(resourceRoot, resource, name, contractVersion, len(names) == 1)
 			if err != nil {
 				return nil, fmt.Errorf("locate package %q in %q: %w", name, resource.Identity, err)
@@ -870,13 +900,17 @@ func observePackagesAt(ctx context.Context, resources []Resource, contractVersio
 			if err != nil {
 				return nil, err
 			}
+			if previous, claimed := placed[relativeInResource]; claimed && rules.refuseSharedDirectories {
+				return nil, fmt.Errorf("packages %q and %q in %q both resolve to directory %q; each package needs its own directory", previous, name, resource.Identity, filepath.ToSlash(relativeInResource))
+			}
+			placed[relativeInResource] = name
 			relative := filepath.Join(filepath.FromSlash(resource.CanonicalPath), relativeInResource)
-			imports, err := sourceImports(ctx, filepath.Join(packageRoot, "src"), bun)
+			imports, err := sourceImports(ctx, packageRoot, policy.ScannedSourceRoots(), policy.SourceExcludes, rules, bun)
 			if err != nil {
 				return nil, fmt.Errorf("observe package %q imports: %w", name, err)
 			}
 			for index := range imports {
-				imports[index].Source = filepath.ToSlash(filepath.Join(relative, "src", imports[index].Source))
+				imports[index].Source = filepath.ToSlash(filepath.Join(relative, filepath.FromSlash(imports[index].Source)))
 			}
 			result = append(result, workspace.Package{
 				Name:      name,
@@ -890,13 +924,18 @@ func observePackagesAt(ctx context.Context, resources []Resource, contractVersio
 }
 
 func locatePackage(resourceRoot string, resource Resource, name, contractVersion string, allowRoot bool) (string, error) {
-	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0" || contractVersion == "0.6.1" || contractVersion == "0.7.0" || contractVersion == "0.8.0" || contractVersion == "0.9.0" || contractVersion == "0.10.0" || contractVersion == "0.11.0" || contractVersion == workbenchversion.CurrentContractVersion) && resource.Shape.Kind == contract.PackageScopeShape {
-		return locatePackageScopePackage(resourceRoot, resource.Shape.Scope, name)
+	policy := resource.Packages[name]
+	if policy.Directory != "" {
+		return locateDeclaredPackage(resourceRoot, policy)
 	}
-	return locateLegacyPackage(resourceRoot, name, allowRoot)
+	sourceRoots := policy.EffectiveSourceRoots()
+	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0" || contractVersion == "0.6.1" || contractVersion == "0.7.0" || contractVersion == "0.8.0" || contractVersion == "0.9.0" || contractVersion == "0.10.0" || contractVersion == "0.11.0" || contractVersion == "0.12.0" || contractVersion == workbenchversion.CurrentContractVersion) && resource.Shape.Kind == contract.PackageScopeShape {
+		return locatePackageScopePackage(resourceRoot, resource.Shape.Scope, name, sourceRoots)
+	}
+	return locateLegacyPackage(resourceRoot, name, allowRoot, sourceRoots)
 }
 
-func locatePackageScopePackage(resourceRoot, scope, name string) (string, error) {
+func locatePackageScopePackage(resourceRoot, scope, name string, sourceRoots []string) (string, error) {
 	declaration := contract.Declaration{
 		Shape:    contract.ResourceShape{Kind: contract.PackageScopeShape, Scope: scope},
 		Packages: map[string]contract.PackagePolicy{name: {}},
@@ -906,9 +945,17 @@ func locatePackageScopePackage(resourceRoot, scope, name string) (string, error)
 		return "", err
 	}
 
-	canonical, err := canonicalPackageScopeSourceExists(resourceRoot, leaf)
-	if err != nil {
-		return "", fmt.Errorf("observe canonical source directory %q: %w", filepath.ToSlash(filepath.Join(leaf, "src")), err)
+	canonical := true
+	missing := ""
+	for _, sourceRoot := range sourceRoots {
+		exists, err := canonicalPackageScopeSourceExists(resourceRoot, leaf, sourceRoot)
+		if err != nil {
+			return "", fmt.Errorf("observe canonical source directory %q: %w", filepath.ToSlash(filepath.Join(leaf, sourceRoot)), err)
+		}
+		if !exists && canonical {
+			canonical = false
+			missing = filepath.ToSlash(filepath.Join(leaf, sourceRoot))
+		}
 	}
 	nonCanonical := make([]string, 0, 2)
 	for _, relative := range []string{"src", filepath.Join("packages", leaf, "src")} {
@@ -920,17 +967,17 @@ func locatePackageScopePackage(resourceRoot, scope, name string) (string, error)
 			nonCanonical = append(nonCanonical, filepath.ToSlash(relative))
 		}
 	}
-	want := filepath.ToSlash(filepath.Join(leaf, "src"))
+	want := filepath.ToSlash(filepath.Join(leaf, sourceRoots[0]))
 	if len(nonCanonical) != 0 {
 		return "", fmt.Errorf("PackageScope package %q has non-canonical source layout(s) %q; requires %q", name, nonCanonical, want)
 	}
 	if !canonical {
-		return "", fmt.Errorf("PackageScope package %q requires canonical source directory %q", name, want)
+		return "", fmt.Errorf("PackageScope package %q requires canonical source directory %q", name, missing)
 	}
 	return filepath.Join(resourceRoot, leaf), nil
 }
 
-func canonicalPackageScopeSourceExists(resourceRoot, leaf string) (bool, error) {
+func canonicalPackageScopeSourceExists(resourceRoot, leaf, sourceRootName string) (bool, error) {
 	rootInfo, err := os.Lstat(resourceRoot)
 	if err != nil {
 		return false, err
@@ -958,7 +1005,13 @@ func canonicalPackageScopeSourceExists(resourceRoot, leaf string) (bool, error) 
 		return false, fmt.Errorf("canonical package directory %q: %w", filepath.ToSlash(leaf), err)
 	}
 
-	sourceRoot := filepath.Join(packageRoot, "src")
+	sourceRoot := filepath.Join(packageRoot, filepath.FromSlash(sourceRootName))
+	if err := requireRealPathComponents(packageRoot, sourceRootName); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("canonical source directory %q: %w", filepath.ToSlash(filepath.Join(leaf, sourceRootName)), err)
+	}
 	sourceInfo, err := os.Lstat(sourceRoot)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -967,10 +1020,10 @@ func canonicalPackageScopeSourceExists(resourceRoot, leaf string) (bool, error) 
 		return false, err
 	}
 	if sourceInfo.Mode()&os.ModeSymlink != 0 || !sourceInfo.IsDir() {
-		return false, fmt.Errorf("canonical source directory %q must be a real directory, not a symlink", filepath.ToSlash(filepath.Join(leaf, "src")))
+		return false, fmt.Errorf("canonical source directory %q must be a real directory, not a symlink", filepath.ToSlash(filepath.Join(leaf, sourceRootName)))
 	}
 	if err := requireRealDirectoryWithin(realRoot, sourceRoot); err != nil {
-		return false, fmt.Errorf("canonical source directory %q: %w", filepath.ToSlash(filepath.Join(leaf, "src")), err)
+		return false, fmt.Errorf("canonical source directory %q: %w", filepath.ToSlash(filepath.Join(leaf, sourceRootName)), err)
 	}
 	return true, nil
 }
@@ -1001,7 +1054,7 @@ func sourceLayoutExists(path string) (bool, error) {
 	return info.IsDir() || info.Mode()&os.ModeSymlink != 0, nil
 }
 
-func locateLegacyPackage(resourceRoot string, name string, allowRoot bool) (string, error) {
+func locateLegacyPackage(resourceRoot string, name string, allowRoot bool, sourceRoots []string) (string, error) {
 	leaf := name
 	if slash := strings.LastIndex(name, "/"); slash >= 0 {
 		leaf = name[slash+1:]
@@ -1011,39 +1064,103 @@ func locateLegacyPackage(resourceRoot string, name string, allowRoot bool) (stri
 		candidates = append([]string{resourceRoot}, candidates...)
 	}
 	for _, candidate := range candidates {
-		if info, err := os.Stat(filepath.Join(candidate, "src")); err == nil && info.IsDir() {
+		matches := true
+		for _, sourceRoot := range sourceRoots {
+			if info, err := os.Stat(filepath.Join(candidate, filepath.FromSlash(sourceRoot))); err != nil || !info.IsDir() {
+				matches = false
+			}
+		}
+		if matches {
 			return candidate, nil
 		}
 	}
 	return "", fmt.Errorf("no source directory matches package leaf %q", leaf)
 }
 
-func sourceImports(ctx context.Context, root, bun string) ([]workspace.Import, error) {
+// sourceObservation selects how package sources are walked and classified.
+// Released contracts before 0.13 keep their exact src-only walk; 0.13 follows
+// TypeScript include semantics and declared source roots.
+type sourceObservation struct {
+	// skipHiddenAndDependencies skips `.`-prefixed entries and node_modules
+	// below a source root, as TypeScript `include` wildcards do.
+	skipHiddenAndDependencies bool
+	// skipDeclarationFiles leaves ambient `.d.ts` files unobserved: they have no
+	// runtime module graph, and Bun parses them as implementation files.
+	skipDeclarationFiles bool
+	// packageRelativeDevelopment classifies `__tests__` relative to the package
+	// rather than relative to src, so `src/__tests__` and a `__tests__` root are
+	// development sources.
+	packageRelativeDevelopment bool
+	// refuseSharedDirectories refuses two packages resolving to one directory.
+	refuseSharedDirectories bool
+}
+
+var (
+	legacySourceObservation      = sourceObservation{}
+	typeScriptIncludeObservation = sourceObservation{skipHiddenAndDependencies: true, skipDeclarationFiles: true, packageRelativeDevelopment: true, refuseSharedDirectories: true}
+)
+
+// sourceImports observes the imports of every .ts and .tsx file below the
+// package's source roots. Sources are reported relative to the package.
+func sourceImports(ctx context.Context, packageRoot string, sourceRoots, sourceExcludes []string, rules sourceObservation, bun string) ([]workspace.Import, error) {
+	excluded := make(map[string]struct{}, len(sourceExcludes))
+	for _, exclude := range sourceExcludes {
+		excluded[exclude] = struct{}{}
+	}
 	files := make([]typeScriptSourceFile, 0)
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || (!strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx")) {
+	for _, sourceRoot := range sourceRoots {
+		root := filepath.Join(packageRoot, filepath.FromSlash(sourceRoot))
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			relative, err := filepath.Rel(packageRoot, path)
+			if err != nil {
+				return err
+			}
+			relative = filepath.ToSlash(relative)
+			if path != root {
+				if _, skip := excluded[relative]; skip {
+					if entry.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if rules.skipHiddenAndDependencies && (strings.HasPrefix(entry.Name(), ".") || entry.Name() == "node_modules") {
+					if entry.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+			}
+			if entry.IsDir() || (!strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx")) {
+				return nil
+			}
+			if rules.skipDeclarationFiles && strings.HasSuffix(path, ".d.ts") {
+				return nil
+			}
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			loader := "ts"
+			if strings.HasSuffix(path, ".tsx") {
+				loader = "tsx"
+			}
+			development := isPackageDevelopmentSource(relative)
+			if !rules.packageRelativeDevelopment {
+				withinRoot, err := filepath.Rel(root, path)
+				if err != nil {
+					return err
+				}
+				development = isDevelopmentSource(withinRoot)
+			}
+			files = append(files, typeScriptSourceFile{source: contents, path: relative, loader: loader, development: development})
 			return nil
-		}
-		contents, err := os.ReadFile(path)
+		})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		loader := "ts"
-		if strings.HasSuffix(path, ".tsx") {
-			loader = "tsx"
-		}
-		files = append(files, typeScriptSourceFile{source: contents, path: filepath.ToSlash(relative), loader: loader, development: isDevelopmentSource(relative)})
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	observed, err := parserBackedTypeScriptImports(ctx, bun, files)
 	if err != nil {
@@ -1061,9 +1178,18 @@ func sourceImports(ctx context.Context, root, bun string) ([]workspace.Import, e
 	return observed, nil
 }
 
+// isDevelopmentSource is the released pre-0.13 classification of a path
+// relative to src.
 func isDevelopmentSource(path string) bool {
 	base := filepath.Base(path)
 	return strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") || strings.Contains(filepath.ToSlash(path), "/__tests__/")
+}
+
+// isPackageDevelopmentSource classifies a slash-separated path relative to the
+// package: a .test./.spec. file, or any file below a __tests__ directory.
+func isPackageDevelopmentSource(path string) bool {
+	base := filepath.Base(path)
+	return strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") || strings.Contains("/"+path, "/__tests__/")
 }
 
 type catalogObservation struct {

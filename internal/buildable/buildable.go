@@ -26,7 +26,8 @@ const (
 	// ProjectionPath is the setup-owned buildable projection.
 	ProjectionPath = ".workbench/buildables.json"
 	// ProjectionSchemaDigest binds the projection to the released Pkl schema
-	// interpreted by this binary. A schema edit must update this digest.
+	// interpreted by this binary: the 0.12.0 repository schemas, whose buildable
+	// classes 0.13.0 carries unchanged. A buildable schema edit must update it.
 	ProjectionSchemaDigest       = "f131870cf74221d89c8361ae46f3c3bac3ef601ce5c9752f8f328b9b75ce053f"
 	legacyProjectionSchemaDigest = "cf600469e3207b765366bf64d028a9056b3c9b1c8c9268fe23a6efc2e87c26ac"
 	projectionSchemaVersion      = 1

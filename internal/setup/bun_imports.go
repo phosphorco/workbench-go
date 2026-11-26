@@ -63,6 +63,7 @@ func parserBackedTypeScriptImports(ctx context.Context, bun string, files []type
 	inputs := make([]bunScanInput, 0, len(files))
 	probedFiles := make([]probedTypeScriptFile, 0, len(files))
 	for fileIndex, file := range files {
+		file.source = withoutShebang(file.source)
 		mutated, probes, err := probeTypeScriptImports(file, fileIndex)
 		if err != nil {
 			return nil, err
@@ -162,4 +163,42 @@ func matchingImportProbe(probes []importProbe, parserPath string) (importProbe, 
 
 func importKey(kind, path string) string {
 	return kind + "\x00" + path
+}
+
+// withoutShebang turns a leading `#!` line into a `//` comment. Bun's
+// Transpiler.scanImports refuses `#!` ("Unexpected #!"), although Bun runs such
+// files. Replacing exactly two bytes keeps every offset and line number, so
+// lexical spans and reported lines still describe the file on disk.
+func withoutShebang(source []byte) []byte {
+	if !bytes.HasPrefix(source, []byte("#!")) {
+		return source
+	}
+	rewritten := append([]byte(nil), source...)
+	rewritten[0], rewritten[1] = '/', '/'
+	return rewritten
+}
+
+const bunRuntimeBuiltinsProgram = `process.stdout.write(JSON.stringify(require("node:module").builtinModules))`
+
+// runtimeBuiltinModules asks the pinned Bun runtime which bare specifiers it
+// resolves itself (node:module builtinModules), plus "bun". These name runtime
+// modules, not packages, so closure analysis does not require a dependency.
+func runtimeBuiltinModules(ctx context.Context, bun string) (map[string]bool, error) {
+	command := exec.CommandContext(ctx, bun, "-e", bunRuntimeBuiltinsProgram)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf("list Bun runtime built-in modules: %w: %s", err, stderr.String())
+	}
+	var modules []string
+	if err := json.Unmarshal(stdout.Bytes(), &modules); err != nil || len(modules) == 0 {
+		return nil, fmt.Errorf("decode Bun runtime built-in modules %q: %v", stdout.String(), err)
+	}
+	builtins := map[string]bool{"bun": true}
+	for _, module := range modules {
+		builtins[module] = true
+	}
+	return builtins, nil
 }
