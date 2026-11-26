@@ -429,16 +429,18 @@ packages {
     sourceRoots { "src"; "__tests__" }
     sourceExcludes { "__tests__/fixtures" }
     dependencyVersions = "verbatim"
-    dependencies { ["effect"] = "catalog:" }
+    dependencies { ["effect"] = "^4.1.2" }
   }
 }
 ```
 
 - `directory` (Repository only) is the package directory relative to the
-  checkout. It replaces leaf search. It must be a relative `/`-separated path
-  with no empty, hidden (`.`, `..`, `.x`) or `node_modules` segment, and it and
-  every source root must be real directories reached without any symlink. Two
-  packages may not resolve to one directory.
+  checkout. It replaces leaf search. Every path field is a literal relative
+  `/`-separated path with no empty, hidden (`.`, `..`, `.x`) or `node_modules`
+  segment and no glob character (`* ? [ ] { } !`). The directory and every
+  source root must be real directories reached without any symlink. Two
+  packages may not resolve to one directory, and a package directory may not
+  lie inside another package's source root.
 - `sourceRoots` (both shapes) lists the directories Workbench scans and the
   generated tsconfig includes. The default is empty, meaning `src`. Because the
   default is empty, amending (`sourceRoots { "src"; "__tests__" }`) and
@@ -447,38 +449,53 @@ packages {
   nest (`src` and `src/__tests__`); each file is observed once. The generated
   `rootDir` is the deepest directory containing every root, so a package with
   several roots emits `dist/<root>/...` and should declare `exports`.
-- `sourceExcludes` (both shapes) lists files or directories strictly inside a
-  source root that are neither scanned nor compiled; they become the generated
-  tsconfig `exclude`. An exclude wins over a nested root, as in TypeScript.
-- `dependencyVersions = "verbatim"` (both shapes) passes `catalog:`,
-  `catalog:<name>`, ranges, `npm:` aliases and `file:` specifiers into the
-  package manifest unchanged. The generated root still reassembles one
-  specifier per external dependency, with package-relative `file:`/`link:`
-  paths rebased to the Workbench root. If participating packages declare one
-  dependency with different specifiers, setup refuses and lists every such
-  dependency, its specifiers and their declaring packages. Exact packages keep
-  the exact-version rule.
+- `sourceExcludes` (both shapes) lists existing files or directories strictly
+  inside a source root, never a root themselves, that are neither scanned nor
+  compiled; they become the generated tsconfig `exclude`. tsc still compiles an
+  excluded file that another included file imports.
+- `dependencyVersions = "verbatim"` (both shapes) passes ranges, `npm:` aliases
+  and relative path `file:`/`link:` specifiers into the package manifest
+  unchanged. While Workbench reassembles the generated root, which 0.13.0
+  always does, `catalog:` references are refused: the generated root carries no
+  catalog to resolve them. Absolute paths, `link:<name>` (a package registered
+  with `bun link`) and paths escaping the Workbench root are refused. The root
+  copy of a package-relative `file:`/`link:` path is rebased to the Workbench
+  root. Every dependency must use one specifier across the closure. When any
+  package is verbatim, setup reports every problem together (catalog
+  references, disagreeing specifiers including `typescript`, non-exact versions
+  in exact packages), each with its specifiers and declaring packages.
 - `scopes` (Repository only) names in-repository PackageScopes. Each is declared
   by `pkg/<scope>/workbench.pkl`, which amends the same-version
   `PackageScopeRepository.pkl` a standalone scope repository would use, and is
-  evaluated on its own (it cannot import another file). Its packages are placed
-  at `pkg/<scope>/<leaf>` inside the Repository checkout, and its `includes`
-  merge into the Repository's (skill selections are unioned). Setup refuses a
-  missing or symlinked scope file, a file amending another contract or version,
-  a file declaring a different scope, a scope file declaring buildables, and a
-  package declared both at the root and by a scope.
+  evaluated on its own: it cannot import another module or read files or the
+  environment. Its packages are placed at `pkg/<scope>/<leaf>` inside the
+  Repository checkout, and its `includes` merge into the Repository's (skill
+  selections are unioned; an include naming the Repository itself adds
+  nothing). Setup refuses a missing or symlinked scope file, a file amending
+  another contract or version, a file declaring a different scope, a scope file
+  declaring buildables, and a root package whose name lies in a listed scope.
 
 0.13.0 observation follows TypeScript `include` semantics for every package,
-including ones with no layout fields: `.`-prefixed files and directories and
-`node_modules` below a source root are skipped; ambient `.d.ts` files are not
-scanned, because they have no runtime imports and Bun parses them as
-implementation files (it refuses `export const x: T`); `__tests__`, `.test.` and
-`.spec.` are classified relative to the package, so `src/__tests__` and a
-`__tests__` root are test sources; and bare specifiers the pinned Bun runtime
-resolves itself (`node:module` `builtinModules` plus `bun`, for example `fs` or
-`fs/promises`) are not packages. Files beginning with `#!` are observed under
-every contract version. Declarations amending 0.12.0 or earlier keep their
-released observation unchanged.
+including ones with no layout fields:
+
+- `.`-prefixed files and directories and `node_modules` below a source root are
+  skipped;
+- ambient `.d.ts` imports come from Workbench's lexer alone, because Bun parses
+  declaration files as implementation files and refuses valid declarations such
+  as `export const x: T`. Static, export-from, `import = require` and
+  `import("...")` type queries are observed, including `import type`, so a
+  declaration file importing a workspace package creates its edge;
+- `__tests__`, `.test.` and `.spec.` are classified relative to the package, so
+  `src/__tests__` and a `__tests__` root are test sources;
+- files beginning with `#!`, optionally after a UTF-8 byte order mark, are
+  scanned with that line read as a comment;
+- bare runtime module specifiers are not packages. The set is frozen in the
+  contract: Node 22's core modules (`node:module` `builtinModules`) plus `bun`.
+  Bun's own list also names `ws` and `undici`; they are npm packages, so an
+  undeclared import of either is still a closure gap.
+
+Declarations amending 0.12.0 or earlier keep their released observation
+unchanged.
 
 ## Setup reconciles checkouts and generated state
 
