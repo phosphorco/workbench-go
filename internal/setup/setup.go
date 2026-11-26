@@ -63,6 +63,9 @@ const (
 	localV0130SubjectURI          = "workbench-contract:/0.13.0/WorkbenchSubject.pkl"
 	localV0130PackageScopeURI     = "workbench-contract:/0.13.0/PackageScopeRepository.pkl"
 	localV0130RepositoryURI       = "workbench-contract:/0.13.0/Repository.pkl"
+	localV0140SubjectURI          = "workbench-contract:/0.14.0/WorkbenchSubject.pkl"
+	localV0140PackageScopeURI     = "workbench-contract:/0.14.0/PackageScopeRepository.pkl"
+	localV0140RepositoryURI       = "workbench-contract:/0.14.0/Repository.pkl"
 )
 
 var (
@@ -144,6 +147,9 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	root, err := filepath.Abs(workbenchRoot)
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve workbench root: %w", err)
+	}
+	if inPlace, err := IsInPlace(root); err == nil && inPlace {
+		return runInPlace(ctx, root, toolchain)
 	}
 	subjectSource, err := os.ReadFile(filepath.Join(root, "workbench-subject.pkl"))
 	if err != nil {
@@ -232,21 +238,9 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	if err != nil {
 		return Result{}, err
 	}
-	packages, err := observePackagesAt(ctx, resources, version, sourceRoots, toolchain.Bun)
+	projection, err := projectWorkspace(ctx, resources, version, sourceRoots, toolchain.Bun)
 	if err != nil {
 		return Result{}, err
-	}
-	var runtimeBuiltins map[string]bool
-	if supportsRepositoryLayout(version) {
-		runtimeBuiltins = workspace.RuntimeBuiltinModulesV0130()
-	}
-	projection, err := workspace.BuildWithOptions(packages, workspace.BuildOptions{
-		RuntimeBuiltins:            runtimeBuiltins,
-		ReassembleRootDependencies: version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == workbenchversion.CurrentContractVersion,
-		ProductionTypeScript:       version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == workbenchversion.CurrentContractVersion,
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("build workspace projection: %w", err)
 	}
 	buildableProjection, err := encodeBuildableProjection(resources, source.v020Declarations, sourceRoots)
 	if err != nil {
@@ -346,6 +340,28 @@ func run(ctx context.Context, workbenchRoot string, toolchain Toolchain, ambient
 	return Result{Resources: resources, Orphans: orphans, ChangedPaths: changed, ContractVersion: version, SkillWarnings: report.Warnings}, nil
 }
 
+// projectWorkspace observes every placed package and renders the workspace
+// projection that the declaration's contract version defines.
+func projectWorkspace(ctx context.Context, resources []Resource, version string, sourceRoots map[string]string, bun string) (workspace.Projection, error) {
+	packages, err := observePackagesAt(ctx, resources, version, sourceRoots, bun)
+	if err != nil {
+		return workspace.Projection{}, err
+	}
+	var runtimeBuiltins map[string]bool
+	if supportsRepositoryLayout(version) {
+		runtimeBuiltins = workspace.RuntimeBuiltinModulesV0130()
+	}
+	projection, err := workspace.BuildWithOptions(packages, workspace.BuildOptions{
+		RuntimeBuiltins:            runtimeBuiltins,
+		ReassembleRootDependencies: version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == "0.13.0" || version == workbenchversion.CurrentContractVersion,
+		ProductionTypeScript:       version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == "0.13.0" || version == workbenchversion.CurrentContractVersion,
+	})
+	if err != nil {
+		return workspace.Projection{}, fmt.Errorf("build workspace projection: %w", err)
+	}
+	return projection, nil
+}
+
 func discoverResources(subject contract.Subject, source *discoverySource, version string) ([]Resource, error) {
 	if version == "0.1.0" {
 		closure, err := repositoryclosure.Discover(subject, source)
@@ -362,7 +378,7 @@ func discoverResources(subject contract.Subject, source *discoverySource, versio
 }
 
 func isVersionedContract(version string) bool {
-	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == workbenchversion.CurrentContractVersion
+	return version == "0.2.0" || version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == "0.13.0" || version == workbenchversion.CurrentContractVersion
 }
 
 func reconcileDependencies(ctx context.Context, root, bun string) error {
@@ -601,7 +617,7 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 	}
 	var declaration contract.Declaration
 	if filename == "PackageScopeRepository.pkl" {
-		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == workbenchversion.CurrentContractVersion {
+		if version == "0.3.0" || version == "0.4.0" || version == "0.5.0" || version == "0.6.0" || version == "0.6.1" || version == "0.7.0" || version == "0.8.0" || version == "0.9.0" || version == "0.10.0" || version == "0.11.0" || version == "0.12.0" || version == "0.13.0" || version == workbenchversion.CurrentContractVersion {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclarationV030(source.ctx, encoded, schema)
 		} else {
 			declaration, err = source.evaluatorVersioned.EvaluatePackageScopeDeclaration(source.ctx, encoded, schema)
@@ -613,6 +629,9 @@ func (source *discoverySource) LoadDeclaration(github string) (contract.Declarat
 		return contract.Declaration{}, fmt.Errorf("evaluate %q workbench.pkl: %w", github, err)
 	}
 	if err := source.mergeInRepositoryScopes(github, discoveryPath, &declaration); err != nil {
+		return contract.Declaration{}, err
+	}
+	if err := refuseInPlaceLayout(github, declaration); err != nil {
 		return contract.Declaration{}, err
 	}
 	source.v020Declarations[github] = declaration
@@ -779,11 +798,20 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 		value, err := evaluate.LocalContract(uri, localSubjectContract)
 		return value, "0.13.0", err
 	case localV0130PackageScopeURI:
-		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		value, err := evaluate.LocalContract(uri, historicalPackageScope0130)
 		return value, "0.13.0", err
 	case localV0130RepositoryURI:
-		value, err := localRepositoryDeclarationSchema(uri)
+		value, err := repositoryDeclarationSchema(uri, historicalRepository0130, historicalVerifier090, historicalFocus090)
 		return value, "0.13.0", err
+	case localV0140SubjectURI:
+		value, err := evaluate.LocalContract(uri, localSubjectContract)
+		return value, "0.14.0", err
+	case localV0140PackageScopeURI:
+		value, err := evaluate.LocalContract(uri, localRepositoryContract)
+		return value, "0.14.0", err
+	case localV0140RepositoryURI:
+		value, err := localRepositoryDeclarationSchema(uri)
+		return value, "0.14.0", err
 	case localV0110PackageScopeURI:
 		value, err := evaluate.LocalContract(uri, historicalPackageScope0100)
 		return value, "0.11.0", err
@@ -815,6 +843,7 @@ func schemaForSource(source []byte, filename string) (evaluate.Contract, string,
 			{coordinate: "0.10.0", version: "0.10.0"},
 			{coordinate: "0.11.0", version: "0.11.0"},
 			{coordinate: "0.12.0", version: "0.12.0"},
+			{coordinate: "0.13.0", version: "0.13.0"},
 			{coordinate: workbenchversion.ReleaseCoordinate, version: workbenchversion.CurrentContractVersion},
 		} {
 			exact := "package://github.com/phosphorco/workbench-go/releases/download/" + candidate.coordinate + "/workbench@" + candidate.version + "#/" + filename
@@ -849,8 +878,8 @@ func EvaluateCurrentDeclaration(ctx context.Context, evaluator evaluate.Evaluato
 	if err != nil {
 		return contract.Declaration{}, err
 	}
-	if version != "0.6.0" && version != "0.6.1" && version != "0.7.0" && version != "0.8.0" && version != "0.9.0" && version != "0.10.0" && version != "0.11.0" && version != "0.12.0" && version != workbenchversion.CurrentContractVersion {
-		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, 0.11.0, 0.12.0, or 0.13.0 declaration, got %s", version)
+	if version != "0.6.0" && version != "0.6.1" && version != "0.7.0" && version != "0.8.0" && version != "0.9.0" && version != "0.10.0" && version != "0.11.0" && version != "0.12.0" && version != "0.13.0" && version != workbenchversion.CurrentContractVersion {
+		return contract.Declaration{}, fmt.Errorf("buildable lifecycle requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, 0.11.0, 0.12.0, 0.13.0, or 0.14.0 declaration, got %s", version)
 	}
 	if filename == "PackageScopeRepository.pkl" {
 		return evaluator.EvaluatePackageScopeDeclarationV030(ctx, source, schema)
@@ -953,7 +982,7 @@ func locatePackage(resourceRoot string, resource Resource, name, contractVersion
 		return locateDeclaredPackage(resourceRoot, policy)
 	}
 	sourceRoots := policy.EffectiveSourceRoots()
-	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0" || contractVersion == "0.6.1" || contractVersion == "0.7.0" || contractVersion == "0.8.0" || contractVersion == "0.9.0" || contractVersion == "0.10.0" || contractVersion == "0.11.0" || contractVersion == "0.12.0" || contractVersion == workbenchversion.CurrentContractVersion) && resource.Shape.Kind == contract.PackageScopeShape {
+	if (contractVersion == "0.3.0" || contractVersion == "0.4.0" || contractVersion == "0.5.0" || contractVersion == "0.6.0" || contractVersion == "0.6.1" || contractVersion == "0.7.0" || contractVersion == "0.8.0" || contractVersion == "0.9.0" || contractVersion == "0.10.0" || contractVersion == "0.11.0" || contractVersion == "0.12.0" || contractVersion == "0.13.0" || contractVersion == workbenchversion.CurrentContractVersion) && resource.Shape.Kind == contract.PackageScopeShape {
 		return locatePackageScopePackage(resourceRoot, resource.Shape.Scope, name, sourceRoots)
 	}
 	return locateLegacyPackage(resourceRoot, name, allowRoot, sourceRoots)

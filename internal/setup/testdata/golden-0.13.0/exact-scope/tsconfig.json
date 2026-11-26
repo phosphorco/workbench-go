@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./pkg/@beta/app"
+    },
+    {
+      "path": "./pkg/@beta/lib"
+    }
+  ]
+}

@@ -17,7 +17,7 @@ import (
 // scopes, verbatim versions, and TypeScript-include-shaped observation.
 // Earlier versions keep their released observation byte for byte.
 func supportsRepositoryLayout(version string) bool {
-	return version == "0.13.0" || version == workbenchversion.CurrentContractVersion
+	return version == "0.13.0" || version == "0.14.0" || version == workbenchversion.CurrentContractVersion
 }
 
 // inRepositoryScopeDeclarationPath is the one place a Repository's scope is declared.

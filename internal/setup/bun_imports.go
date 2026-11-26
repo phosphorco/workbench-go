@@ -60,6 +60,15 @@ type probedTypeScriptFile struct {
 }
 
 func parserBackedTypeScriptImports(ctx context.Context, bun string, files []typeScriptSourceFile) ([]workspace.Import, error) {
+	return parserBackedImports(ctx, bun, files, false)
+}
+
+// parserBackedImports confirms lexer candidates with Bun. keepTypeOnly also
+// admits syntactically type-only candidates, which Bun erases (contract 0.14).
+func parserBackedImports(ctx context.Context, bun string, files []typeScriptSourceFile, keepTypeOnly bool) ([]workspace.Import, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
 	inputs := make([]bunScanInput, 0, len(files))
 	probedFiles := make([]probedTypeScriptFile, 0, len(files))
 	for fileIndex, file := range files {
@@ -119,7 +128,10 @@ func parserBackedTypeScriptImports(ctx context.Context, bun string, files []type
 		for _, probe := range probed.probes {
 			cooked, exists := confirmed[probe.sentinel]
 			if !exists {
-				continue
+				if !keepTypeOnly || !probe.candidate.typeOnly {
+					continue
+				}
+				cooked = probe.candidate.specifier
 			}
 			candidate := probe.candidate
 			observed = append(observed, workspace.Import{

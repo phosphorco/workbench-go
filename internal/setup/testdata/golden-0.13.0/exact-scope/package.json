@@ -1,0 +1,17 @@
+{
+  "name": "workbench",
+  "private": true,
+  "workspaces": [
+    "pkg/@beta/app",
+    "pkg/@beta/lib"
+  ],
+  "scripts": {
+    "test": "bun test --path-ignore-patterns='**/dist/**'",
+    "typecheck": "tsc --build tsconfig.json --pretty false"
+  },
+  "devDependencies": {
+    "effect": "3.19.0",
+    "typescript": "5.9.3",
+    "zod": "4.1.0"
+  }
+}

@@ -90,6 +90,19 @@ func TestCurrentBuildableSchemaCarriesOptionalObservedBindingInBothShapes(t *tes
 	}
 }
 
+func TestHistorical0130SchemaBytesMatchPublishedPackage(t *testing.T) {
+	// Digests of pkl/*.pkl inside the published workbench@0.13.0.zip.
+	for name, test := range map[string]struct{ value, digest string }{
+		"Repository":             {historicalRepository0130, "c4f0488f6b804c64bf15b879efbfe136bcd78e9d4560635f53aed7cc932e75dc"},
+		"PackageScopeRepository": {historicalPackageScope0130, "60b0bcf3e52da4d6be01580bee6cf3d95eef7a810daa3a767be08d0c00de763d"},
+	} {
+		got := sha256.Sum256([]byte(test.value))
+		if hex.EncodeToString(got[:]) != test.digest {
+			t.Errorf("published 0.13.0 %s schema bytes changed", name)
+		}
+	}
+}
+
 func TestHistorical0120SchemaBytesMatchPublishedPackage(t *testing.T) {
 	// Digests of pkl/*.pkl inside the published workbench@0.12.0.zip.
 	for name, test := range map[string]struct{ value, digest string }{
@@ -167,7 +180,7 @@ func TestGeneratedLocalContractsMatchPublishedSourceCandidates(t *testing.T) {
 }
 
 func TestHistoricalContractSelectionRemainsSupported(t *testing.T) {
-	for _, historical := range []string{"0.7.0", "0.8.0", "0.9.0", "0.10.0", "0.11.0", "0.12.0"} {
+	for _, historical := range []string{"0.7.0", "0.8.0", "0.9.0", "0.10.0", "0.11.0", "0.12.0", "0.13.0"} {
 		t.Run(historical, func(t *testing.T) {
 			source := []byte(fmt.Sprintf(`amends "package://github.com/phosphorco/workbench-go/releases/download/%s/workbench@%s#/Repository.pkl"`, historical, historical))
 			if _, version, err := schemaForSource(source, "Repository.pkl"); err != nil {
@@ -288,7 +301,7 @@ func TestEvaluateCurrentDeclarationLoadsBuildablesForBothResourceShapes(t *testi
 		})
 	}
 	oldSource := []byte(fmt.Sprintf("amends %q\n", localV050RepositoryURI))
-	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, 0.11.0, 0.12.0, or 0.13.0") {
+	if _, err := EvaluateCurrentDeclaration(context.Background(), evaluator, oldSource); err == nil || !strings.Contains(err.Error(), "requires a 0.6.0, 0.6.1, 0.7.0, 0.8.0, 0.9.0, 0.10.0, 0.11.0, 0.12.0, 0.13.0, or 0.14.0") {
 		t.Fatalf("0.5 lifecycle declaration error = %v", err)
 	}
 }

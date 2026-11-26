@@ -27,7 +27,7 @@ const loaded = import("@real/dynamic")
 	want := []observedTypeScriptImport{
 		{specifier: "@real/interpolation", line: 4, kind: "dynamic-import"},
 		{specifier: "@real/side-effect", line: 6, kind: "import-statement"},
-		{specifier: "@real/static", line: 7, kind: "import-statement"},
+		{specifier: "@real/static", line: 7, kind: "import-statement", typeOnly: true},
 		{specifier: "@real/import-equals", line: 8, kind: "require-call"},
 		{specifier: "@real/exported", line: 9, kind: "import-statement"},
 		{specifier: "@real/dynamic", line: 10, kind: "dynamic-import"},
@@ -206,5 +206,31 @@ export {
 	want := []workspace.Import{{Specifier: "#src/internal/local-process.ts", Source: "LocalProcess.ts", Line: 12}}
 	if !reflect.DeepEqual(imports, want) {
 		t.Fatalf("successive export imports = %#v, want %#v", imports, want)
+	}
+}
+
+func TestObserveTypeScriptImportsMarksTypeOnlyForms(t *testing.T) {
+	source := []byte(`import type { A } from "type-named"
+import { type B, type C } from "type-braces"
+import { type D, E } from "mixed"
+import type from "default-named-type"
+import F, { type G } from "default-and-type"
+export type { H } from "export-type"
+export type * from "export-type-star"
+export { I } from "export-value"
+import type * as J from "type-namespace"
+import { type as K } from "renamed-type-binding"
+`)
+	want := map[string]bool{
+		"type-named": true, "type-braces": true, "mixed": false, "default-named-type": false,
+		"default-and-type": false, "export-type": true, "export-type-star": true, "export-value": false,
+		"type-namespace": true, "renamed-type-binding": false,
+	}
+	got := map[string]bool{}
+	for _, observed := range observeTypeScriptImports(source) {
+		got[observed.specifier] = observed.typeOnly
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("type-only marks = %#v, want %#v", got, want)
 	}
 }

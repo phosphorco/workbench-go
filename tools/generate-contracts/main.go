@@ -17,6 +17,7 @@ type contract struct{ name, path string }
 
 var contracts = []contract{
 	{"localSubjectContract", "pkl/WorkbenchSubject.pkl"},
+	{"localInPlaceSubjectContract", "pkl/InPlaceSubject.pkl"},
 	{"localRepositoryContract", "pkl/PackageScopeRepository.pkl"},
 	{"localRepositoryDeclarationContract", "pkl/Repository.pkl"},
 	{"localAgentInstructionsContract", "pkl/AgentInstructions.pkl"},

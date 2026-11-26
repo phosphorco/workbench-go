@@ -22,13 +22,14 @@ import (
 const (
 	defaultCommitPlan = "commit-plan.pkl"
 	defaultSnapshot   = ".workbench/workbench-snapshot.pkl"
-	usage             = "usage: workbench verify [focus...] [options] | plan <verb> <file.plan.pkl> | setup | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable resolve|check|build|seal|attest|check-fresh|promote|materialize ... | skills check | context ... | self skills list|export | version"
+	usage             = "usage: workbench verify [focus...] [options] | plan <verb> <file.plan.pkl> | setup [--check [--json]] | check | commit [plan] | snapshot record [output] | snapshot reproduce <file> | prune <identity>... | run <buildable> -- <args> | buildable resolve|check|build|seal|attest|check-fresh|promote|materialize ... | skills check | context ... | self skills list|export | version"
 )
 
 const rootHelp = `workbench <command>
 
 Environment operations:
   setup                         Reconcile the Subject's environment.
+  setup --check [--json]        Compare every owned file with the projection; write nothing.
   check                         Run setup, then typecheck and tests.
   verify [focus...] [options]    Verify tracked bytes; show this session's changes.
   verify promote <verifier>     Promote an attested artifact.
@@ -57,6 +58,11 @@ Tool identity:
 
 type setupApplication func(context.Context, string) (setup.Result, error)
 type checkApplication func(context.Context, string) (setup.Result, error)
+
+// setupCheckDiffLimit caps the diffs shown by human setup --check output.
+const setupCheckDiffLimit = 20
+
+type setupCheckApplication func(context.Context, string) (setup.CheckReport, error)
 type commitApplication func(context.Context, string, string) (string, error)
 type snapshotRecordApplication func(context.Context, string, string) (string, error)
 type snapshotReproduceApplication func(context.Context, string, string) (string, error)
@@ -77,6 +83,7 @@ type versionApplication func() (version.Info, error)
 // runWith designates any one capability or observes the working directory.
 type applications struct {
 	setup                setupApplication
+	setupCheck           setupCheckApplication
 	check                checkApplication
 	commit               commitApplication
 	snapshotRecord       snapshotRecordApplication
@@ -99,6 +106,7 @@ type commandKind uint8
 
 const (
 	commandSetup commandKind = iota + 1
+	commandSetupCheck
 	commandCheck
 	commandCommit
 	commandSnapshotRecord
@@ -217,6 +225,29 @@ func runWith(ctx context.Context, arguments []string, workingDirectory func() (s
 			return err
 		}
 		return writeReport(output, setupReport(result))
+	case commandSetupCheck:
+		if application.setupCheck == nil {
+			return errors.New("setup check application is absent")
+		}
+		report, err := application.setupCheck(ctx, root)
+		if err != nil {
+			return fmt.Errorf("setup --check: %w", err)
+		}
+		if len(command.arguments) == 1 {
+			encoded, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return err
+			}
+			if _, err := output.Write(append(encoded, '\n')); err != nil {
+				return err
+			}
+		} else if err := writeReport(output, report.Human(setupCheckDiffLimit)); err != nil {
+			return err
+		}
+		if !report.Equal() {
+			return reportedError{err: errors.New("owned files differ from the projection")}
+		}
+		return nil
 	case commandCheck:
 		if application.check == nil {
 			return errors.New("check application is absent")
@@ -397,6 +428,12 @@ func parseInvocation(arguments []string) (invocation, error) {
 	case "setup":
 		if len(arguments) == 1 {
 			return invocation{kind: commandSetup}, nil
+		}
+		if len(arguments) == 2 && arguments[1] == "--check" {
+			return invocation{kind: commandSetupCheck}, nil
+		}
+		if len(arguments) == 3 && arguments[1] == "--check" && arguments[2] == "--json" {
+			return invocation{kind: commandSetupCheck, arguments: []string{"--json"}}, nil
 		}
 	case "check":
 		if len(arguments) == 1 {

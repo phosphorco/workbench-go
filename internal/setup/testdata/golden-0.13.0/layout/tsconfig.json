@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./repos/mono/pkg/@alpha/core"
+    },
+    {
+      "path": "./repos/mono/pkg/@alpha/web"
+    },
+    {
+      "path": "./repos/mono/tools/cli"
+    }
+  ]
+}
