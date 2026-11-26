@@ -50,6 +50,13 @@ type SkillSelection struct {
 }
 
 type PackagePolicy struct {
+	// Directory, SourceRoots, SourceExcludes and DependencyVersions are 0.13
+	// layout fields. Earlier contracts never render them, so their zero values
+	// retain the earlier placement, src-only observation and exact versions.
+	Directory                string            `json:"directory,omitempty"`
+	SourceRoots              []string          `json:"sourceRoots,omitempty"`
+	SourceExcludes           []string          `json:"sourceExcludes,omitempty"`
+	DependencyVersions       string            `json:"dependencyVersions,omitempty"`
 	Dependencies             map[string]string `json:"dependencies"`
 	DevDependencies          map[string]string `json:"devDependencies"`
 	RequiredButNotReferenced map[string]string `json:"requiredButNotReferenced"`

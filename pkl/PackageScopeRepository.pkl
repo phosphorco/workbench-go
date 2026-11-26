@@ -12,6 +12,17 @@ typealias PackageImport = String(length > 1, startsWith("#"), !contains(".."))
 typealias PackageExport = "." | String(length > 2, startsWith("./"), !contains(".."))
 typealias PackageTarget =
   String(length > 2, startsWith("./"), !contains("\\"), !contains("../"))
+/// A relative path below a package or repository directory: `/`-separated,
+/// with no empty, `.`, `..`, hidden (`.`-prefixed) or `node_modules` segment.
+typealias PackagePath =
+  String(
+    length > 0,
+    !startsWith("/"),
+    !endsWith("/"),
+    !matches(Regex(#".*[\\\x00-\x1f\x7f].*"#)),
+    split("/").every((segment) ->
+      segment.length > 0 && !segment.startsWith(".") && segment != "node_modules"),
+  )
 typealias GitHubRepository =
   String(matches(Regex(#"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"#)), !endsWith(".git"))
 typealias SkillDomain = "orchestration" | "engineering" | "general"
@@ -45,6 +56,23 @@ class Include {
 }
 
 class PackagePolicy {
+  /// Source roots, relative to the package directory, that Workbench scans for
+  /// imports and that the generated tsconfig includes. An empty listing means
+  /// the conventional `src`. Because this default is empty, amending it
+  /// (`sourceRoots { "src"; "__tests__" }`) and assigning it
+  /// (`sourceRoots = new Listing { "src"; "__tests__" }`) mean the same thing.
+  /// Roots may nest; each file is observed once. With several roots the
+  /// generated rootDir is their common parent, so a
+  /// package with several roots should declare `exports`.
+  sourceRoots: Listing<PackagePath>(isDistinct) = new {}
+  /// Files or directories, relative to the package directory and inside a
+  /// source root, that are neither scanned nor included in the generated tsconfig.
+  sourceExcludes: Listing<PackagePath>(isDistinct) = new {}
+  /// `exact` requires exact external versions. `verbatim` passes every external
+  /// specifier (`catalog:`, `catalog:<name>`, ranges, `npm:` aliases, `file:`)
+  /// through unchanged; one dependency must still use one specifier across the
+  /// assembled closure.
+  dependencyVersions: "exact" | "verbatim" = "exact"
   dependencies: Mapping<PackageName, NonEmptyString> = new {}
   devDependencies: Mapping<PackageName, NonEmptyString> = new {}
   requiredButNotReferenced: Mapping<PackageName, NonEmptyString> = new {}

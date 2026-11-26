@@ -232,10 +232,32 @@ packages { ["library"] = new PackagePolicy { dependencies { ["other"] = "1.0.0" 
 	if err := json.Unmarshal(old, &expected); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"includes", "packages", "buildables"} {
+	for _, key := range []string{"includes", "buildables"} {
 		if !bytes.Equal(got[key], expected[key]) {
 			t.Fatalf("legacy %s changed", key)
 		}
+	}
+	// 0.13 adds package layout fields; their defaults are the only difference.
+	var gotPackages, expectedPackages map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(got["packages"], &gotPackages); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(expected["packages"], &expectedPackages); err != nil {
+		t.Fatal(err)
+	}
+	for name, policy := range gotPackages {
+		for field, want := range map[string]string{"sourceRoots": `[]`, "sourceExcludes": `[]`, "dependencyVersions": `"exact"`} {
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, policy[field]); err != nil || compact.String() != want {
+				t.Fatalf("package %q %s default = %s, want %s", name, field, policy[field], want)
+			}
+			delete(policy, field)
+		}
+	}
+	gotEncoded, _ := json.Marshal(gotPackages)
+	expectedEncoded, _ := json.Marshal(expectedPackages)
+	if !bytes.Equal(gotEncoded, expectedEncoded) {
+		t.Fatalf("legacy packages changed beyond 0.13 layout defaults:\n%s\n%s", gotEncoded, expectedEncoded)
 	}
 
 }

@@ -24,6 +24,7 @@ var FocusSource string
 type VerifyRepository struct {
 	Includes   map[string]json.RawMessage `json:"includes"`
 	Packages   map[string]json.RawMessage `json:"packages"`
+	Scopes     json.RawMessage            `json:"scopes,omitempty"`
 	Buildables map[string]json.RawMessage `json:"buildables"`
 	Verifiers  map[string]Verifier        `json:"verifiers"`
 	Gates      map[string]Gate            `json:"gates"`

@@ -54,7 +54,7 @@ const ordinary = require("@false/ordinary")
 const dynamic = import("@real/dynamic")
 `)
 
-	imports, err := sourceImports(context.Background(), root, bun)
+	imports, err := sourceImports(context.Background(), root, []string{"."}, nil, legacySourceObservation, bun)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestSourceImportsRefusesBunParserFailure(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, "broken.ts"), `if (ok) {} /import("@false/pkg")/ + ""`)
 
-	_, err = sourceImports(context.Background(), root, bun)
+	_, err = sourceImports(context.Background(), root, []string{"."}, nil, legacySourceObservation, bun)
 	if err == nil || !strings.Contains(err.Error(), "parse TypeScript imports in broken.ts with Bun") {
 		t.Fatalf("Bun parser failure = %v", err)
 	}
@@ -91,7 +91,7 @@ func TestSourceImportsDifferentialProbeSelectsRealSamePathCandidate(t *testing.T
 const real = import("@same/pkg")
 `)
 
-	imports, err := sourceImports(context.Background(), root, bun)
+	imports, err := sourceImports(context.Background(), root, []string{"."}, nil, legacySourceObservation, bun)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ import { Resource as OtherResource } from "alchemy/Resource"
 export { Resource, OtherResource }
 `)
 
-	imports, err := sourceImports(context.Background(), root, bun)
+	imports, err := sourceImports(context.Background(), root, []string{"."}, nil, legacySourceObservation, bun)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ import continued from "\
 const later = import("@scope/later")
 `)
 
-	imports, err := sourceImports(context.Background(), root, bun)
+	imports, err := sourceImports(context.Background(), root, []string{"."}, nil, legacySourceObservation, bun)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ import { Real } from "@real/pkg"
 export { Real }
 `)
 
-	imports, err := sourceImports(context.Background(), root, bun)
+	imports, err := sourceImports(context.Background(), root, []string{"."}, nil, legacySourceObservation, bun)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ export {
   "#src/internal/local-process.ts"
 `)
 
-	imports, err := sourceImports(context.Background(), root, bun)
+	imports, err := sourceImports(context.Background(), root, []string{"."}, nil, legacySourceObservation, bun)
 	if err != nil {
 		t.Fatal(err)
 	}

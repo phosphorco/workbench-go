@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -87,6 +88,11 @@ type Projection struct {
 type BuildOptions struct {
 	ReassembleRootDependencies bool
 	ProductionTypeScript       bool
+	// RuntimeBuiltins names bare specifiers the runtime resolves itself (for
+	// example "fs" or "bun"). They are not packages: closure analysis neither
+	// requires nor derives a dependency for them. Nil keeps the earlier rule
+	// that only scheme-prefixed specifiers such as "node:fs" are not packages.
+	RuntimeBuiltins map[string]bool
 }
 
 type TypeScriptAuthority struct {
@@ -118,6 +124,45 @@ func (failure *RootDependencyAuthorityError) Error() string {
 		details = append(details, fmt.Sprintf("%s %s declares %q", authority.Package, authority.Class, authority.Version))
 	}
 	return fmt.Sprintf("root external dependency %q has %s authority (%s); remedy: declare the same exact external version across participating package dependency classes", failure.Dependency, failure.Reason, strings.Join(details, ", "))
+}
+
+// RootDependencyConflictsError reports every external dependency that the
+// assembled closure declares with more than one specifier. It is returned when
+// any participating package uses verbatim dependency versions, so a closure
+// carrying authored specifiers sees all of its conflicts at once.
+type RootDependencyConflictsError struct {
+	Conflicts []*RootDependencyAuthorityError
+}
+
+func (failure *RootDependencyConflictsError) Error() string {
+	lines := make([]string, 0, len(failure.Conflicts))
+	for _, conflict := range failure.Conflicts {
+		bySpecifier := make(map[string][]string)
+		for _, authority := range conflict.Authorities {
+			bySpecifier[authority.Version] = append(bySpecifier[authority.Version], authority.Package+" "+authority.Class)
+		}
+		specifiers := make([]string, 0, len(bySpecifier))
+		for specifier := range bySpecifier {
+			specifiers = append(specifiers, specifier)
+		}
+		sort.Slice(specifiers, func(left, right int) bool {
+			if len(bySpecifier[specifiers[left]]) != len(bySpecifier[specifiers[right]]) {
+				return len(bySpecifier[specifiers[left]]) < len(bySpecifier[specifiers[right]])
+			}
+			return specifiers[left] < specifiers[right]
+		})
+		parts := make([]string, 0, len(specifiers))
+		for _, specifier := range specifiers {
+			declarers := bySpecifier[specifier]
+			shown := declarers
+			if len(shown) > 3 {
+				shown = append(append([]string(nil), declarers[:3]...), fmt.Sprintf("%d more", len(declarers)-3))
+			}
+			parts = append(parts, fmt.Sprintf("%q by %s", specifier, strings.Join(shown, ", ")))
+		}
+		lines = append(lines, fmt.Sprintf("  %q: %s", conflict.Dependency, strings.Join(parts, "; ")))
+	}
+	return fmt.Sprintf("root external dependencies have conflicting authority in %d dependency(ies); remedy: declare one specifier per external dependency across participating packages:\n%s", len(lines), strings.Join(lines, "\n"))
 }
 
 func (failure *TypeScriptAuthorityError) Error() string {
@@ -172,6 +217,7 @@ type rootTSConfig struct {
 type packageTSConfig struct {
 	CompilerOptions map[string]any `json:"compilerOptions"`
 	Include         []string       `json:"include"`
+	Exclude         []string       `json:"exclude,omitempty"`
 	References      []tsReference  `json:"references,omitempty"`
 }
 
@@ -198,7 +244,7 @@ func BuildWithOptions(packages []Package, options BuildOptions) (Projection, err
 	if err := validatePackagePolicies(ordered, byName); err != nil {
 		return Projection{}, err
 	}
-	if diagnostics := closureDiagnostics(ordered, byName); len(diagnostics) != 0 {
+	if diagnostics := closureDiagnostics(ordered, byName, options.RuntimeBuiltins); len(diagnostics) != 0 {
 		return Projection{}, &ClosureError{Diagnostics: diagnostics}
 	}
 	rootDevDependencies := map[string]string(nil)
@@ -216,7 +262,7 @@ func BuildWithOptions(packages []Package, options BuildOptions) (Projection, err
 	for _, pkg := range ordered {
 		workspaces = append(workspaces, filepath.ToSlash(pkg.Directory))
 		rootReferences = append(rootReferences, tsReference{Path: "./" + filepath.ToSlash(pkg.Directory)})
-		manifest, tsconfig, err := renderPackage(pkg, byName, options.ProductionTypeScript)
+		manifest, tsconfig, err := renderPackage(pkg, byName, options.ProductionTypeScript, options.RuntimeBuiltins)
 		if err != nil {
 			return Projection{}, err
 		}
@@ -254,9 +300,10 @@ func rootTypeScriptVersion(packages []Package) (string, error) {
 	if len(authorities) == 0 {
 		return "", &TypeScriptAuthorityError{Reason: "missing"}
 	}
+	verbatim := verbatimPackages(packages)
 	version := authorities[0].Version
 	for _, authority := range authorities {
-		if !exactPackageVersion.MatchString(authority.Version) {
+		if !verbatim[authority.Package] && !exactPackageVersion.MatchString(authority.Version) {
 			return "", &TypeScriptAuthorityError{Reason: "non-exact or non-external", Authorities: authorities}
 		}
 		if authority.Version != version {
@@ -270,6 +317,7 @@ func rootExternalDependencies(packages []Package) (map[string]string, error) {
 	if _, err := rootTypeScriptVersion(packages); err != nil {
 		return nil, err
 	}
+	verbatim := verbatimPackages(packages)
 	authorities := make(map[string][]RootDependencyAuthority)
 	for _, pkg := range packages {
 		for _, class := range dependencyClasses(pkg.Policy) {
@@ -278,6 +326,9 @@ func rootExternalDependencies(packages []Package) (map[string]string, error) {
 				if isWorkspaceProtocol(version) {
 					continue
 				}
+				if verbatim[pkg.Name] {
+					version = rootRelativeSpecifier(pkg.Directory, version)
+				}
 				authorities[name] = append(authorities[name], RootDependencyAuthority{
 					Package: pkg.Name, Class: class.name, Name: name, Version: version,
 				})
@@ -285,20 +336,58 @@ func rootExternalDependencies(packages []Package) (map[string]string, error) {
 		}
 	}
 	root := make(map[string]string, len(authorities))
+	conflicts := make([]*RootDependencyAuthorityError, 0)
 	for _, name := range sortedMapKeysOfAuthorities(authorities) {
 		declarations := authorities[name]
 		version := declarations[0].Version
+		conflicting := false
 		for _, declaration := range declarations {
-			if !exactPackageVersion.MatchString(declaration.Version) {
+			if !verbatim[declaration.Package] && !exactPackageVersion.MatchString(declaration.Version) {
 				return nil, &RootDependencyAuthorityError{Dependency: name, Reason: "non-exact", Authorities: declarations}
 			}
 			if declaration.Version != version {
-				return nil, &RootDependencyAuthorityError{Dependency: name, Reason: "conflicting", Authorities: declarations}
+				if len(verbatim) == 0 {
+					return nil, &RootDependencyAuthorityError{Dependency: name, Reason: "conflicting", Authorities: declarations}
+				}
+				conflicting = true
 			}
+		}
+		if conflicting {
+			conflicts = append(conflicts, &RootDependencyAuthorityError{Dependency: name, Reason: "conflicting", Authorities: declarations})
+			continue
 		}
 		root[name] = version
 	}
+	if len(conflicts) != 0 {
+		return nil, &RootDependencyConflictsError{Conflicts: conflicts}
+	}
 	return root, nil
+}
+
+func verbatimPackages(packages []Package) map[string]bool {
+	verbatim := make(map[string]bool)
+	for _, pkg := range packages {
+		if pkg.Policy.Verbatim() {
+			verbatim[pkg.Name] = true
+		}
+	}
+	return verbatim
+}
+
+// rootRelativeSpecifier re-expresses a package-relative file: or link: path
+// relative to the Workbench root, where reassembled root dependencies live.
+// The package manifest keeps the authored specifier; only the root's copy and
+// the conflict comparison use this form, so two packages naming different
+// files with the same relative text are a conflict, not an agreement.
+func rootRelativeSpecifier(packageDirectory, specifier string) string {
+	for _, protocol := range []string{"file:", "link:"} {
+		target, ok := strings.CutPrefix(specifier, protocol)
+		if !ok || target == "" || strings.HasPrefix(target, "/") || strings.HasPrefix(target, "~") {
+			continue
+		}
+		return protocol + path.Join(filepath.ToSlash(packageDirectory), target)
+	}
+	return specifier
 }
 
 func sortedMapKeysOfAuthorities(values map[string][]RootDependencyAuthority) []string {
@@ -310,7 +399,7 @@ func sortedMapKeysOfAuthorities(values map[string][]RootDependencyAuthority) []s
 	return keys
 }
 
-func renderPackage(pkg Package, byName map[string]Package, productionTypeScript bool) ([]byte, []byte, error) {
+func renderPackage(pkg Package, byName map[string]Package, productionTypeScript bool, runtimeBuiltins map[string]bool) ([]byte, []byte, error) {
 	dependencies := copyMap(pkg.Policy.Dependencies)
 	devDependencies := copyMap(pkg.Policy.DevDependencies)
 	peerDependencies := copyMap(pkg.Policy.PeerDependencies)
@@ -321,6 +410,9 @@ func renderPackage(pkg Package, byName map[string]Package, productionTypeScript 
 	internalDependencies := make(map[string]struct{})
 	derivedDevelopment := make(map[string]bool)
 	for _, observed := range pkg.Imports {
+		if runtimeBuiltins[observed.Specifier] {
+			continue
+		}
 		name := importedPackageName(observed.Specifier)
 		if _, exists := byName[name]; !exists || name == pkg.Name {
 			continue
@@ -388,7 +480,7 @@ func renderPackage(pkg Package, byName map[string]Package, productionTypeScript 
 		"module":           "NodeNext",
 		"moduleResolution": "NodeNext",
 		"outDir":           "dist",
-		"rootDir":          "src",
+		"rootDir":          sourceRootDirectory(pkg.Policy.EffectiveSourceRoots()),
 		"strict":           true,
 		"target":           "ES2022",
 		"tsBuildInfoFile":  "dist/tsconfig.tsbuildinfo",
@@ -402,7 +494,8 @@ func renderPackage(pkg Package, byName map[string]Package, productionTypeScript 
 	}
 	tsconfig, err := encode(packageTSConfig{
 		CompilerOptions: compilerOptions,
-		Include:         []string{"src/**/*.ts", "src/**/*.tsx"},
+		Include:         sourceIncludes(pkg.Policy.EffectiveSourceRoots()),
+		Exclude:         append([]string(nil), pkg.Policy.SourceExcludes...),
 		References:      references,
 	})
 	if err != nil {
@@ -422,7 +515,7 @@ func validatePackagePolicies(packages []Package, byName map[string]Package) erro
 					return fmt.Errorf("package %q dependency %q is declared in both %s and %s; declare each external dependency in exactly one class", pkg.Name, name, previous, class.name)
 				}
 				declaredBy[name] = class.name
-				if strings.HasPrefix(version, "catalog:") {
+				if strings.HasPrefix(version, "catalog:") && !pkg.Policy.Verbatim() {
 					return fmt.Errorf("package %q dependency %q in %s declares %q, but the generated root has no package catalog; declare an exact resolved version in %s", pkg.Name, name, class.name, version, class.name)
 				}
 				if _, participating := byName[name]; participating && version != "workspace:*" {
@@ -434,12 +527,12 @@ func validatePackagePolicies(packages []Package, byName map[string]Package) erro
 	return nil
 }
 
-func closureDiagnostics(packages []Package, byName map[string]Package) []ClosureDiagnostic {
+func closureDiagnostics(packages []Package, byName map[string]Package, runtimeBuiltins map[string]bool) []ClosureDiagnostic {
 	diagnostics := make([]ClosureDiagnostic, 0)
 	for _, pkg := range packages {
 		observedPackages := make(map[string]struct{})
 		for _, observed := range pkg.Imports {
-			if isBarePackageSpecifier(observed.Specifier) {
+			if isBarePackageSpecifier(observed.Specifier) && !runtimeBuiltins[observed.Specifier] {
 				observedPackages[importedPackageName(observed.Specifier)] = struct{}{}
 			}
 		}
@@ -465,7 +558,7 @@ func closureDiagnostics(packages []Package, byName map[string]Package) []Closure
 		for _, observed := range pkg.Imports {
 			specifier := observed.Specifier
 			switch {
-			case strings.HasPrefix(specifier, "."), strings.HasPrefix(specifier, "/"), strings.Contains(specifier, ":"):
+			case strings.HasPrefix(specifier, "."), strings.HasPrefix(specifier, "/"), strings.Contains(specifier, ":"), runtimeBuiltins[specifier]:
 				continue
 			case strings.HasPrefix(specifier, "#"):
 				if !mappingContains(pkg.Policy.Imports, specifier) {
@@ -661,6 +754,32 @@ func nilIfEmpty(values map[string]string) map[string]string {
 		return nil
 	}
 	return values
+}
+
+// sourceRootDirectory is the tsconfig rootDir: the single source root, or the
+// deepest directory containing every root ("." when they share none).
+func sourceRootDirectory(roots []string) string {
+	common := strings.Split(roots[0], "/")
+	for _, root := range roots[1:] {
+		segments := strings.Split(root, "/")
+		shared := 0
+		for shared < len(common) && shared < len(segments) && common[shared] == segments[shared] {
+			shared++
+		}
+		common = common[:shared]
+	}
+	if len(common) == 0 {
+		return "."
+	}
+	return strings.Join(common, "/")
+}
+
+func sourceIncludes(roots []string) []string {
+	include := make([]string, 0, 2*len(roots))
+	for _, root := range roots {
+		include = append(include, root+"/**/*.ts", root+"/**/*.tsx")
+	}
+	return include
 }
 
 func validateRelativeDirectory(path string) error {
