@@ -31,7 +31,7 @@ packages {
     sourceRoots { "src"; "__tests__" }
     sourceExcludes { "__tests__/fixtures" }
     dependencyVersions = "verbatim"
-    dependencies { ["thing"] = "file:./vendor/thing" }
+    dependencies { ["thing"] = "file:./vendor/thing"; ["aliased-number"] = "npm:is-number@7.0.0" }
     devDependencies { ["typescript"] = "file:./vendor/typescript" }
   }
 }
@@ -41,6 +41,9 @@ packages {
 		"pkg/@alpha/workbench.pkl": fmt.Sprintf(`amends %q
 
 scope = "@alpha"
+includes {
+  ["phosphorco/mono"] {}
+}
 packages {
   ["@alpha/core"] { exports { ["."] = "./src/index.ts" } }
   ["@alpha/web"] { sourceRoots { "src"; "__tests__" }; exports { ["."] = "./src/index.ts" } }
@@ -53,7 +56,8 @@ packages {
 import { core } from "@alpha/core"
 import { $ } from "bun"
 import thing from "thing"
-export const main = [core, $, thing]
+import aliased from "aliased-number"
+export const main = [core, $, thing, aliased]
 `,
 		"tools/cli/src/ambient.d.ts":               "export const modules: ReadonlyArray<string>\n",
 		"tools/cli/src/.prototypes/draft.ts":       "import \"@missing/prototype\"\n",
@@ -72,7 +76,16 @@ func TestRepositoryLayoutPlacesDeclaredAndInRepositoryScopePackages(t *testing.T
 	declaration, files := layoutRepository()
 	createRemote(t, fixture.root, fixture.remotes, "mono", declaration, files)
 	workbench := fixture.newWorkbench(t, "layout", layoutSubjectContract, "", "mono")
-	fixture.runSetup(t, workbench, true)
+	// The scope's include naming its own Repository adds no resource.
+	if output := fixture.runSetup(t, workbench, true); !strings.Contains(output, "Workbench reconciled 1 repository") {
+		t.Fatalf("setup did not reconcile exactly the Repository:\n%s", output)
+	}
+	// bun install resolved the verbatim npm: alias and the path file: dependency.
+	for _, installed := range []string{"node_modules/aliased-number/package.json", "node_modules/thing/index.js"} {
+		if _, err := os.Stat(filepath.Join(workbench, filepath.FromSlash(installed))); err != nil {
+			t.Fatalf("bun install did not install %s: %v", installed, err)
+		}
+	}
 
 	var root struct {
 		Workspaces      []string          `json:"workspaces"`
@@ -82,7 +95,7 @@ func TestRepositoryLayoutPlacesDeclaredAndInRepositoryScopePackages(t *testing.T
 	if want := []string{"repos/mono/pkg/@alpha/core", "repos/mono/pkg/@alpha/web", "repos/mono/tools/cli"}; !slices.Equal(root.Workspaces, want) {
 		t.Fatalf("workspaces = %q, want %q", root.Workspaces, want)
 	}
-	if want := map[string]string{"thing": "file:repos/mono/tools/cli/vendor/thing", "typescript": "file:repos/mono/tools/cli/vendor/typescript"}; !maps.Equal(root.DevDependencies, want) {
+	if want := map[string]string{"aliased-number": "npm:is-number@7.0.0", "thing": "file:repos/mono/tools/cli/vendor/thing", "typescript": "file:repos/mono/tools/cli/vendor/typescript"}; !maps.Equal(root.DevDependencies, want) {
 		t.Fatalf("root dependencies = %#v", root.DevDependencies)
 	}
 
@@ -94,7 +107,7 @@ func TestRepositoryLayoutPlacesDeclaredAndInRepositoryScopePackages(t *testing.T
 	// Verbatim specifiers are unchanged; "bun" is a runtime module; the shebang
 	// file, the __tests__ root and the scope packages are all observed, while
 	// hidden, dependency, excluded and ambient declaration files are not.
-	if want := map[string]string{"@alpha/core": "workspace:*", "thing": "file:./vendor/thing"}; !maps.Equal(cli.Dependencies, want) {
+	if want := map[string]string{"@alpha/core": "workspace:*", "aliased-number": "npm:is-number@7.0.0", "thing": "file:./vendor/thing"}; !maps.Equal(cli.Dependencies, want) {
 		t.Fatalf("cli dependencies = %#v", cli.Dependencies)
 	}
 	if want := map[string]string{"@alpha/web": "workspace:*", "typescript": "file:./vendor/typescript"}; !maps.Equal(cli.DevDependencies, want) {
@@ -149,7 +162,7 @@ func TestRepositoryLayoutRefusesBeforeGeneratedMutation(t *testing.T) {
 		}, want: []string{`declares scope "@beta", want "@alpha"`}},
 		{name: "package declared at root and in scope", mutate: func(root string, files map[string]string) string {
 			return strings.Replace(root, "packages {\n", "packages {\n  [\"@alpha/web\"] { directory = \"pkg/@alpha/web\" }\n", 1)
-		}, want: []string{`package "@alpha/web" is declared both by the repository workbench.pkl and by pkg/@alpha/workbench.pkl`}},
+		}, want: []string{`package "@alpha/web" is in listed scope @alpha; declare it in pkg/@alpha/workbench.pkl`}},
 		{name: "scope file at an older contract", mutate: func(root string, files map[string]string) string {
 			files["pkg/@alpha/workbench.pkl"] = strings.Replace(files["pkg/@alpha/workbench.pkl"], "/0.13.0/", "/0.12.0/", 1)
 			return root
@@ -160,10 +173,26 @@ func TestRepositoryLayoutRefusesBeforeGeneratedMutation(t *testing.T) {
 		{name: "escaping declared directory", mutate: func(root string, files map[string]string) string {
 			return strings.Replace(root, `directory = "tools/cli"`, `directory = "../cli"`, 1)
 		}, want: []string{"tool-cli", "directory"}},
-		{name: "conflicting verbatim specifiers", mutate: func(root string, files map[string]string) string {
+		{name: "conflicting and catalog verbatim specifiers", mutate: func(root string, files map[string]string) string {
 			files["pkg/@alpha/workbench.pkl"] = strings.Replace(files["pkg/@alpha/workbench.pkl"], `["@alpha/core"] {`, `["@alpha/core"] { dependencyVersions = "verbatim"; dependencies { ["thing"] = "^1.0.0"; ["typescript"] = "catalog:" };`, 1)
 			return root
-		}, want: []string{"conflicting authority in 2 dependency(ies)", `"thing": "^1.0.0" by @alpha/core dependencies; "file:repos/mono/tools/cli/vendor/thing" by tool-cli dependencies`, `"typescript":`}},
+		}, want: []string{"cannot be reassembled for 2 dependency(ies)", `"thing" (declared with different specifiers): "^1.0.0" by @alpha/core dependencies; "file:repos/mono/tools/cli/vendor/thing" by tool-cli dependencies`, `"typescript" (catalog indirection the generated Workbench root cannot resolve`}},
+		{name: "exclude equals a root", mutate: func(root string, files map[string]string) string {
+			return strings.Replace(root, `sourceRoots { "src"; "__tests__" }`, `sourceRoots { "src"; "__tests__"; "__tests__/fixtures" }`, 1)
+		}, want: []string{`source exclude "__tests__/fixtures" is also a declared source root`}},
+		{name: "missing exclude", mutate: func(root string, files map[string]string) string {
+			return strings.Replace(root, `sourceExcludes { "__tests__/fixtures" }`, `sourceExcludes { "__tests__/absent" }`, 1)
+		}, want: []string{`source exclude "__tests__/absent": "__tests__/absent" does not exist`}},
+		{name: "glob source root", mutate: func(root string, files map[string]string) string {
+			return strings.Replace(root, `sourceRoots { "src"; "__tests__" }`, `sourceRoots { "src"; "__tests__/*" }`, 1)
+		}, want: []string{"tool-cli", "sourceRoots"}},
+		{name: "bare link specifier", mutate: func(root string, files map[string]string) string {
+			return strings.Replace(root, `["thing"] = "file:./vendor/thing"`, `["thing"] = "link:thing"`, 1)
+		}, want: []string{`declares "link:thing": link:<name> names a package registered with bun link`}},
+		{name: "package inside another package's source", mutate: func(root string, files map[string]string) string {
+			files["tools/cli/src/nested/src/index.ts"] = "export const nested = true\n"
+			return strings.Replace(root, "packages {\n", "packages {\n  [\"nested\"] { directory = \"tools/cli/src/nested\" }\n", 1)
+		}, want: []string{`package "nested" in "phosphorco/mono" lies at "tools/cli/src/nested", inside source root "tools/cli/src" of package "tool-cli"`}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newPackageScopeFixture(t)
