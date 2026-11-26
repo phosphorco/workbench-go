@@ -50,6 +50,13 @@ func TestValidateLayoutRefusesUnsafeOrIncoherentFields(t *testing.T) {
 		{name: "exclude is a root", policy: PackagePolicy{SourceExcludes: []string{"src"}}, want: "not strictly inside a source root"},
 		{name: "duplicate exclude", policy: PackagePolicy{SourceExcludes: []string{"src/a", "src/a"}}, want: "declared twice"},
 		{name: "unknown versions", policy: PackagePolicy{DependencyVersions: "loose"}, want: "neither"},
+		{name: "exclude equals a nested root", policy: PackagePolicy{SourceRoots: []string{"src", "src/__tests__"}, SourceExcludes: []string{"src/__tests__"}}, want: "is also a declared source root"},
+		{name: "glob star root", policy: PackagePolicy{SourceRoots: []string{"src/*"}}, want: "glob character"},
+		{name: "glob question exclude", policy: PackagePolicy{SourceExcludes: []string{"src/a?"}}, want: "glob character"},
+		{name: "glob class exclude", policy: PackagePolicy{SourceExcludes: []string{"src/[ab]"}}, want: "glob character"},
+		{name: "glob brace exclude", policy: PackagePolicy{SourceExcludes: []string{"src/{a,b}"}}, want: "glob character"},
+		{name: "glob negation exclude", policy: PackagePolicy{SourceExcludes: []string{"src/!a"}}, want: "glob character"},
+		{name: "glob in directory", policy: PackagePolicy{Directory: "pkg/**"}, want: "glob character"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			shape := test.shape

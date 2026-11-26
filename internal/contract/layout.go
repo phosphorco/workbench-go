@@ -69,6 +69,9 @@ func (policy PackagePolicy) ValidateLayout(shape ResourceShapeKind) error {
 			return fmt.Errorf("source exclude %q is declared twice", exclude)
 		}
 		seenExcludes[exclude] = struct{}{}
+		if _, root := seenRoots[exclude]; root {
+			return fmt.Errorf("source exclude %q is also a declared source root; declare it as one or the other", exclude)
+		}
 		inside := false
 		for _, root := range policy.EffectiveSourceRoots() {
 			if exclude != root && PathWithin(exclude, root) {
@@ -82,6 +85,10 @@ func (policy PackagePolicy) ValidateLayout(shape ResourceShapeKind) error {
 	return nil
 }
 
+// packagePathGlobCharacters are refused in package paths. tsconfig include and
+// exclude would expand them, while Workbench scans and excludes literal paths.
+const packagePathGlobCharacters = "*?[]{}!"
+
 // ValidatePackagePath accepts a slash-separated relative path whose segments
 // are non-empty and neither hidden (`.`-prefixed, including `.` and `..`) nor
 // node_modules. It mirrors the Pkl PackagePath type.
@@ -92,6 +99,9 @@ func ValidatePackagePath(value string) error {
 	for _, character := range value {
 		if character == '\\' || character < 0x20 || character == 0x7f {
 			return fmt.Errorf("must not contain backslashes or control characters")
+		}
+		if strings.ContainsRune(packagePathGlobCharacters, character) {
+			return fmt.Errorf("must be a literal path; %q is a glob character, and Workbench matches paths literally while tsconfig would expand it", character)
 		}
 	}
 	for _, segment := range strings.Split(value, "/") {

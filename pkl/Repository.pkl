@@ -17,14 +17,16 @@ typealias PackageExport = "." | String(length > 2, startsWith("./"), !contains("
 typealias PackageScope = String(matches(Regex(#"@[a-z0-9][a-z0-9._-]*"#)))
 typealias PackageTarget =
   String(length > 2, startsWith("./"), !contains("\\"), !contains("../"))
-/// A relative path below a package or repository directory: `/`-separated,
-/// with no empty, `.`, `..`, hidden (`.`-prefixed) or `node_modules` segment.
+/// A literal relative path below a package or repository directory:
+/// `/`-separated, with no empty, `.`, `..`, hidden (`.`-prefixed) or
+/// `node_modules` segment, and no glob character (`* ? [ ] { } !`).
 typealias PackagePath =
   String(
     length > 0,
     !startsWith("/"),
     !endsWith("/"),
     !matches(Regex(#".*[\\\x00-\x1f\x7f].*"#)),
+    !matches(Regex(#".*[*?\[\]{}!].*"#)),
     split("/").every((segment) ->
       segment.length > 0 && !segment.startsWith(".") && segment != "node_modules"),
   )
@@ -73,13 +75,15 @@ class PackagePolicy {
   /// generated rootDir is their common parent, so a
   /// package with several roots should declare `exports`.
   sourceRoots: Listing<PackagePath>(isDistinct) = new {}
-  /// Files or directories, relative to the package directory and inside a
-  /// source root, that are neither scanned nor included in the generated tsconfig.
+  /// Existing files or directories, relative to the package directory and
+  /// strictly inside a source root (never a root themselves), that are neither
+  /// scanned nor included in the generated tsconfig.
   sourceExcludes: Listing<PackagePath>(isDistinct) = new {}
-  /// `exact` requires exact external versions. `verbatim` passes every external
-  /// specifier (`catalog:`, `catalog:<name>`, ranges, `npm:` aliases, `file:`)
-  /// through unchanged; one dependency must still use one specifier across the
-  /// assembled closure.
+  /// `exact` requires exact external versions. `verbatim` passes ranges, `npm:`
+  /// aliases and relative path `file:`/`link:` specifiers through unchanged.
+  /// While Workbench reassembles the generated root, `catalog:` references are
+  /// refused: that root carries no catalog to resolve them. One dependency must
+  /// still use one specifier across the assembled closure.
   dependencyVersions: "exact" | "verbatim" = "exact"
   dependencies: Mapping<PackageName, NonEmptyString> = new {}
   devDependencies: Mapping<PackageName, NonEmptyString> = new {}
