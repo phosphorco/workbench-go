@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/phosphorco/workbench-go/internal/orderedjson"
 )
 
 var (
@@ -64,6 +66,11 @@ type PackagePolicy struct {
 	OptionalDependencies     map[string]string `json:"optionalDependencies"`
 	Imports                  map[string]string `json:"imports"`
 	Exports                  map[string]string `json:"exports"`
+	// Roles, Fields and Private are 0.14 fields; earlier contracts never
+	// render them.
+	Roles   map[string]Role   `json:"roles,omitempty"`
+	Fields  orderedjson.Value `json:"fields"`
+	Private *bool             `json:"private,omitempty"`
 }
 
 func (selection *SkillSelection) UnmarshalJSON(encoded []byte) error {

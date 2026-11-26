@@ -124,6 +124,13 @@ func applicationsForEnvironment(provider environmentProvider) applications {
 			}
 			return environment.setup(ctx, root)
 		},
+		setupCheck: func(ctx context.Context, root string) (setup.CheckReport, error) {
+			environment, err := provider()
+			if err != nil {
+				return setup.CheckReport{}, err
+			}
+			return setup.CheckInPlace(ctx, root, setup.NewToolchain(environment.evaluator, environment.bun))
+		},
 		check: func(ctx context.Context, root string) (setup.Result, error) {
 			environment, err := provider()
 			if err != nil {
@@ -282,10 +289,32 @@ func evaluateLocalBuildable(ctx context.Context, provider environmentProvider, r
 	return selected, nil
 }
 
+// inPlaceGeneratedPolicyID admits Workbench-owned files into an in-place
+// commit only when they equal the setup --check projection.
+const inPlaceGeneratedPolicyID = "workbench-0.14-in-place-owned-files-v1"
+
 func runCommit(ctx context.Context, root, planName string, environment commandEnvironment) (string, error) {
 	result, err := environment.setup(ctx, root)
 	if err != nil {
 		return "", err
+	}
+	inPlace, err := setup.IsInPlace(root)
+	if err != nil {
+		return "", err
+	}
+	var workLine contract.WorkLine
+	policyID, rejectPath := generatedPolicyID, generatedProjectionPath
+	if inPlace {
+		report, err := setup.CheckInPlace(ctx, root, setup.NewToolchain(environment.evaluator, environment.bun))
+		if err != nil {
+			return "", err
+		}
+		policyID, rejectPath = inPlaceGeneratedPolicyID, inPlaceRejectPath(report)
+		branch, err := gitText(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
+		if err != nil {
+			return "", fmt.Errorf("an in-place commit needs a checked-out branch: %w", err)
+		}
+		workLine.Branch = strings.TrimSpace(branch)
 	}
 	planPath, err := workbenchPath(root, planName)
 	if err != nil {
@@ -303,9 +332,12 @@ func runCommit(ctx context.Context, root, planName string, environment commandEn
 	if err != nil {
 		return "", err
 	}
-	subject, err := evaluateSubject(ctx, root, environment.evaluator, result.ContractVersion)
-	if err != nil {
-		return "", err
+	if !inPlace {
+		subject, err := evaluateSubject(ctx, root, environment.evaluator, result.ContractVersion)
+		if err != nil {
+			return "", err
+		}
+		workLine = subject.WorkLine
 	}
 	resources := make(map[string]setup.Resource, len(result.Resources))
 	for _, resource := range result.Resources {
@@ -325,10 +357,10 @@ func runCommit(ctx context.Context, root, planName string, environment commandEn
 		selection := plan.Commits[identity]
 		requests = append(requests, change.Request{
 			ResourceID: identity, Repository: filepath.Join(root, filepath.FromSlash(resource.CanonicalPath)),
-			Branch: subject.WorkLine.Branch, Remote: "origin", ChangeID: plan.ChangeID,
+			Branch: workLine.Branch, Remote: "origin", ChangeID: plan.ChangeID,
 			Title: selection.Title, Description: selection.Description,
 			Paths: selection.FilePaths, HunkIDs: selection.HunkIDs, UnrelatedDeletedPaths: selection.UnrelatedDeletedPaths,
-			GeneratedPathPolicyID: generatedPolicyID, RejectPath: generatedProjectionPath,
+			GeneratedPathPolicyID: policyID, RejectPath: rejectPath,
 		})
 	}
 	journal := filepath.Join(root, ".workbench", "changes", plan.ChangeID+".jsonl")
@@ -362,6 +394,20 @@ func runCommit(ctx context.Context, root, planName string, environment commandEn
 		return "", fmt.Errorf("observe durable change progress: %w", progressErr)
 	}
 	return fmt.Sprintf("Workbench change %s completed: %s", plan.ChangeID, renderChangeProgress(progress)), nil
+}
+
+// inPlaceRejectPath refuses every owned file that differs from, is missing
+// from, or is extra to the setup --check projection. Equal owned files and
+// every other path are admitted.
+func inPlaceRejectPath(report setup.CheckReport) func(string) bool {
+	unequal := map[string]bool{}
+	for _, difference := range report.Differing {
+		unequal[difference.Path] = true
+	}
+	for _, path := range append(append([]string{}, report.Missing...), report.Extra...) {
+		unequal[path] = true
+	}
+	return func(path string) bool { return unequal[pathpkg.Clean(filepath.ToSlash(path))] }
 }
 
 func generatedProjectionPath(path string) bool {
@@ -399,7 +445,7 @@ func releasedContractURIAt(coordinate, packageVersion, filename string) string {
 
 func lifecycleContractURI(contractVersion, filename string) (string, error) {
 	switch contractVersion {
-	case "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", "0.9.0", "0.10.0", "0.11.0", "0.12.0", currentContractVersion:
+	case "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", "0.9.0", "0.10.0", "0.11.0", "0.12.0", "0.13.0", currentContractVersion:
 		return releasedContractURI(contractVersion, filename), nil
 	case "0.1.0":
 		return "", fmt.Errorf("Workbench 0.1.0 has no released %s contract", filename)
@@ -443,7 +489,7 @@ func releasedCommitPlanContract(source []byte, contractVersion string) (evaluate
 	if _, err := lifecycleContractURI(contractVersion, filename); err != nil {
 		return evaluate.Contract{}, err
 	}
-	return releasedContractForSubjectLine(source, filename, contractVersion, "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", "0.9.0", "0.10.0", "0.11.0", "0.12.0", currentContractVersion)
+	return releasedContractForSubjectLine(source, filename, contractVersion, "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", "0.9.0", "0.10.0", "0.11.0", "0.12.0", "0.13.0", currentContractVersion)
 }
 
 type snapshotContractKind uint8
@@ -463,7 +509,7 @@ func releasedSnapshotContractFromSource(source []byte) (evaluate.Contract, snaps
 		schema, err := evaluate.ReleasedContract(current)
 		return schema, currentSnapshotContract, err
 	}
-	for _, contractVersion := range []string{"0.4.0", "0.5.0", "0.6.0", "0.6.1", "0.9.0", "0.10.0", "0.11.0", "0.12.0"} {
+	for _, contractVersion := range []string{"0.4.0", "0.5.0", "0.6.0", "0.6.1", "0.9.0", "0.10.0", "0.11.0", "0.12.0", "0.13.0"} {
 		previous := releasedContractURI(contractVersion, "WorkbenchSnapshot.pkl")
 		if got == previous {
 			schema, err := evaluate.ReleasedContract(previous)
@@ -491,7 +537,7 @@ func evaluateSubject(ctx context.Context, root string, evaluator evaluate.Evalua
 	if err != nil {
 		return contract.Subject{}, fmt.Errorf("read workbench-subject.pkl: %w", err)
 	}
-	schema, err := releasedContractForSubjectLine(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", "0.9.0", "0.10.0", "0.11.0", "0.12.0", currentContractVersion)
+	schema, err := releasedContractForSubjectLine(source, "WorkbenchSubject.pkl", contractVersion, "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.6.1", "0.9.0", "0.10.0", "0.11.0", "0.12.0", "0.13.0", currentContractVersion)
 	if err != nil {
 		return contract.Subject{}, err
 	}

@@ -458,3 +458,7 @@ func (reader exactModuleReader) Read(request url.URL) (string, error) {
 	}
 	return reader.contents, nil
 }
+
+func (runtime Evaluator) EvaluateInPlaceSubject(ctx context.Context, source []byte, schema Contract) (contract.InPlaceSubject, error) {
+	return evaluateDecoded(runtime, ctx, source, schema, "InPlaceSubject", contract.DecodeInPlaceSubject)
+}

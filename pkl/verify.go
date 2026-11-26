@@ -22,13 +22,19 @@ var FocusSource string
 // VerifyRepository carries verification policy from an evaluated Repository.pkl.
 // Existing Workbench declarations remain opaque to the verification consumer.
 type VerifyRepository struct {
-	Includes   map[string]json.RawMessage `json:"includes"`
-	Packages   map[string]json.RawMessage `json:"packages"`
-	Scopes     json.RawMessage            `json:"scopes,omitempty"`
-	Buildables map[string]json.RawMessage `json:"buildables"`
-	Verifiers  map[string]Verifier        `json:"verifiers"`
-	Gates      map[string]Gate            `json:"gates"`
-	Focuses    map[string]Focus           `json:"focuses"`
+	Includes map[string]json.RawMessage `json:"includes"`
+	Packages map[string]json.RawMessage `json:"packages"`
+	Scopes   json.RawMessage            `json:"scopes,omitempty"`
+	// TypeScript, CircularEdges, Root and GeneratedMarker are 0.14 layout
+	// fields, opaque to verification.
+	TypeScript      json.RawMessage            `json:"typescript,omitempty"`
+	CircularEdges   json.RawMessage            `json:"circularEdges,omitempty"`
+	Root            json.RawMessage            `json:"root,omitempty"`
+	GeneratedMarker json.RawMessage            `json:"generatedMarker,omitempty"`
+	Buildables      map[string]json.RawMessage `json:"buildables"`
+	Verifiers       map[string]Verifier        `json:"verifiers"`
+	Gates           map[string]Gate            `json:"gates"`
+	Focuses         map[string]Focus           `json:"focuses"`
 }
 
 // Verifier matches the evaluated Pkl property order. Timeout is in seconds.

@@ -1,0 +1,13 @@
+{
+  "name": "@beta/app",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@beta/lib": "workspace:*",
+    "zod": "4.1.0"
+  }
+}

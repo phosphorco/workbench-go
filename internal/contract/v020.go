@@ -46,6 +46,11 @@ type Declaration struct {
 	Verifiers  map[string]contracts.Verifier  `json:"verifiers,omitempty"`
 	Gates      map[string]contracts.Gate      `json:"gates,omitempty"`
 	Focuses    map[string]contracts.Focus     `json:"focuses,omitempty"`
+	// TypeScript, CircularEdges, Root and GeneratedMarker are 0.14 fields.
+	TypeScript      TypeScriptLayout `json:"typescript"`
+	CircularEdges   *CircularEdgeSet `json:"circularEdges,omitempty"`
+	Root            *RootManifest    `json:"root,omitempty"`
+	GeneratedMarker *string          `json:"generatedMarker,omitempty"`
 }
 
 type ResourceInclude struct {
@@ -92,26 +97,34 @@ func DecodePackageScopeDeclarationV030(encoded []byte) (Declaration, error) {
 
 func DecodeRepositoryDeclaration(encoded []byte) (Declaration, error) {
 	var value struct {
-		Includes   map[string]ResourceInclude     `json:"includes"`
-		Packages   map[string]PackagePolicy       `json:"packages"`
-		Scopes     []string                       `json:"scopes"`
-		Buildables map[string]buildable.Buildable `json:"buildables"`
-		Verifiers  map[string]contracts.Verifier  `json:"verifiers"`
-		Gates      map[string]contracts.Gate      `json:"gates"`
-		Focuses    map[string]contracts.Focus     `json:"focuses"`
+		Includes        map[string]ResourceInclude     `json:"includes"`
+		Packages        map[string]PackagePolicy       `json:"packages"`
+		Scopes          []string                       `json:"scopes"`
+		Buildables      map[string]buildable.Buildable `json:"buildables"`
+		Verifiers       map[string]contracts.Verifier  `json:"verifiers"`
+		Gates           map[string]contracts.Gate      `json:"gates"`
+		Focuses         map[string]contracts.Focus     `json:"focuses"`
+		TypeScript      TypeScriptLayout               `json:"typescript"`
+		CircularEdges   *CircularEdgeSet               `json:"circularEdges"`
+		Root            *RootManifest                  `json:"root"`
+		GeneratedMarker *string                        `json:"generatedMarker"`
 	}
 	if err := decodeStrict(encoded, &value); err != nil {
 		return Declaration{}, fmt.Errorf("decode 0.2 repository declaration: %w", err)
 	}
 	declaration := Declaration{
-		Shape:      ResourceShape{Kind: RepositoryShape},
-		Includes:   value.Includes,
-		Packages:   value.Packages,
-		Scopes:     value.Scopes,
-		Buildables: value.Buildables,
-		Verifiers:  value.Verifiers,
-		Gates:      value.Gates,
-		Focuses:    value.Focuses,
+		Shape:           ResourceShape{Kind: RepositoryShape},
+		Includes:        value.Includes,
+		Packages:        value.Packages,
+		Scopes:          value.Scopes,
+		Buildables:      value.Buildables,
+		Verifiers:       value.Verifiers,
+		Gates:           value.Gates,
+		Focuses:         value.Focuses,
+		TypeScript:      value.TypeScript,
+		CircularEdges:   value.CircularEdges,
+		Root:            value.Root,
+		GeneratedMarker: value.GeneratedMarker,
 	}
 	if err := declaration.Validate(); err != nil {
 		return Declaration{}, err
@@ -131,6 +144,17 @@ func (declaration Declaration) Validate() error {
 	for name, policy := range declaration.Packages {
 		if err := policy.ValidateLayout(declaration.Shape.Kind); err != nil {
 			return fmt.Errorf("package %q: %w", name, err)
+		}
+		if err := policy.ValidatePackageRoles(); err != nil {
+			return fmt.Errorf("package %q: %w", name, err)
+		}
+	}
+	if err := declaration.TypeScript.Validate(); err != nil {
+		return fmt.Errorf("typescript: %w", err)
+	}
+	if declaration.CircularEdges != nil {
+		if err := ValidateRepositoryRelativePath(declaration.CircularEdges.Path); err != nil {
+			return fmt.Errorf("circularEdges path %q: %w", declaration.CircularEdges.Path, err)
 		}
 	}
 	if len(declaration.Scopes) != 0 && declaration.Shape.Kind != RepositoryShape {

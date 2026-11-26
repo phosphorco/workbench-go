@@ -9,6 +9,11 @@ type observedTypeScriptImport struct {
 	kind      string
 	spanStart int
 	spanEnd   int
+	// typeOnly marks `import type`, `export type` and brace lists whose every
+	// specifier is `type`-qualified. Bun erases these, so its scan never
+	// confirms them; contract 0.14 still observes them because the compiler
+	// needs the dependency's declarations.
+	typeOnly bool
 }
 
 type typeScriptTokenKind uint8
@@ -63,18 +68,22 @@ func observeTypeScriptImports(source []byte) []observedTypeScriptImport {
 }
 
 func exportFromSpecifier(tokens []typeScriptToken, index int) (observedTypeScriptImport, bool) {
+	typeOnly := false
 	if index < len(tokens) && tokens[index].kind == typeScriptIdentifier && tokens[index].text == "type" {
 		index++
+		typeOnly = true
 	}
 	if index >= len(tokens) || tokens[index].kind != typeScriptPunctuation {
 		return observedTypeScriptImport{}, false
 	}
 	switch tokens[index].text {
 	case "{":
+		open := index
 		index = afterBalancedBraces(tokens, index)
 		if index < 0 {
 			return observedTypeScriptImport{}, false
 		}
+		typeOnly = typeOnly || everySpecifierIsType(tokens, open, index-1)
 	case "*":
 		index++
 		if index < len(tokens) && tokens[index].kind == typeScriptIdentifier && tokens[index].text == "as" {
@@ -83,7 +92,9 @@ func exportFromSpecifier(tokens []typeScriptToken, index int) (observedTypeScrip
 	default:
 		return observedTypeScriptImport{}, false
 	}
-	return followingStringSpecifier(tokens, index)
+	specifier, ok := followingStringSpecifier(tokens, index)
+	specifier.typeOnly = typeOnly
+	return specifier, ok
 }
 
 func immediateImportSpecifier(tokens []typeScriptToken, index int) (observedTypeScriptImport, bool) {
@@ -118,16 +129,24 @@ func importEqualsSpecifier(tokens []typeScriptToken, index int) (observedTypeScr
 }
 
 func importFromSpecifier(tokens []typeScriptToken, index int) (observedTypeScriptImport, bool) {
-	if index < len(tokens) && tokens[index].kind == typeScriptIdentifier && tokens[index].text == "type" {
+	typeOnly := false
+	// `import type from "x"` imports a default binding named type.
+	if index+1 < len(tokens) && tokens[index].kind == typeScriptIdentifier && tokens[index].text == "type" &&
+		!(tokens[index+1].kind == typeScriptIdentifier && tokens[index+1].text == "from") {
 		index++
+		typeOnly = true
 	}
+	defaultBinding := false
 	if index >= len(tokens) {
 		return observedTypeScriptImport{}, false
 	}
 	if tokens[index].kind == typeScriptIdentifier {
 		index++
+		defaultBinding = true
 		if index < len(tokens) && tokens[index].kind == typeScriptIdentifier && tokens[index].text == "from" {
-			return followingStringSpecifier(tokens, index)
+			specifier, ok := followingStringSpecifier(tokens, index)
+			specifier.typeOnly = typeOnly
+			return specifier, ok
 		}
 		if index >= len(tokens) || tokens[index].kind != typeScriptPunctuation || tokens[index].text != "," {
 			return observedTypeScriptImport{}, false
@@ -139,10 +158,12 @@ func importFromSpecifier(tokens []typeScriptToken, index int) (observedTypeScrip
 	}
 	switch tokens[index].text {
 	case "{":
+		open := index
 		index = afterBalancedBraces(tokens, index)
 		if index < 0 {
 			return observedTypeScriptImport{}, false
 		}
+		typeOnly = typeOnly || (!defaultBinding && everySpecifierIsType(tokens, open, index-1))
 	case "*":
 		index++
 		if index+1 >= len(tokens) || tokens[index].kind != typeScriptIdentifier || tokens[index].text != "as" || tokens[index+1].kind != typeScriptIdentifier {
@@ -152,7 +173,32 @@ func importFromSpecifier(tokens []typeScriptToken, index int) (observedTypeScrip
 	default:
 		return observedTypeScriptImport{}, false
 	}
-	return followingStringSpecifier(tokens, index)
+	specifier, ok := followingStringSpecifier(tokens, index)
+	specifier.typeOnly = typeOnly
+	return specifier, ok
+}
+
+// everySpecifierIsType reports whether the non-empty brace list between open
+// and close holds only `type`-qualified specifiers.
+func everySpecifierIsType(tokens []typeScriptToken, open, close int) bool {
+	elementStart := true
+	elements := 0
+	for index := open + 1; index < close; index++ {
+		token := tokens[index]
+		if token.kind == typeScriptPunctuation && token.text == "," {
+			elementStart = true
+			continue
+		}
+		if elementStart {
+			elementStart = false
+			elements++
+			if token.kind != typeScriptIdentifier || token.text != "type" || index+1 >= close ||
+				tokens[index+1].kind != typeScriptIdentifier || tokens[index+1].text == "as" {
+				return false
+			}
+		}
+	}
+	return elements > 0
 }
 
 func followingStringSpecifier(tokens []typeScriptToken, index int) (observedTypeScriptImport, bool) {

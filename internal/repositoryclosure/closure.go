@@ -237,6 +237,13 @@ func clonePackagePolicies(source map[string]contract.PackagePolicy) map[string]c
 		policy.Exports = cloneStringMap(policy.Exports)
 		policy.SourceRoots = append([]string(nil), policy.SourceRoots...)
 		policy.SourceExcludes = append([]string(nil), policy.SourceExcludes...)
+		if policy.Roles != nil {
+			roles := make(map[string]contract.Role, len(policy.Roles))
+			for role, value := range policy.Roles {
+				roles[role] = value
+			}
+			policy.Roles = roles
+		}
 		result[name] = policy
 	}
 	return result

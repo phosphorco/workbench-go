@@ -1,0 +1,15 @@
+{
+  "name": "@alpha/web",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./view": "./src/view.mts"
+  },
+  "imports": {
+    "#src/*": "./src/*"
+  },
+  "dependencies": {
+    "@alpha/core": "workspace:*"
+  }
+}

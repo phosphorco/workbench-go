@@ -25,3 +25,9 @@ var historicalRepository0120 string
 
 //go:embed historical/0.12.0/PackageScopeRepository.pkl
 var historicalPackageScope0120 string
+
+//go:embed historical/0.13.0/Repository.pkl
+var historicalRepository0130 string
+
+//go:embed historical/0.13.0/PackageScopeRepository.pkl
+var historicalPackageScope0130 string

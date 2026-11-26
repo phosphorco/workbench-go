@@ -49,6 +49,65 @@ typealias RelativePath =
     !endsWith("/.."),
   )
 
+/// A TypeScript role name: one generated `tsconfig.<role>.json` per package.
+typealias RoleName = String(matches(Regex(#"[a-z][a-z0-9]*"#)))
+/// An authored reference: a package, optionally `#<role>`.
+typealias RoleReference =
+  String(matches(Regex(#"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*(?:#[a-z][a-z0-9]*)?"#)))
+/// A tsconfig `include`, `exclude` or `files` entry, rendered exactly as
+/// written and matched with TypeScript's semantics against Git-tracked files.
+/// `./` may prefix it; `..` segments are admitted only for declared foreign
+/// files.
+typealias TsconfigPattern =
+  String(
+    length > 0,
+    !startsWith("/"),
+    !contains("\\"),
+    !matches(Regex(#".*[\x00-\x1f\x7f].*"#)),
+  )
+
+/// One TypeScript project of a package (or a standalone project).
+class Role {
+  /// The base this role extends. Null selects the base whose directory most
+  /// closely encloses the role's directory; there is none when no base does.
+  base: String? = null
+  /// False renders no `extends`, whatever bases enclose the role.
+  extendsBase: Boolean = true
+  /// `include`, `exclude` and `files` as TypeScript reads them, relative to
+  /// the role's directory. Null omits the key, so the base's value (or
+  /// TypeScript's default) applies; an empty listing renders `[]`.
+  include: Listing<TsconfigPattern>? = null
+  exclude: Listing<TsconfigPattern>? = null
+  files: Listing<TsconfigPattern>? = null
+  /// Roles of the same package this role may share files with. Any other
+  /// overlap is refused.
+  alsoIncludes: Listing<RoleName>(isDistinct) = new {}
+  /// Entries of [files] outside the package directory, each attributed to the
+  /// package that owns it. Imports observed in a foreign file belong to this
+  /// role.
+  foreignFiles: Mapping<TsconfigPattern, PackageName> = new {}
+  /// Imports from a development role land in `devDependencies`; an import
+  /// from any other role lands in `dependencies`.
+  development: Boolean = false
+  /// Roles of the same package this role references.
+  consumes: Listing<RoleName>(isDistinct) = new {}
+  /// Whether references to other packages are derived from this role's
+  /// imports. Null means true for `sources` and false for every other role.
+  deriveReferences: Boolean? = null
+  /// Packages a non-deriving role references: `"<package>"` references the
+  /// package's [referenceRole]; `"<package>#<role>"` names an emitting role.
+  /// Refused on a deriving role.
+  references: Listing<RoleReference>(isDistinct) = new {}
+  /// The role of a dependency referenced when the imported file cannot name
+  /// one: a bare package-entry import of a dependency without `exports["."]`,
+  /// an imported file in no role or in a role that does not emit, and every
+  /// authored reference.
+  referenceRole: RoleName = "sources"
+  /// Compiler options in declared order. Workbench owns `composite`,
+  /// `outDir`, `rootDir` and `tsBuildInfoFile`.
+  compilerOptions: Mapping<String, Any> = new {}
+}
+
 class SkillRoots {
   domains: Set<SkillDomain> = Set()
   names: Set<SkillName> = Set()
@@ -92,6 +151,14 @@ class PackagePolicy {
   optionalDependencies: Mapping<PackageName, NonEmptyString> = new {}
   imports: Mapping<PackageImport, PackageTarget> = new {}
   exports: Mapping<PackageExport, PackageTarget> = new {}
+  /// TypeScript roles in declared order. Empty means one `sources` role over
+  /// [sourceRoots] and [sourceExcludes].
+  roles: Mapping<RoleName, Role> = new {}
+  /// Further package.json fields (`version`, `sideEffects`, `bin`, `scripts`,
+  /// …) written in declared order after `type`. Owned keys are refused.
+  fields: Mapping<String, Any> = new {}
+  /// `private` in package.json; null omits the field.
+  `private`: Boolean? = true
 }
 
 class GitHeadTreeInputDetection {
@@ -163,7 +230,72 @@ packages: Mapping<PackageName, PackagePolicy> = new {}
 /// this same version and is evaluated on its own; its packages are placed at
 /// `pkg/<scope>/<leaf>`. A package may not be declared both here and by a scope.
 scopes: Listing<PackageScope>(isDistinct) = new {}
+
+/// The name of a TypeScript base configuration.
+typealias BaseName = String(matches(Regex(#"[a-z0-9][a-z0-9._-]*"#)))
+/// A repository directory: "." is the repository root.
+typealias RepositoryDirectory = "." | PackagePath
+/// A standalone project's tsconfig file, relative to the repository root.
+typealias ProjectPath =
+  String(
+    length > 0,
+    !startsWith("/"),
+    !matches(Regex(#".*[\\\x00-\x1f\x7f].*"#)),
+    endsWith(".json"),
+    split("/").every((segment) -> segment.length > 0 && segment != "." && segment != ".."),
+  )
+
+/// A generated `tsconfig.base.json` in [directory].
+class TsconfigBase {
+  directory: RepositoryDirectory
+  /// Another base this base extends.
+  `extends`: BaseName? = null
+  `$schema`: String? = null
+  typeAcquisition: Mapping<String, Any>? = null
+  /// Compiler options in declared order, including `paths` and `plugins`.
+  /// Workbench owns `composite`, `outDir` and `tsBuildInfoFile`.
+  compilerOptions: Mapping<String, Any> = new {}
+  /// Top-level `include` and `exclude`, rendered as written; null omits them.
+  include: Listing<String>? = null
+  exclude: Listing<String>? = null
+}
+
+class TypeScript {
+  /// Base configurations. A role extends the base whose directory most
+  /// closely encloses it unless it names one.
+  bases: Mapping<BaseName, TsconfigBase> = new {}
+  /// Repository projects that belong to no package, keyed by their tsconfig
+  /// path. Their references are derived from their imports, like a role's.
+  projects: Mapping<ProjectPath, Role> = new {}
+}
+
+/// A file the repository's own tooling generates, listing the package edges
+/// that may close a TypeScript reference cycle (`"source -> target"`).
+/// Workbench validates the set and never chooses marks.
+class CircularEdgeSet {
+  path: RelativePath
+}
+
+class RootPackageJson {
+  /// Authored root package.json fields in authored order (name, private,
+  /// type, scripts, imports, catalog, catalogs, overrides,
+  /// patchedDependencies, external dependencies, workspaces, …).
+  fields: Mapping<String, Any> = new {}
+}
+
+class RootManifest {
+  packageJson: RootPackageJson = new {}
+}
+
 buildables: Mapping<BuildableName, Buildable> = new {}
+/// The TypeScript layout of an in-place Workbench (0.14).
+typescript: TypeScript = new {}
+/// The generated circular-edge set (0.14, in place).
+circularEdges: CircularEdgeSet? = null
+/// The authored root package.json (0.14, in place).
+root: RootManifest? = null
+/// When set, every Workbench-owned JSON file begins with `"//"` carrying it.
+generatedMarker: String? = null
 
 /// A policy naming which Verifiers must be attested for a Tree at a boundary.
 class Gate {

@@ -237,7 +237,7 @@ packages { ["library"] = new PackagePolicy { dependencies { ["other"] = "1.0.0" 
 			t.Fatalf("legacy %s changed", key)
 		}
 	}
-	// 0.13 adds package layout fields; their defaults are the only difference.
+	// 0.13 and 0.14 add package fields; their defaults are the only difference.
 	var gotPackages, expectedPackages map[string]map[string]json.RawMessage
 	if err := json.Unmarshal(got["packages"], &gotPackages); err != nil {
 		t.Fatal(err)
@@ -246,7 +246,7 @@ packages { ["library"] = new PackagePolicy { dependencies { ["other"] = "1.0.0" 
 		t.Fatal(err)
 	}
 	for name, policy := range gotPackages {
-		for field, want := range map[string]string{"sourceRoots": `[]`, "sourceExcludes": `[]`, "dependencyVersions": `"exact"`} {
+		for field, want := range map[string]string{"sourceRoots": `[]`, "sourceExcludes": `[]`, "dependencyVersions": `"exact"`, "roles": `{}`, "fields": `{}`, "private": `true`} {
 			var compact bytes.Buffer
 			if err := json.Compact(&compact, policy[field]); err != nil || compact.String() != want {
 				t.Fatalf("package %q %s default = %s, want %s", name, field, policy[field], want)

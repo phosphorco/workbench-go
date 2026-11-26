@@ -1,0 +1,20 @@
+/// A Workbench whose context is the repository it is declared in.
+///
+/// Setup reads `workbench.pkl` (and its in-repository scope declarations) from
+/// the working tree of the checkout that holds this file. Git is read-only for
+/// Workbench: the checkout's `origin` must name [entrypoint], nothing is
+/// cloned, fetched or switched, and the only files setup writes are the
+/// Workbench-owned TypeScript and package manifests, which are committed.
+module phosphor.workbench.InPlaceSubject
+
+typealias GitHubRepositoryUrl =
+  String(matches(Regex(#"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?"#)))
+
+/// The repository this checkout is a clone of. `git remote get-url origin`
+/// must name the same GitHub repository.
+entrypoint: GitHubRepositoryUrl
+
+/// Whether setup reconciles dependency links after writing owned files. When
+/// true, setup runs `bun install --frozen-lockfile`; `setup --check` never
+/// installs.
+install: Boolean = false
