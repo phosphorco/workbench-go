@@ -542,9 +542,11 @@ class CircularEdgeSet {
 }
 
 class RootPackageJson {
-  /// Authored root package.json fields in authored order (name, private,
-  /// type, scripts, imports, catalog, catalogs, overrides,
-  /// patchedDependencies, external dependencies, workspaces, …).
+  /// Authored root package.json fields (name, private, type, scripts,
+  /// imports, catalog, catalogs, overrides, patchedDependencies, external
+  /// dependencies, workspaces, …), written in authored order. Within
+  /// ` + "`" + `dependencies` + "`" + ` and ` + "`" + `devDependencies` + "`" + ` names are sorted, because derived
+  /// workspace entries merge into them.
   fields: Mapping<String, Any> = new {}
 }
 
@@ -560,7 +562,7 @@ circularEdges: CircularEdgeSet? = null
 /// The authored root package.json (0.14, in place).
 root: RootManifest? = null
 /// When set, every Workbench-owned JSON file begins with ` + "`" + `"//"` + "`" + ` carrying it.
-generatedMarker: String? = null
+generatedMarker: String(!isEmpty)? = null
 
 /// A policy naming which Verifiers must be attested for a Tree at a boundary.
 class Gate {
@@ -666,6 +668,9 @@ class CommitSelection {
   filePaths: Listing<RelativePath> = new {}
   hunkIds: Listing<HunkId> = new {}
   unrelatedDeletedPaths: Listing<RelativePath> = new {}
+  /// An in-place Workbench refuses to push to the remote's default branch
+  /// unless this is true (contract 0.14).
+  allowDefaultBranch: Boolean = false
 }
 
 changeId: ChangeId

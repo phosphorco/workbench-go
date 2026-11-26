@@ -462,3 +462,12 @@ func (reader exactModuleReader) Read(request url.URL) (string, error) {
 func (runtime Evaluator) EvaluateInPlaceSubject(ctx context.Context, source []byte, schema Contract) (contract.InPlaceSubject, error) {
 	return evaluateDecoded(runtime, ctx, source, schema, "InPlaceSubject", contract.DecodeInPlaceSubject)
 }
+
+// LocalContents returns the module text of a local contract ("" for a
+// released one), so callers can prove which frozen schema was selected.
+func (value Contract) LocalContents() string {
+	if !value.local {
+		return ""
+	}
+	return value.contents
+}

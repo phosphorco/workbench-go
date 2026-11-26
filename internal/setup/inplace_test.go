@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -191,6 +192,7 @@ func TestInPlaceCheckReportsAndSetupDeletesExtraOwnedFiles(t *testing.T) {
 	inPlaceGit(t, root, "add", "pkg/@a/core/.tsconfigs", "pkg/@a/core/tsconfig.stale.json")
 	inPlaceGit(t, root, "add", "-A", "pkg", "package.json", "tsconfig.json", "tsconfig.base.json", ".tsconfigs")
 	inPlaceGit(t, root, "reset", "-q", "pkg/@a/core/tsconfig.untracked.json")
+	inPlaceGit(t, root, "commit", "-q", "-m", "owned files and stale extras")
 	report, err := CheckInPlace(ctx, root, toolchain)
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +223,23 @@ func TestInPlaceRefusals(t *testing.T) {
 	}{
 		"origin names another repository": {inPlaceDeclaration, func(t *testing.T, root string) {
 			inPlaceGit(t, root, "remote", "set-url", "origin", "https://github.com/phosphorco/other")
-		}, "origin names phosphorco/other"},
+		}, `origin URL "https://github.com/phosphorco/other" names phosphorco/other`},
+		"a push URL naming another repository": {inPlaceDeclaration, func(t *testing.T, root string) {
+			inPlaceGit(t, root, "remote", "set-url", "--push", "origin", "git@github.com:phosphorco/fork.git")
+		}, "names phosphorco/fork"},
+		"a tracked file other than a child index under .tsconfigs": {inPlaceDeclaration, func(t *testing.T, root string) {
+			write(t, filepath.Join(root, ".tsconfigs/README.md"), "notes\n")
+			inPlaceGit(t, root, "add", ".tsconfigs/README.md")
+		}, ".tsconfigs/README.md; remedy: move them out of .tsconfigs"},
+		"a symlinked owned file": {inPlaceDeclaration, func(t *testing.T, root string) {
+			outside := filepath.Join(t.TempDir(), "outside.json")
+			write(t, outside, "{}\n")
+			mustSymlink(t, outside, filepath.Join(root, "tsconfig.json"))
+		}, `Workbench-owned "tsconfig.json" reaches a symlink`},
+		"a symlinked .tsconfigs directory": {inPlaceDeclaration, func(t *testing.T, root string) {
+			outside := t.TempDir()
+			mustSymlink(t, outside, filepath.Join(root, ".tsconfigs"))
+		}, `reaches a symlink at ".tsconfigs"`},
 		"a 0.13 declaration":            {strings.Replace(inPlaceDeclaration, "0.14.0", "0.13.0", 1), nil, "requires a 0.14.0 Repository declaration"},
 		"a cross-repository include":    {inPlaceDeclaration + "includes { [\"phosphorco/other\"] {} }\n", nil, "refuses cross-repository includes"},
 		"no authored root":              {strings.Replace(inPlaceDeclaration, "root = new RootManifest {", "local unused = new RootManifest {", 1), nil, "must declare root"},
@@ -248,12 +266,19 @@ func TestInPlaceRefusals(t *testing.T) {
 }
 
 func TestContextWorkbenchRefusesInPlaceLayoutFields(t *testing.T) {
-	declaration := contract.Declaration{Packages: map[string]contract.PackagePolicy{"@a/b": {Roles: map[string]contract.Role{"sources": {}}}}}
-	if err := refuseInPlaceLayout("phosphorco/mono", declaration); err == nil || !strings.Contains(err.Error(), "packages[@a/b].roles") {
+	yes := true
+	declaration := contract.Declaration{Packages: map[string]contract.PackagePolicy{"@a/b": {Private: &yes, Roles: map[string]contract.Role{"sources": {}}}}}
+	if err := refuseInPlaceLayout("phosphorco/mono", "0.14.0", declaration); err == nil || !strings.Contains(err.Error(), "packages[@a/b].roles") {
 		t.Fatalf("roles in a context Workbench = %v", err)
 	}
-	if err := refuseInPlaceLayout("phosphorco/mono", contract.Declaration{}); err != nil {
+	if err := refuseInPlaceLayout("phosphorco/mono", "0.14.0", contract.Declaration{Packages: map[string]contract.PackagePolicy{"@a/b": {Private: &yes}}}); err != nil {
 		t.Fatal(err)
+	}
+	if err := refuseInPlaceLayout("phosphorco/mono", "0.14.0", contract.Declaration{Packages: map[string]contract.PackagePolicy{"@a/b": {}}}); err == nil || !strings.Contains(err.Error(), "packages[@a/b].private") {
+		t.Fatalf("private = null in a 0.14 context Workbench = %v", err)
+	}
+	if err := refuseInPlaceLayout("phosphorco/mono", "0.13.0", contract.Declaration{Packages: map[string]contract.PackagePolicy{"@a/b": {}}}); err != nil {
+		t.Fatalf("a 0.13 declaration is not gated: %v", err)
 	}
 }
 
@@ -280,5 +305,187 @@ func TestRoleSelectionInheritsBasesWithConfigDir(t *testing.T) {
 	noBase := roleSelection(contract.Role{ExtendsBase: new(bool)}, "docs/tsconfig.json", bases)
 	if !reflect.DeepEqual(noBase.Include, []string{"docs/**/*"}) || noBase.Exclude != nil {
 		t.Fatalf("a base-less project = %#v", noBase)
+	}
+}
+
+func TestUnifiedDiffShowsEndOfFileAndCarriageReturnDifferences(t *testing.T) {
+	for name, test := range map[string]struct{ current, want, contains string }{
+		"missing final newline": {"{\n}", "{\n}\n", "-}\n\\ No newline at end of file\n+}\n"},
+		"extra final newline":   {"{\n}\n", "{\n}", "+}\n\\ No newline at end of file\n"},
+		"carriage returns":      {"{\r\n}\r\n", "{\n}\n", "-{␍\n"},
+	} {
+		diff := unifiedDiff("f.json", []byte(test.current), []byte(test.want))
+		if !strings.Contains(diff, "@@") || !strings.Contains(diff, test.contains) {
+			t.Errorf("%s:\n%s", name, diff)
+		}
+	}
+}
+
+func TestInPlaceSetupRefusesUncommittedOwnedChangesAndKeepsOtherFiles(t *testing.T) {
+	root := inPlaceRepository(t, inPlaceDeclaration)
+	toolchain := inPlaceToolchain(t)
+	ctx := context.Background()
+	if _, err := runInPlace(ctx, root, toolchain); err != nil {
+		t.Fatal(err)
+	}
+	inPlaceGit(t, root, "add", "-A")
+	inPlaceGit(t, root, "commit", "-q", "-m", "owned files")
+	// A hand edit to an owned file is never overwritten.
+	write(t, filepath.Join(root, "pkg/@a/core/package.json"), "{\"hand\": \"edit\"}\n")
+	if _, err := runInPlace(ctx, root, toolchain); err == nil || !strings.Contains(err.Error(), "pkg/@a/core/package.json; remedy: commit, stash or discard them") {
+		t.Fatalf("dirty owned file = %v", err)
+	}
+	if contents, _ := os.ReadFile(filepath.Join(root, "pkg/@a/core/package.json")); string(contents) != "{\"hand\": \"edit\"}\n" {
+		t.Fatalf("setup overwrote a hand edit: %s", contents)
+	}
+	inPlaceGit(t, root, "checkout", "--", "pkg/@a/core/package.json")
+	// An untracked note under a package's .tsconfigs is neither owned nor
+	// touched.
+	write(t, filepath.Join(root, "pkg/@a/core/.tsconfigs/NOTES.md"), "keep\n")
+	if report, err := CheckInPlace(ctx, root, toolchain); err != nil || !report.Equal() {
+		t.Fatalf("untracked note: %#v %v", report, err)
+	}
+	if _, err := runInPlace(ctx, root, toolchain); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "pkg/@a/core/.tsconfigs/NOTES.md")); err != nil {
+		t.Fatalf("setup removed a file it does not own: %v", err)
+	}
+}
+
+// fakeBun forwards to the real Bun but records every install.
+func fakeBun(t *testing.T, bun string) (string, string) {
+	t.Helper()
+	directory := t.TempDir()
+	log := filepath.Join(directory, "installs.log")
+	script := filepath.Join(directory, "bun")
+	write(t, script, "#!/bin/sh\nif [ \"$1\" = install ]; then echo \"$@\" >> "+log+"; echo 'error: lockfile had changes, but lockfile is frozen' >&2; exit 1; fi\nexec "+bun+" \"$@\"\n")
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, log
+}
+
+func TestInPlaceInstallIsFrozenAndNeverRunByCheck(t *testing.T) {
+	root := inPlaceRepository(t, inPlaceDeclaration)
+	write(t, filepath.Join(root, "workbench-subject.pkl"), "amends \"workbench-contract:/0.14.0/InPlaceSubject.pkl\"\n\nentrypoint = \"https://github.com/phosphorco/mono\"\ninstall = true\n")
+	inPlaceGit(t, root, "commit", "-q", "-am", "install")
+	bun, log := fakeBun(t, requireBun(t))
+	toolchain := NewToolchain(requireEvaluator(t), bun)
+	ctx := context.Background()
+	if _, err := CheckInPlace(ctx, root, toolchain); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Fatal("setup --check ran install")
+	}
+	_, err := runInPlace(ctx, root, toolchain)
+	if err == nil || !strings.Contains(err.Error(), "then install with a frozen lockfile failed") || !strings.Contains(err.Error(), "pkg/@a/app/package.json") || !strings.Contains(err.Error(), "remedy: run bun install to update bun.lock") {
+		t.Fatalf("frozen install failure = %v", err)
+	}
+	if installs, _ := os.ReadFile(log); strings.TrimSpace(string(installs)) != "install --frozen-lockfile --ignore-scripts" {
+		t.Fatalf("install arguments = %q", installs)
+	}
+}
+
+// TestInPlaceFixedPointKeepsAuthoredOrderAndCharacters runs Pkl's renderer
+// through setup: non-alphabetical authored order, characters JSON encoders
+// like to escape, non-ASCII, nested paths and a float.
+func TestInPlaceFixedPointKeepsAuthoredOrderAndCharacters(t *testing.T) {
+	declaration := strings.Replace(inPlaceDeclaration, `["sources"] { include = new Listing { "./src"; "./missing" } }`, `["sources"] {
+        include = new Listing { "./src" }
+        compilerOptions {
+          ["types"] = new Listing { "bun" }
+          ["jsxImportSource"] = "<a&b>é"
+          ["paths"] = new Mapping { ["#z/*"] = new Listing { "./z/*" }; ["#a/*"] = new Listing { "./a/*" } }
+          ["target"] = "ES2022"
+          ["maxNodeModuleJsDepth"] = 1.5
+        }
+      }`, 1)
+	root := inPlaceRepository(t, declaration)
+	toolchain := inPlaceToolchain(t)
+	ctx := context.Background()
+	if _, err := runInPlace(ctx, root, toolchain); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, "pkg/@a/app/tsconfig.sources.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `  "compilerOptions": {
+    "types": [
+      "bun"
+    ],
+    "jsxImportSource": "<a&b>é",
+    "paths": {
+      "#z/*": [
+        "./z/*"
+      ],
+      "#a/*": [
+        "./a/*"
+      ]
+    },
+    "target": "ES2022",
+    "maxNodeModuleJsDepth": 1.5
+  },`
+	if !strings.Contains(string(contents), want) {
+		t.Fatalf("rendered:\n%s", contents)
+	}
+	if report, err := CheckInPlace(ctx, root, toolchain); err != nil || !report.Equal() {
+		t.Fatalf("not a fixed point: %#v %v", report, err)
+	}
+}
+
+func TestContextRefusalOfInPlaceFieldsThroughPkl(t *testing.T) {
+	evaluator := requireEvaluator(t)
+	for name, body := range map[string]string{
+		"typescript":      "typescript { bases { [\"root\"] { directory = \".\" } } }",
+		"circularEdges":   "circularEdges = new CircularEdgeSet { path = \"edges.json\" }",
+		"root":            "root = new RootManifest {}",
+		"generatedMarker": "generatedMarker = \"x\"",
+		"roles":           "packages { [\"cli\"] { roles { [\"sources\"] {} } } }",
+		"fields":          "packages { [\"cli\"] { fields { [\"version\"] = \"1\" } } }",
+		"private":         "packages { [\"cli\"] { `private` = null } }",
+		"private false":   "packages { [\"cli\"] { `private` = false } }",
+	} {
+		for _, uri := range []string{localV0140RepositoryURI, localV0140PackageScopeURI} {
+			source := fmt.Sprintf("amends %q\n%s\n", uri, body)
+			if uri == localV0140PackageScopeURI {
+				if !strings.HasPrefix(body, "packages") {
+					continue
+				}
+				source = fmt.Sprintf("amends %q\nscope = \"@a\"\n%s\n", uri, strings.ReplaceAll(body, "\"cli\"", "\"@a/cli\""))
+			}
+			declaration, err := EvaluateCurrentDeclaration(context.Background(), evaluator, []byte(source))
+			if err != nil {
+				t.Fatalf("%s via %s: %v", name, uri, err)
+			}
+			if err := refuseInPlaceLayout("phosphorco/mono", "0.14.0", declaration); err == nil {
+				t.Fatalf("%s via %s was admitted by a context Workbench", name, uri)
+			}
+		}
+	}
+	plain, err := EvaluateCurrentDeclaration(context.Background(), evaluator, []byte(fmt.Sprintf("amends %q\npackages { [\"cli\"] {} }\n", localV0140RepositoryURI)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseInPlaceLayout("phosphorco/mono", "0.14.0", plain); err != nil {
+		t.Fatalf("a plain 0.14 declaration was refused: %v", err)
+	}
+}
+
+// TestRoleSelectionResolvesConfigDirThroughABaseChain: a role inherits the
+// include of its base's parent; ${configDir} still names the role's directory
+// and plain entries resolve against the declaring base's directory.
+func TestRoleSelectionResolvesConfigDirThroughABaseChain(t *testing.T) {
+	include := []string{"${configDir}/src", "./shared"}
+	parent := "root"
+	bases := map[string]contract.TsconfigBase{
+		"root":  {Directory: ".", Include: &include},
+		"scope": {Directory: "pkg/@a", Extends: &parent},
+	}
+	spec := roleSelection(contract.Role{}, "pkg/@a/core/tsconfig.sources.json", bases)
+	if !reflect.DeepEqual(spec.Include, []string{"pkg/@a/core/src", "shared"}) {
+		t.Fatalf("two-level inherited include = %#v", spec.Include)
 	}
 }

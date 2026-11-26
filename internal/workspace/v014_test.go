@@ -297,9 +297,9 @@ func TestCircularEdgeSetValidation(t *testing.T) {
 		edges []string
 		want  string
 	}{
-		"an unmarked cycle":                 {nil, "has a cycle no circular edge closes"},
+		"an unmarked cycle":                 {nil, "1 cycle(s) no circular edge closes: @a/app#sources, @p/core#sources"},
 		"a mark that is not a derived edge": {[]string{"@p/core -> @a/app", "@a/app -> @x/none"}, "is not a derived sources reference"},
-		"a mark outside every cycle":        {[]string{"@p/core -> @a/app", "@a/app -> @p/core"}, ""},
+		"both edges of a two-cycle marked":  {[]string{"@p/core -> @a/app", "@a/app -> @p/core"}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := buildLayoutFixture(t, func(input *LayoutInput) {
@@ -340,11 +340,134 @@ func TestCircularEdgeSetValidation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "closes no cycle") {
 		t.Fatalf("mark outside every SCC = %v", err)
 	}
-	// A cycle inside one package through consumes.
+	// A consumes target must emit (TS6310).
 	_, err = buildLayoutFixture(t, func(input *LayoutInput) {
 		input.Packages[0].Roles[0].Role.Consumes = []string{"test"}
 	})
-	if err == nil || !strings.Contains(err.Error(), "cycle") {
-		t.Fatalf("cycle inside one package = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "consumes the test role, which does not emit") {
+		t.Fatalf("non-emitting consumes target = %v", err)
+	}
+}
+
+// TestCycleThroughTwoRolesOfOnePackageIsRefused reaches the strict
+// "no cycle inside one package" rule: core/sources -> app/sources (marked)
+// -> core/tools (derived, emitting) -> core/sources (consumes). The unmarked
+// graph is acyclic, but the cycle passes through two roles of core.
+func TestCycleThroughTwoRolesOfOnePackageIsRefused(t *testing.T) {
+	_, err := buildLayoutFixture(t, func(input *LayoutInput) {
+		cyclicFixture(input)
+		input.CircularEdges = []string{"@p/core -> @a/app"}
+		input.Packages[0].Policy.Exports["./tools"] = "./tools/index.ts"
+		input.Packages[0].Roles = append(input.Packages[0].Roles, LayoutRole{
+			Name: "tools", Config: "pkg/@p/core/tsconfig.tools.json",
+			Role:  contract.Role{Include: strings2("./tools"), Consumes: []string{"sources"}},
+			Files: []string{"pkg/@p/core/tools/index.ts"},
+		})
+		input.Packages[1].Roles[0].Imports = append(input.Packages[1].Roles[0].Imports, Import{Specifier: "@p/core/tools", Source: "pkg/@a/app/src/cli.ts"})
+	})
+	want := "cycles through two roles of one package: @a/app#sources, @p/core#sources, @p/core#tools; remedy:"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
+
+func TestTwoUnmarkedCyclesProduceOneStableError(t *testing.T) {
+	var first string
+	for attempt := 0; attempt < 20; attempt++ {
+		_, err := buildLayoutFixture(t, func(input *LayoutInput) {
+			cyclicFixture(input)
+			for _, name := range []string{"@z/one", "@z/two"} {
+				other := "@z/two"
+				if name == "@z/two" {
+					other = "@z/one"
+				}
+				directory := "pkg/" + name
+				input.Packages = append(input.Packages, LayoutPackage{
+					Name: name, Directory: directory, Policy: contract.PackagePolicy{Exports: map[string]string{".": "./src/index.ts"}},
+					Roles: []LayoutRole{{Name: "sources", Config: directory + "/tsconfig.sources.json", Role: contract.Role{Include: strings2("./src")},
+						Files: []string{directory + "/src/index.ts"}, Imports: []Import{{Specifier: other, Source: directory + "/src/index.ts"}}}},
+				})
+				input.ManifestDirectories = append(input.ManifestDirectories, directory)
+			}
+		})
+		if err == nil {
+			t.Fatal("two cycles were admitted")
+		}
+		if attempt == 0 {
+			first = err.Error()
+			if !strings.Contains(first, "2 cycle(s)") || strings.Index(first, "@a/app#sources") > strings.Index(first, "@z/one#sources") {
+				t.Fatalf("error = %s", first)
+			}
+		} else if err.Error() != first {
+			t.Fatalf("unstable error:\n%s\n%s", first, err)
+		}
+	}
+}
+
+func TestReferenceFallbacksAreNotedAndAuthoredEdgesCarryNoMark(t *testing.T) {
+	// No role compiles the exported file, and a dependency without exports.
+	projection, err := buildLayoutFixture(t, func(input *LayoutInput) {
+		input.Packages[0].Policy.Exports["./unowned"] = "./lib/unowned.ts"
+		input.Packages[1].Roles[0].Imports = append(input.Packages[1].Roles[0].Imports, Import{Specifier: "@p/core/unowned", Source: "pkg/@a/app/src/cli.ts"})
+		input.Packages[0].Roles[1].Imports = []Import{{Specifier: "@a/app", Source: "pkg/@p/core/__tests__/a.test.ts"}}
+		input.Packages[0].Roles[1].Role.DeriveReferences = boolean(true)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	details := []string{}
+	for _, note := range projection.Notes {
+		details = append(details, note.Detail)
+	}
+	joined := strings.Join(details, "\n")
+	for _, want := range []string{"which no role of @p/core compiles", "names no exports entry of @a/app", "which does not emit"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("notes lack %q:\n%s", want, joined)
+		}
+	}
+	// An authored sources->sources edge cannot be marked: the mark is
+	// refused as not derived.
+	_, err = buildLayoutFixture(t, func(input *LayoutInput) {
+		input.Packages[1].Roles[0].Role.DeriveReferences = boolean(false)
+		input.Packages[1].Roles[0].Role.References = []string{"@p/core"}
+		input.Packages[0].Roles[0].Imports = []Import{{Specifier: "@a/app", Source: "pkg/@p/core/src/index.ts"}}
+		input.Packages[1].Policy.Exports = map[string]string{".": "./src/cli.ts"}
+		input.CircularEdges = []string{"@a/app -> @p/core"}
+	})
+	if err == nil || !strings.Contains(err.Error(), "is not a derived sources reference") {
+		t.Fatalf("a mark on an authored edge = %v", err)
+	}
+	// A role reference to its own package is refused.
+	_, err = buildLayoutFixture(t, func(input *LayoutInput) {
+		input.Packages[1].Roles[1].Role.References = []string{"@a/app#tools"}
+	})
+	if err == nil || !strings.Contains(err.Error(), "references its own package; use consumes") {
+		t.Fatalf("own-package role reference = %v", err)
+	}
+}
+
+func TestExportPatternsFollowNode(t *testing.T) {
+	target := &LayoutPackage{Directory: "p", Policy: contract.PackagePolicy{Exports: map[string]string{
+		"./*":          "./src/*.ts",
+		"./features/*": "./src/features/*/index.ts",
+		"./features/x": "./src/x.ts",
+		"./a/*/b/*":    "./two/*.ts",
+		"./dup/*":      "./src/*/*.ts",
+	}}}
+	for subpath, want := range map[string]string{
+		"./features/x": "p/src/x.ts",
+		"./features/y": "p/src/features/y/index.ts",
+		"./thing":      "p/src/thing.ts",
+		"./dup/z":      "p/src/z/z.ts",
+		"./features/":  "p/src/features/.ts",
+		"./a/q/b/r":    "p/src/a/q/b/r.ts",
+	} {
+		got, ok := resolveExportFile(target, subpath)
+		if !ok || got != want {
+			t.Errorf("%s = %q %v, want %q", subpath, got, ok, want)
+		}
+	}
+	if patternKeyCompare("./features/*", "./*") != -1 || patternKeyCompare("./a*", "./a*bc") != 1 || patternKeyCompare("./x", "./x*") != 1 {
+		t.Fatal("PATTERN_KEY_COMPARE disagrees with Node")
 	}
 }

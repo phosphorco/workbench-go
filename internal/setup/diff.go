@@ -10,6 +10,14 @@ import (
 func unifiedDiff(name string, current, want []byte) string {
 	before := splitLines(string(current))
 	after := splitLines(string(want))
+	// A last line without a newline is a different line, rendered with the
+	// conventional marker after it.
+	if len(current) != 0 && current[len(current)-1] != '\n' {
+		before[len(before)-1] += noNewlineSentinel
+	}
+	if len(want) != 0 && want[len(want)-1] != '\n' {
+		after[len(after)-1] += noNewlineSentinel
+	}
 	operations := diffLines(before, after)
 	var output strings.Builder
 	fmt.Fprintf(&output, "--- a/%s\n+++ b/%s\n", name, name)
@@ -58,14 +66,23 @@ func unifiedDiff(name string, current, want []byte) string {
 		}
 		fmt.Fprintf(&output, "@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount)
 		for _, operation := range operations[hunkStart:end] {
+			text, noNewline := strings.CutSuffix(operation.text, noNewlineSentinel)
 			output.WriteByte(operation.kind)
-			output.WriteString(operation.text)
+			// A carriage return is otherwise invisible in a terminal.
+			output.WriteString(strings.ReplaceAll(text, "\r", "␍"))
 			output.WriteByte('\n')
+			if noNewline {
+				output.WriteString("\\ No newline at end of file\n")
+			}
 		}
 		start = end
 	}
 	return output.String()
 }
+
+// noNewlineSentinel marks a final line without a newline; it cannot occur in
+// a line of text.
+const noNewlineSentinel = "\x00no-newline"
 
 type lineOperation struct {
 	kind byte

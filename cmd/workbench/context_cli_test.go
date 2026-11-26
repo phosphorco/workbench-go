@@ -82,6 +82,10 @@ func TestContextSetupIsIdempotentAndPreservesUnrelatedSettings(t *testing.T) {
 	if err := os.WriteFile(claudeSettings, initialClaude, 0o640); err != nil {
 		t.Fatal(err)
 	}
+	// Pin the mode whatever the umask, so the test proves preservation.
+	if err := os.Chmod(claudeSettings, 0o640); err != nil {
+		t.Fatal(err)
+	}
 	codexHome := filepath.Join(directory, "codex")
 	codexConfig := filepath.Join(codexHome, "config.toml")
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {
@@ -215,6 +219,10 @@ contributors {
 }
 `)
 	if err := os.WriteFile(project, source, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	// Pin the mode whatever the umask, so the test proves preservation.
+	if err := os.Chmod(project, 0o640); err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer

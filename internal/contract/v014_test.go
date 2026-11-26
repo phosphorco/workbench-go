@@ -63,6 +63,15 @@ func TestValidateBaseOwnershipAdmitsRootDir(t *testing.T) {
 			t.Fatalf("base %s: %v", key, err)
 		}
 	}
+	if err := (TypeScriptLayout{Bases: map[string]TsconfigBase{"root": {Directory: ".", CompilerOptions: object(t, `{"allowJs": true}`)}}}).Validate(); err == nil {
+		t.Fatal("allowJs in a base was admitted")
+	}
+	if err := (TypeScriptLayout{Bases: map[string]TsconfigBase{"root": {Directory: ".", Include: listing("${configDir}/**")}}}).Validate(); err == nil {
+		t.Fatal("a base include ending in ** was admitted")
+	}
+	if err := (TypeScriptLayout{Bases: map[string]TsconfigBase{"root": {Directory: ".", CompilerOptions: object(t, `{"allowJs": false, "checkJs": false}`)}}}).Validate(); err != nil {
+		t.Fatalf("explicitly disabled allowJs/checkJs: %v", err)
+	}
 	parent := "missing"
 	if err := (TypeScriptLayout{Bases: map[string]TsconfigBase{"a": {Directory: "pkg", Extends: &parent}}}).Validate(); err == nil {
 		t.Fatal("a base extending an undeclared base was admitted")

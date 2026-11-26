@@ -97,3 +97,28 @@ func TestSelectEdgeCases(t *testing.T) {
 		t.Fatal("Excluded disagrees with Select")
 	}
 }
+
+// TestSelectMatchesTypeScriptExtensionPriority pins TypeScript 5.9.3's own
+// parseJsonConfigFileContent output for this tree and config (the monorepo's
+// pinned typescript package; include ["./src", "./lib/*.d.ts"], exclude
+// ["./src/f.ts"], files ["./src/f.ts", "./src/a.d.ts"]). Note the order quirk:
+// e.d.cts survives beside e.cts while d.d.mts yields to d.mts.
+func TestSelectMatchesTypeScriptExtensionPriority(t *testing.T) {
+	tracked := []string{
+		"p/lib/k.d.ts", "p/lib/k.ts", "p/src/.h/h.ts", "p/src/a.d.ts", "p/src/a.ts", "p/src/a.tsx", "p/src/b.d.ts", "p/src/b.tsx",
+		"p/src/c.d.ts", "p/src/d.d.mts", "p/src/d.mts", "p/src/e.cts", "p/src/e.d.cts", "p/src/f.ts", "p/src/j.min.ts",
+		"p/src/n/g.ts", "p/src/node_modules/m/i.ts",
+	}
+	got, err := Select(Spec{Include: []string{"p/src", "p/lib/*.d.ts"}, Exclude: []string{"p/src/f.ts"}, Files: []string{"p/src/f.ts", "p/src/a.d.ts", "p/src/untracked.ts"}, Directory: "p"}, tracked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"p/lib/k.d.ts", "p/src/a.d.ts", "p/src/a.ts", "p/src/b.tsx", "p/src/c.d.ts", "p/src/d.mts", "p/src/e.cts", "p/src/e.d.cts", "p/src/f.ts", "p/src/j.min.ts", "p/src/n/g.ts"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q\nwant (TypeScript) %q", got, want)
+	}
+	// An include ending in ** selects nothing, as TypeScript drops it.
+	if got, _ := Select(Spec{Include: []string{"p/src/**"}, Directory: "p"}, tracked); len(got) != 0 {
+		t.Fatalf("an include ending in ** selected %q", got)
+	}
+}
