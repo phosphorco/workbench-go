@@ -15,19 +15,20 @@ func verbatimPolicy(policy contract.PackagePolicy) contract.PackagePolicy {
 	return policy
 }
 
-func TestVerbatimPassesAuthoredSpecifiersThroughUnchanged(t *testing.T) {
+func TestVerbatimPassesRootResolvableSpecifiersThroughUnchanged(t *testing.T) {
 	specifiers := map[string]string{
-		"effect":           "catalog:",
-		"@effect/platform": "catalog:effect",
-		"left-pad":         "^1.3.0",
-		"aliased":          "npm:@scope/real@1.2.3",
-		"vendored":         "file:vendor/vendored-1.0.0.tgz",
+		"left-pad":  "^1.3.0",
+		"aliased":   "npm:@scope/real@1.2.3",
+		"vendored":  "file:vendor/vendored-1.0.0.tgz",
+		"sibling":   "file:../shared/sibling",
+		"linked":    "link:./local/linked",
+		"linked-up": "link:../linked-up",
 	}
 	projection, err := Build([]Package{{
 		Name: "@entry/app", Directory: "repos/mono/pkg/@entry/app",
 		Policy: verbatimPolicy(contract.PackagePolicy{
 			Dependencies:    specifiers,
-			DevDependencies: map[string]string{"typescript": "catalog:tools"},
+			DevDependencies: map[string]string{"typescript": "~5.9.3"},
 		}),
 	}})
 	if err != nil {
@@ -37,7 +38,7 @@ func TestVerbatimPassesAuthoredSpecifiersThroughUnchanged(t *testing.T) {
 	if err := json.Unmarshal(projection.Files["repos/mono/pkg/@entry/app/package.json"], &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(manifest.Dependencies, specifiers) || manifest.DevDependencies["typescript"] != "catalog:tools" {
+	if !reflect.DeepEqual(manifest.Dependencies, specifiers) || manifest.DevDependencies["typescript"] != "~5.9.3" {
 		t.Fatalf("package specifiers = %#v %#v", manifest.Dependencies, manifest.DevDependencies)
 	}
 	var root rootPackageJSON
@@ -45,24 +46,116 @@ func TestVerbatimPassesAuthoredSpecifiersThroughUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"effect":           "catalog:",
-		"@effect/platform": "catalog:effect",
-		"left-pad":         "^1.3.0",
-		"aliased":          "npm:@scope/real@1.2.3",
+		"left-pad": "^1.3.0",
+		"aliased":  "npm:@scope/real@1.2.3",
 		// The root lives at the Workbench root, so its copy of a package-relative
 		// path names the same file from there.
 		"vendored":   "file:repos/mono/pkg/@entry/app/vendor/vendored-1.0.0.tgz",
-		"typescript": "catalog:tools",
+		"sibling":    "file:repos/mono/pkg/@entry/shared/sibling",
+		"linked":     "link:repos/mono/pkg/@entry/app/local/linked",
+		"linked-up":  "link:repos/mono/pkg/@entry/linked-up",
+		"typescript": "~5.9.3",
 	}
 	if !reflect.DeepEqual(root.DevDependencies, want) {
 		t.Fatalf("root dependencies = %#v", root.DevDependencies)
 	}
 }
 
+func TestVerbatimRefusesCatalogReferencesTheGeneratedRootCannotResolve(t *testing.T) {
+	_, err := Build([]Package{
+		{Name: "@a/one", Directory: "pkg/@a/one", Policy: verbatimPolicy(contract.PackagePolicy{
+			Dependencies:    map[string]string{"effect": "catalog:", "zod": "catalog:schemas", "vite": "catalog:"},
+			DevDependencies: map[string]string{"typescript": "5.9.3"},
+		})},
+		{Name: "@a/two", Directory: "pkg/@a/two", Policy: verbatimPolicy(contract.PackagePolicy{Dependencies: map[string]string{"effect": "catalog:", "vite": "^8.0.12"}})},
+	})
+	var problems *RootDependencyConflictsError
+	if !errors.As(err, &problems) || len(problems.Conflicts) != 3 {
+		t.Fatalf("verbatim catalog = %T %v", err, err)
+	}
+	for _, conflict := range problems.Conflicts {
+		if conflict.Reason != UnresolvableCatalogReason {
+			t.Fatalf("%q reason = %q", conflict.Dependency, conflict.Reason)
+		}
+	}
+	// Agreeing catalog references are still refused: the indirection, not a
+	// disagreement, is what the generated root cannot carry.
+	for _, fact := range []string{`"effect" (catalog indirection the generated Workbench root cannot resolve; it carries no catalog): "catalog:" by @a/one dependencies, @a/two dependencies`, `"zod" (catalog indirection`, `"vite" (catalog indirection the generated Workbench root cannot resolve; it carries no catalog; its specifiers also disagree)`} {
+		if !strings.Contains(err.Error(), fact) {
+			t.Fatalf("catalog refusal lacks %q:\n%v", fact, err)
+		}
+	}
+}
+
+func TestVerbatimRefusesPathsOutsideTheAssembledWorkbench(t *testing.T) {
+	for specifier, want := range map[string]string{
+		"link:cool-pkg":                  "registered with bun link",
+		"link:@scope/linked":             "registered with bun link",
+		"file:/opt/vendor/x.tgz":         "absolute paths are not portable",
+		"file:///opt/vendor/x.tgz":       "absolute paths are not portable",
+		"link:/opt/linked":               "absolute paths are not portable",
+		"file:~/x.tgz":                   "absolute paths are not portable",
+		"file:../../../../../../x.tgz":   `resolves to "../x.tgz", outside the Workbench root`,
+		"link:../../../../../../outside": `resolves to "../outside", outside the Workbench root`,
+		"file:":                          "the path is empty",
+	} {
+		_, err := Build([]Package{{Name: "@a/app", Directory: "repos/mono/pkg/@a/app", Policy: verbatimPolicy(contract.PackagePolicy{
+			Dependencies: map[string]string{"dep": specifier}, DevDependencies: map[string]string{"typescript": "5.9.3"},
+		})}})
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), specifier) {
+			t.Fatalf("%s = %v, want %q", specifier, err, want)
+		}
+	}
+}
+
+func TestVerbatimCollectsTypeScriptAndExactAuthorityWithConflicts(t *testing.T) {
+	_, err := Build([]Package{
+		{Name: "@a/exact", Directory: "pkg/@a/exact", Policy: contract.PackagePolicy{Dependencies: map[string]string{"effect": "^4.0.0"}, DevDependencies: map[string]string{"typescript": "5.9.3"}}},
+		{Name: "@a/one", Directory: "pkg/@a/one", Policy: verbatimPolicy(contract.PackagePolicy{Dependencies: map[string]string{"vite": "^8.0.0"}, DevDependencies: map[string]string{"typescript": "~5.9.3"}})},
+		{Name: "@a/two", Directory: "pkg/@a/two", Policy: verbatimPolicy(contract.PackagePolicy{Dependencies: map[string]string{"vite": "8.0.12"}})},
+	})
+	var problems *RootDependencyConflictsError
+	if !errors.As(err, &problems) {
+		t.Fatalf("combined problems = %T %v", err, err)
+	}
+	got := map[string]string{}
+	for _, conflict := range problems.Conflicts {
+		got[conflict.Dependency] = conflict.Reason
+	}
+	if want := map[string]string{"effect": NonExactReason, "typescript": ConflictingReason, "vite": ConflictingReason}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("collected problems = %#v, want %#v", got, want)
+	}
+}
+
+func TestFrozenRuntimeBuiltinsAreNodeCoreAndBun(t *testing.T) {
+	builtins := RuntimeBuiltinModulesV0130()
+	if len(builtins) != 69 {
+		t.Fatalf("frozen built-ins = %d names, want Node 22's 68 core modules plus bun", len(builtins))
+	}
+	for _, name := range []string{"bun", "fs", "fs/promises", "path", "events", "worker_threads"} {
+		if !builtins[name] {
+			t.Fatalf("frozen built-ins lack %q", name)
+		}
+	}
+	for _, name := range []string{"ws", "undici", "effect", "bun:sqlite", "node:fs"} {
+		if builtins[name] {
+			t.Fatalf("frozen built-ins contain %q", name)
+		}
+	}
+	_, err := BuildWithOptions(withTypeScript([]Package{{
+		Name: "@a/app", Directory: "pkg/@a/app",
+		Imports: []Import{{Specifier: "ws", Source: "pkg/@a/app/src/index.ts", Line: 1}, {Specifier: "undici", Source: "pkg/@a/app/src/index.ts", Line: 2}},
+	}}), BuildOptions{ReassembleRootDependencies: true, ProductionTypeScript: true, RuntimeBuiltins: builtins})
+	var closure *ClosureError
+	if !errors.As(err, &closure) || len(closure.Diagnostics) != 2 || closure.Diagnostics[0].Kind != MissingPackage || closure.Diagnostics[0].MissingPackage != "ws" {
+		t.Fatalf("undeclared ws/undici = %v", err)
+	}
+}
+
 func TestVerbatimAgreeingSpecifiersAssembleOneRootDependency(t *testing.T) {
 	projection, err := Build([]Package{
-		{Name: "@a/one", Directory: "pkg/@a/one", Policy: verbatimPolicy(contract.PackagePolicy{Dependencies: map[string]string{"effect": "catalog:"}, DevDependencies: map[string]string{"typescript": "catalog:"}})},
-		{Name: "@a/two", Directory: "pkg/@a/two", Policy: verbatimPolicy(contract.PackagePolicy{PeerDependencies: map[string]string{"effect": "catalog:"}})},
+		{Name: "@a/one", Directory: "pkg/@a/one", Policy: verbatimPolicy(contract.PackagePolicy{Dependencies: map[string]string{"effect": "^4.0.0"}, DevDependencies: map[string]string{"typescript": "~5.9.3"}})},
+		{Name: "@a/two", Directory: "pkg/@a/two", Policy: verbatimPolicy(contract.PackagePolicy{PeerDependencies: map[string]string{"effect": "^4.0.0"}})},
 		// An exact package may agree with verbatim ones on an exact specifier.
 		{Name: "@a/three", Directory: "pkg/@a/three", Policy: contract.PackagePolicy{Dependencies: map[string]string{"zod": "4.0.0"}}},
 		{Name: "@a/four", Directory: "pkg/@a/four", Policy: verbatimPolicy(contract.PackagePolicy{Dependencies: map[string]string{"zod": "4.0.0"}})},
@@ -74,7 +167,7 @@ func TestVerbatimAgreeingSpecifiersAssembleOneRootDependency(t *testing.T) {
 	if err := json.Unmarshal(projection.Files["package.json"], &root); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(root.DevDependencies, map[string]string{"effect": "catalog:", "typescript": "catalog:", "zod": "4.0.0"}) {
+	if !reflect.DeepEqual(root.DevDependencies, map[string]string{"effect": "^4.0.0", "typescript": "~5.9.3", "zod": "4.0.0"}) {
 		t.Fatalf("root dependencies = %#v", root.DevDependencies)
 	}
 }
@@ -82,14 +175,14 @@ func TestVerbatimAgreeingSpecifiersAssembleOneRootDependency(t *testing.T) {
 func TestVerbatimReportsEveryConflictingSpecifier(t *testing.T) {
 	_, err := Build([]Package{
 		{Name: "@a/one", Directory: "pkg/@a/one", Policy: verbatimPolicy(contract.PackagePolicy{
-			Dependencies:    map[string]string{"effect": "catalog:", "vite": "catalog:", "same": "file:vendor/x.tgz"},
-			DevDependencies: map[string]string{"typescript": "catalog:"},
+			Dependencies:    map[string]string{"effect": "^4.0.0", "vite": "^8.0.0", "same": "file:vendor/x.tgz"},
+			DevDependencies: map[string]string{"typescript": "5.9.3"},
 		})},
 		{Name: "@a/two", Directory: "pkg/@a/two", Policy: verbatimPolicy(contract.PackagePolicy{
-			Dependencies: map[string]string{"effect": "catalog:effect", "vite": "^8.0.12", "same": "file:vendor/x.tgz"},
+			Dependencies: map[string]string{"effect": "npm:@phosphorco/effect@4.1.2", "vite": "^8.0.12", "same": "file:vendor/x.tgz"},
 		})},
 		{Name: "@a/three", Directory: "pkg/@a/three", Policy: verbatimPolicy(contract.PackagePolicy{
-			PeerDependencies: map[string]string{"effect": "catalog:"},
+			PeerDependencies: map[string]string{"effect": "^4.0.0"},
 		})},
 	})
 	var conflicts *RootDependencyConflictsError
@@ -106,7 +199,7 @@ func TestVerbatimReportsEveryConflictingSpecifier(t *testing.T) {
 	}
 	for _, fact := range []string{
 		"3 dependency(ies)",
-		`"effect": "catalog:effect" by @a/two dependencies; "catalog:" by @a/one dependencies, @a/three peerDependencies`,
+		`"effect" (declared with different specifiers): "npm:@phosphorco/effect@4.1.2" by @a/two dependencies; "^4.0.0" by @a/one dependencies, @a/three peerDependencies`,
 		`"file:pkg/@a/one/vendor/x.tgz" by @a/one dependencies`,
 		`"^8.0.12" by @a/two dependencies`,
 	} {
@@ -121,8 +214,8 @@ func TestExactPackagesKeepExactAuthorityBesideVerbatimPackages(t *testing.T) {
 		{Name: "@a/exact", Directory: "pkg/@a/exact", Policy: contract.PackagePolicy{Dependencies: map[string]string{"effect": "^4.0.0"}, DevDependencies: map[string]string{"typescript": "5.9.3"}}},
 		{Name: "@a/verbatim", Directory: "pkg/@a/verbatim", Policy: verbatimPolicy(contract.PackagePolicy{Dependencies: map[string]string{"effect": "^4.0.0"}})},
 	})
-	var authority *RootDependencyAuthorityError
-	if !errors.As(err, &authority) || authority.Reason != "non-exact" {
+	var problems *RootDependencyConflictsError
+	if !errors.As(err, &problems) || len(problems.Conflicts) != 1 || problems.Conflicts[0].Reason != NonExactReason {
 		t.Fatalf("exact package with a range = %T %v", err, err)
 	}
 	_, err = Build([]Package{{Name: "@a/exact", Directory: "pkg/@a/exact", Policy: contract.PackagePolicy{Dependencies: map[string]string{"effect": "catalog:"}, DevDependencies: map[string]string{"typescript": "5.9.3"}}}})
@@ -146,14 +239,19 @@ func TestExactClosureKeepsTheReleasedFirstConflictRefusal(t *testing.T) {
 	}
 }
 
-func TestVerbatimTypeScriptAuthorityMustStillAgree(t *testing.T) {
+func TestVerbatimTypeScriptAuthorityMustStillAgreeAndExist(t *testing.T) {
 	_, err := Build([]Package{
-		{Name: "@a/one", Directory: "pkg/@a/one", Policy: verbatimPolicy(contract.PackagePolicy{DevDependencies: map[string]string{"typescript": "catalog:"}})},
-		{Name: "@a/two", Directory: "pkg/@a/two", Policy: verbatimPolicy(contract.PackagePolicy{DevDependencies: map[string]string{"typescript": "catalog:tools"}})},
+		{Name: "@a/one", Directory: "pkg/@a/one", Policy: verbatimPolicy(contract.PackagePolicy{DevDependencies: map[string]string{"typescript": "~5.9.3"}})},
+		{Name: "@a/two", Directory: "pkg/@a/two", Policy: verbatimPolicy(contract.PackagePolicy{DevDependencies: map[string]string{"typescript": "5.9.3"}})},
 	})
-	var authority *TypeScriptAuthorityError
-	if !errors.As(err, &authority) || authority.Reason != "conflicting" {
+	var problems *RootDependencyConflictsError
+	if !errors.As(err, &problems) || len(problems.Conflicts) != 1 || problems.Conflicts[0].Dependency != "typescript" || problems.Conflicts[0].Reason != ConflictingReason {
 		t.Fatalf("verbatim TypeScript conflict = %T %v", err, err)
+	}
+	_, err = Build([]Package{{Name: "@a/one", Directory: "pkg/@a/one", Policy: verbatimPolicy(contract.PackagePolicy{})}})
+	var authority *TypeScriptAuthorityError
+	if !errors.As(err, &authority) || authority.Reason != "missing" {
+		t.Fatalf("verbatim missing TypeScript = %T %v", err, err)
 	}
 }
 
