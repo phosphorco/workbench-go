@@ -2,44 +2,66 @@
 
 Workbench 0.13.0 lets a Repository describe an existing monorepo package layout
 in typed Pkl, with a matching 0.13.0 Pkl contract. Every 0.12.0 and earlier
-declaration is still admitted with its released meaning; the 0.12.0 contract is
-frozen byte for byte as published.
+declaration keeps its released meaning: every 0.13.0 behavior below applies
+only to 0.13.0 declarations, and the 0.12.0 contract is frozen byte for byte as
+published.
 
 - **Explicit package directories.** `PackagePolicy.directory` places a
   Repository package at a relative directory in the checkout, replacing leaf
-  search. The directory and its source roots must be real directories reached
-  without symlinks; no `..`, hidden or `node_modules` segment is accepted, and
-  two packages cannot share a directory. PackageScope packages still derive
-  `<leaf>`.
+  search.
+  - The directory and its source roots must be real directories reached
+    without symlinks.
+  - No `..`, hidden, `node_modules` or glob segment is accepted.
+  - Two packages cannot share a directory, and a package cannot sit inside
+    another package's source root.
+  - PackageScope packages still derive `<leaf>`.
 - **Declared source roots and excludes.** `sourceRoots` (default: `src`) and
   `sourceExcludes` on both resource shapes drive the import scan, the dev/prod
-  classification and the generated tsconfig `include`, `exclude` and `rootDir`.
-  The `sourceRoots` default is an empty Listing, so amending it and assigning
-  `new Listing { ... }` mean the same thing.
+  classification, and the generated tsconfig `include`, `exclude` and `rootDir`.
+  - The `sourceRoots` default is an empty Listing, so amending it and assigning
+    `new Listing { ... }` mean the same thing.
+  - An exclude must exist and lie strictly inside a source root. It cannot also
+    be a root.
 - **In-repository PackageScopes.** `scopes { "@scope" }` on a Repository reads
-  `pkg/<scope>/workbench.pkl`. Each file amends the same-version
-  PackageScopeRepository contract and is evaluated on its own. Its packages are
-  placed at `pkg/<scope>/<leaf>` and its includes merge into the Repository.
-  Setup refuses a missing or symlinked scope file, another contract or version,
-  a different scope, scope buildables, and a package declared twice.
+  `pkg/<scope>/workbench.pkl`.
+  - Each file amends the same-version PackageScopeRepository contract and is
+    evaluated on its own. It cannot import modules or read files or the
+    environment.
+  - Its packages are placed at `pkg/<scope>/<leaf>`, and its includes merge into
+    the Repository's.
+  - Setup refuses a missing or symlinked scope file, another contract or
+    version, a different scope, scope buildables, and a root package named
+    inside a listed scope.
 - **Verbatim dependency specifiers.** `dependencyVersions = "verbatim"` passes
-  `catalog:`, `catalog:<name>`, ranges, `npm:` aliases and `file:` specifiers
-  through unchanged. One dependency must still use one specifier across the
-  closure. Setup lists every conflicting dependency at once with its specifiers
-  and declaring packages; it does not pick one.
-- **TypeScript-shaped observation (0.13.0 declarations).** Hidden files and
-  directories and `node_modules` below a source root are skipped. Ambient
-  `.d.ts` files are not scanned: they carry no runtime imports, and Bun parses
-  them as implementation files and refuses valid declarations. `__tests__` is
-  classified relative to the package. Bare runtime built-ins reported by the
-  pinned Bun (`node:module` `builtinModules`, plus `bun`) are not packages.
-- **Shebang files.** Every contract version now scans files beginning with `#!`.
-  Bun's import scanner refused them; Workbench turns the first two bytes into
-  `//`, so offsets and line numbers are unchanged.
+  ranges, `npm:` aliases and relative path `file:`/`link:` specifiers through
+  unchanged.
+  - `catalog:` references are refused, because the generated root carries no
+    catalog to resolve them.
+  - Absolute paths, `link:<name>`, and paths escaping the Workbench root are
+    also refused.
+  - One dependency must still use one specifier across the closure.
+  - Setup reports every root reassembly problem at once, each with its
+    specifiers and declaring packages: catalog references, disagreements
+    (including `typescript`), and non-exact versions in exact packages.
+- **TypeScript-shaped observation.**
+  - Hidden files and directories and `node_modules` below a source root are
+    skipped.
+  - Imports in ambient `.d.ts` files are observed from Workbench's lexer. Bun
+    parses declaration files as implementation files and refuses valid ones.
+  - `__tests__` is classified relative to the package.
+  - Files beginning with `#!`, including after a UTF-8 byte order mark, are
+    scanned. Bun's import scanner refuses `#!`, so Workbench reads the line as a
+    `//` comment, keeping offsets and line numbers.
+  - Bare runtime modules are not packages. The frozen set is Node 22 core
+    modules plus `bun`. `ws` and `undici`, which Bun also lists, remain packages.
 
-The generated root manifest still has no package catalog. A closure that uses
-verbatim `catalog:` specifiers therefore reaches `bun install` and fails there
-until the root can carry authored catalogs.
+Known limits, left to later contracts:
+
+- The generated root manifest has no catalog, overrides or patches, so verbatim
+  closures must name root-resolvable specifiers.
+- Peer dependency ranges still take part in root reassembly.
+- Dev/prod classification for a source root not named `__tests__` follows file
+  names only.
 
 Install with `mise use github:phosphorco/workbench-go@0.13.0`. Release archives
 include private pinned runtimes, licenses, checksums and attestations for
